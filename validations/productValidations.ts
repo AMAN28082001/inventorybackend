@@ -33,6 +33,15 @@ export const updateProductSchema = z.object({
   model: z.string().min(1).max(255).optional(),
   wattage: emptyStringToNull(z.string().max(50).nullable().optional()),
   category: z.string().min(1).max(255).optional(),
+  stock_to_add: z.preprocess(
+    (val) => {
+      if (val === '' || val === null || val === undefined) return undefined;
+      const num = Number(val);
+      return isNaN(num) ? undefined : num;
+    },
+    z.number().int().min(0).optional()
+  ),
+  serial_numbers: z.string().optional(),
   quantity: z.preprocess(
     (val) => {
       if (val === '' || val === null || val === undefined) return undefined;

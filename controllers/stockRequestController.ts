@@ -6,7 +6,8 @@ import {
   Product,
   User,
   AdminInventory,
-  InventoryTransaction
+  InventoryTransaction,
+  ProductSerialNumber
 } from '../models';
 import { v4 as uuidv4 } from 'uuid';
 import sequelize from '../config/database';
@@ -450,6 +451,25 @@ export const dispatchStockRequest = async (req: Request, res: Response): Promise
 
     const { id } = req.params;
     const { rejection_reason } = req.body;
+    const serialNumberRangesRaw = (req.body as any).serial_number_ranges;
+    let serialNumberRanges: Record<string, { from: string; to: string }> | null = null;
+
+    if (serialNumberRangesRaw) {
+      if (req.user.role !== 'super-admin') {
+        await transaction.rollback();
+        res.status(403).json({ error: 'Only super-admin can specify serial number ranges' });
+        return;
+      }
+      try {
+        serialNumberRanges = typeof serialNumberRangesRaw === 'string'
+          ? JSON.parse(serialNumberRangesRaw)
+          : serialNumberRangesRaw;
+      } catch {
+        await transaction.rollback();
+        res.status(400).json({ error: 'Invalid serial_number_ranges JSON' });
+        return;
+      }
+    }
 
     // Lock the stock request first without include (PostgreSQL doesn't allow FOR UPDATE with LEFT OUTER JOIN)
     const request = await StockRequest.findByPk(id, {
@@ -524,6 +544,14 @@ export const dispatchStockRequest = async (req: Request, res: Response): Promise
       }
     }
 
+    if (serialNumberRanges && request.requested_by_role !== 'admin') {
+      await transaction.rollback();
+      res.status(400).json({ error: 'Serial number ranges are only supported for admin destinations' });
+      return;
+    }
+
+    const transferredSerialsByProduct: Record<string, string[]> = {};
+
     // Determine the actual source admin ID
     // If requested_from is "admin" (placeholder for agent requests), use the dispatching admin's ID
     const actualSourceAdminId =
@@ -558,6 +586,57 @@ export const dispatchStockRequest = async (req: Request, res: Response): Promise
           res.status(400).json({ error: `Product ${item.product_id} not found` });
           return;
         }
+
+        if (serialNumberRanges) {
+          const range = serialNumberRanges[item.product_id];
+          if (!range || !range.from || !range.to) {
+            await transaction.rollback();
+            res.status(400).json({ error: `Serial number range missing for product ${item.product_id}` });
+            return;
+          }
+
+          const serialsInRange = await ProductSerialNumber.findAll({
+            where: {
+              product_id: item.product_id,
+              serial_number: { [Op.between]: [range.from, range.to] },
+              status: 'available',
+              [Op.or]: [
+                { owner_id: null },
+                { owner_type: 'super-admin' },
+                { owner_id: req.user.id }
+              ]
+            },
+            order: [['serial_number', 'ASC']],
+            transaction,
+            lock: transaction.LOCK.UPDATE
+          });
+
+          if (serialsInRange.length !== item.quantity) {
+            await transaction.rollback();
+            res.status(400).json({
+              error: 'Validation error',
+              details: [{
+                path: `serial_number_ranges.${item.product_id}`,
+                message: `Range contains ${serialsInRange.length} serial numbers, but quantity is ${item.quantity}`
+              }]
+            });
+            return;
+          }
+
+          await ProductSerialNumber.update(
+            {
+              owner_id: request.requested_by_id,
+              owner_type: 'admin'
+            },
+            {
+              where: { id: { [Op.in]: serialsInRange.map((s) => s.id) } },
+              transaction
+            }
+          );
+
+          transferredSerialsByProduct[item.product_id] = serialsInRange.map((s) => s.serial_number);
+        }
+
         await product.decrement('quantity', { by: item.quantity, transaction });
 
         if (request.requested_by_role === 'admin' && request.requested_by_id) {
@@ -614,6 +693,53 @@ export const dispatchStockRequest = async (req: Request, res: Response): Promise
 
         // If destination is an admin (admin-to-admin transfer), increase their inventory
         if (request.requested_by_role === 'admin' && request.requested_by_id && item.product_id) {
+          if (serialNumberRanges) {
+            const range = serialNumberRanges[item.product_id];
+            if (!range || !range.from || !range.to) {
+              await transaction.rollback();
+              res.status(400).json({ error: `Serial number range missing for product ${item.product_id}` });
+              return;
+            }
+
+            const serialsInRange = await ProductSerialNumber.findAll({
+              where: {
+                product_id: item.product_id,
+                serial_number: { [Op.between]: [range.from, range.to] },
+                status: 'available',
+                owner_id: actualSourceAdminId,
+                owner_type: 'admin'
+              },
+              order: [['serial_number', 'ASC']],
+              transaction,
+              lock: transaction.LOCK.UPDATE
+            });
+
+            if (serialsInRange.length !== item.quantity) {
+              await transaction.rollback();
+              res.status(400).json({
+                error: 'Validation error',
+                details: [{
+                  path: `serial_number_ranges.${item.product_id}`,
+                  message: `Range contains ${serialsInRange.length} serial numbers, but quantity is ${item.quantity}`
+                }]
+              });
+              return;
+            }
+
+            await ProductSerialNumber.update(
+              {
+                owner_id: request.requested_by_id,
+                owner_type: 'admin'
+              },
+              {
+                where: { id: { [Op.in]: serialsInRange.map((s) => s.id) } },
+                transaction
+              }
+            );
+
+            transferredSerialsByProduct[item.product_id] = serialsInRange.map((s) => s.serial_number);
+          }
+
           await adjustAdminInventory(request.requested_by_id, item.product_id, item.quantity, transaction);
         }
         // Note: If destination is an agent (admin-to-agent transfer), they don't have inventory records
@@ -682,7 +808,11 @@ export const dispatchStockRequest = async (req: Request, res: Response): Promise
     }
 
     logInfo('Stock request dispatched', { requestId: id, dispatchedBy: req.user.id, status: updated.status });
-    res.json(updated);
+    const response = updated.toJSON() as any;
+    if (Object.keys(transferredSerialsByProduct).length > 0) {
+      response.serial_numbers = transferredSerialsByProduct;
+    }
+    res.json(response);
   } catch (error: any) {
     await transaction.rollback();
     logError('Dispatch stock request error', error, { requestId: req.params.id, dispatchedBy: req.user?.id });

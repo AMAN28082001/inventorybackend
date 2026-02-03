@@ -18,6 +18,7 @@ import stockRequestRoutes from './routes/stockRequestRoutes';
 import salesRoutes from './routes/salesRoutes';
 import inventoryTransactionRoutes from './routes/inventoryTransactionRoutes';
 import stockReturnRoutes from './routes/stockReturnRoutes';
+import serialNumberRoutes from './routes/serialNumberRoutes';
 
 // Import routes (Quotation System)
 import quotationAuthRoutes from './routes/quotationAuthRoutes';
@@ -93,6 +94,7 @@ app.use('/api/stock-requests', stockRequestRoutes);
 app.use('/api/sales', salesRoutes);
 app.use('/api/inventory-transactions', inventoryTransactionRoutes);
 app.use('/api/stock-returns', stockReturnRoutes);
+app.use('/api/serial-numbers', serialNumberRoutes);
 
 // 404 handler
 app.use((_: Request, res: Response) => {

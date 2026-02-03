@@ -13,6 +13,7 @@ import InventoryTransaction from './InventoryTransaction';
 import StockReturn from './StockReturn';
 import AccountManager from './AccountManager';
 import AccountManagerHistory from './AccountManagerHistory';
+import ProductSerialNumber from './ProductSerialNumber';
 
 // Define all associations
 // User associations
@@ -35,6 +36,7 @@ Product.hasMany(InventoryTransaction, { foreignKey: 'product_id', as: 'transacti
 Product.hasMany(StockReturn, { foreignKey: 'product_id', as: 'returns' });
 Product.hasMany(StockRequestItem, { foreignKey: 'product_id', as: 'stockRequestItems' });
 Product.hasMany(SaleItem, { foreignKey: 'product_id', as: 'saleItems' });
+Product.hasMany(ProductSerialNumber, { foreignKey: 'product_id', as: 'serialNumbers' });
 Product.belongsTo(User, { foreignKey: 'created_by', as: 'creator' });
 
 // AdminInventory associations
@@ -58,6 +60,9 @@ Sale.belongsTo(Address, { foreignKey: 'delivery_address_id', as: 'deliveryAddres
 Sale.hasMany(SaleItem, { foreignKey: 'sale_id', as: 'items', onDelete: 'CASCADE' });
 SaleItem.belongsTo(Sale, { foreignKey: 'sale_id', as: 'sale' });
 SaleItem.belongsTo(Product, { foreignKey: 'product_id', as: 'product' });
+
+// Serial number associations
+ProductSerialNumber.belongsTo(Product, { foreignKey: 'product_id', as: 'product' });
 
 // InventoryTransaction associations
 InventoryTransaction.belongsTo(Product, { foreignKey: 'product_id', as: 'product' });
@@ -97,7 +102,8 @@ export {
   InventoryTransaction,
   StockReturn,
   AccountManager,
-  AccountManagerHistory
+  AccountManagerHistory,
+  ProductSerialNumber
 };
 
 

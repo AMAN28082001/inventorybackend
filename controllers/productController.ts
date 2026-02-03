@@ -1,10 +1,13 @@
 import { Request, Response } from 'express';
-import { Product, AdminInventory } from '../models';
+import { Product, AdminInventory, ProductSerialNumber } from '../models';
 import { v4 as uuidv4 } from 'uuid';
 import { Op } from 'sequelize';
 import sequelize from '../config/database';
 import { logError, logInfo } from '../utils/loggerHelper';
 import { deleteFileFromS3IfExists } from '../middleware/upload';
+import fs from 'fs';
+import path from 'path';
+import XLSX from 'xlsx';
 
 // Get all products
 export const getAllProducts = async (req: Request, res: Response): Promise<void> => {
@@ -52,6 +55,37 @@ export const getProductById = async (req: Request, res: Response): Promise<void>
     res.json(product);
   } catch (error) {
     logError('Get product by ID error', error, { productId: req.params.id });
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+// Get serial numbers for a product
+export const getProductSerialNumbers = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+
+    const product = await Product.findByPk(id);
+    if (!product) {
+      res.status(404).json({ error: 'Product not found' });
+      return;
+    }
+
+    const serials = await ProductSerialNumber.findAll({
+      where: { product_id: id },
+      order: [['created_at', 'DESC']]
+    });
+
+    res.json({
+      product_id: id,
+      total_serial_numbers: serials.length,
+      serial_numbers: serials.map((s) => ({
+        id: s.id,
+        serial_number: s.serial_number,
+        created_at: s.created_at
+      }))
+    });
+  } catch (error) {
+    logError('Get product serial numbers error', error, { productId: req.params.id });
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -110,10 +144,72 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
 };
 
 // Update product
+const parseSerialNumbers = (raw: any): string[] => {
+  if (!raw) return [];
+  if (Array.isArray(raw)) {
+    return raw.map(String).map((val) => val.trim()).filter(Boolean);
+  }
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.map(String).map((val) => val.trim()).filter(Boolean);
+      }
+    } catch {
+      // fall through to split
+    }
+    return raw
+      .split(/[\n,]+/)
+      .map((val) => val.trim())
+      .filter(Boolean);
+  }
+  return [];
+};
+
+const parseSerialNumbersFromFile = (file: Express.Multer.File): string[] => {
+  const ext = path.extname(file.originalname || '').toLowerCase();
+
+  if (ext === '.csv') {
+    const text = fs.readFileSync(file.path, 'utf8');
+    const lines = text.split(/\r?\n/).filter(Boolean);
+    let startRow = 0;
+    if (lines[0] && /serial|number|sn/i.test(lines[0])) {
+      startRow = 1;
+    }
+    const serials: string[] = [];
+    for (let i = startRow; i < lines.length; i += 1) {
+      const firstColumn = lines[i].split(',')[0]?.trim();
+      if (firstColumn) serials.push(firstColumn);
+    }
+    return serials;
+  }
+
+  if (ext === '.xlsx' || ext === '.xls') {
+    const buffer = fs.readFileSync(file.path);
+    const workbook = XLSX.read(buffer, { type: 'buffer' });
+    const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+    const data = XLSX.utils.sheet_to_json(firstSheet, { header: 1, defval: '' }) as Array<Array<string | number>>;
+    let startRow = 0;
+    if (data.length > 0 && typeof data[0][0] === 'string' && /serial|number|sn/i.test(data[0][0])) {
+      startRow = 1;
+    }
+    const serials: string[] = [];
+    for (let i = startRow; i < data.length; i += 1) {
+      const cell = data[i][0];
+      if (cell !== undefined && cell !== null && String(cell).trim() !== '') {
+        serials.push(String(cell).trim());
+      }
+    }
+    return serials;
+  }
+
+  throw new Error('Unsupported serial_number_excel file type');
+};
+
 export const updateProduct = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const { name, model, wattage, category, quantity, unit_price, image } = req.body;
+    const { name, model, wattage, category, quantity, unit_price, image, stock_to_add, serial_numbers } = req.body;
 
     const product = await Product.findByPk(id);
     if (!product) {
@@ -139,12 +235,20 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
       updates.category = category;
     }
 
+    const stockToAdd = stock_to_add !== undefined ? Number(stock_to_add) : undefined;
+    if (stockToAdd !== undefined && (isNaN(stockToAdd) || stockToAdd < 0)) {
+      res.status(400).json({ error: 'stock_to_add must be a non-negative number' });
+      return;
+    }
+
     if (quantity !== undefined) {
       if (quantity < 0) {
         res.status(400).json({ error: 'Quantity cannot be negative' });
         return;
       }
-      updates.quantity = quantity;
+      if (stockToAdd === undefined) {
+        updates.quantity = quantity;
+      }
     }
 
     if (unit_price !== undefined) {
@@ -155,9 +259,10 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
       updates.unit_price = unit_price;
     }
 
-    if (req.file) {
+    const imageFile = (req.file as Express.Multer.File) || ((req as any).files?.image?.[0] as Express.Multer.File | undefined);
+    if (imageFile) {
       // Use S3 URL if available, otherwise fall back to local path
-      updates.image = (req.file as any).s3Location || `/uploads/${req.file.filename}`;
+      updates.image = (imageFile as any).s3Location || `/uploads/${imageFile.filename}`;
       
       // Delete old image from S3 if it exists
       if (product.image) {
@@ -184,15 +289,78 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
       }
     }
 
-    await product.update(updates);
+    await sequelize.transaction(async (transaction) => {
+      if (Object.keys(updates).length > 0) {
+        await product.update(updates, { transaction });
+      }
+
+      if (stockToAdd && stockToAdd > 0) {
+        const excelFile = (req as any).files?.serial_number_excel?.[0] as Express.Multer.File | undefined;
+        const serialNumbers = parseSerialNumbers(serial_numbers);
+        const excelSerials = excelFile ? parseSerialNumbersFromFile(excelFile) : [];
+        const finalSerials = serialNumbers.length > 0 ? serialNumbers : excelSerials;
+
+        if (finalSerials.length === 0) {
+          throw new Error('Serial numbers are required when adding stock');
+        }
+
+        if (finalSerials.length !== stockToAdd) {
+          throw new Error(`Expected ${stockToAdd} serial numbers, got ${finalSerials.length}`);
+        }
+
+        const uniqueSerials = Array.from(new Set(finalSerials));
+        if (uniqueSerials.length !== finalSerials.length) {
+          throw new Error('Duplicate serial numbers provided');
+        }
+
+        const existingSerials = await ProductSerialNumber.findAll({
+          where: { serial_number: { [Op.in]: uniqueSerials } },
+          attributes: ['serial_number'],
+          transaction
+        });
+        if (existingSerials.length > 0) {
+          const duplicates = existingSerials.map((s) => (s as any).serial_number);
+          throw new Error(`Duplicate serial numbers found: ${duplicates.join(', ')}`);
+        }
+
+        const currentQuantity = Number(product.quantity);
+        if (stockToAdd > currentQuantity) {
+          throw new Error('stock_to_add cannot exceed current product quantity for initial stock');
+        }
+
+        for (const serial of uniqueSerials) {
+          await ProductSerialNumber.create({
+            id: uuidv4(),
+            product_id: product.id,
+            serial_number: serial
+          }, { transaction });
+        }
+
+        if (stockToAdd < currentQuantity) {
+          await product.increment('quantity', { by: stockToAdd, transaction });
+        }
+
+        if (excelFile) {
+          try {
+            fs.unlinkSync(excelFile.path);
+          } catch (error) {
+            logError('Failed to delete serial_number_excel file', error, { path: excelFile.path });
+          }
+        }
+      }
+    });
 
     const updatedProduct = await Product.findByPk(id);
 
     logInfo('Product updated', { productId: id, updatedBy: req.user?.id, updates: Object.keys(updates) });
-    res.json(updatedProduct);
+    res.json({
+      ...updatedProduct?.toJSON(),
+      serial_numbers_added: stockToAdd && stockToAdd > 0 ? stockToAdd : 0
+    });
   } catch (error) {
     logError('Update product error', error, { productId: req.params.id, updatedBy: req.user?.id });
-    res.status(500).json({ error: 'Server error' });
+    const message = error instanceof Error ? error.message : 'Server error';
+    res.status(400).json({ error: message });
   }
 };
 

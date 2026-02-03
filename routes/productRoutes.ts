@@ -2,6 +2,7 @@ import express, { Router } from 'express';
 import {
   getAllProducts,
   getProductById,
+  getProductSerialNumbers,
   createProduct,
   updateProduct,
   deleteProduct,
@@ -72,6 +73,7 @@ router.use(authenticate);
  *         description: Inventory levels
  */
 router.get('/inventory/levels', authenticate, getInventoryLevels);
+router.get('/:id/serial-numbers', getProductSerialNumbers);
 
 /**
  * @swagger
@@ -157,7 +159,17 @@ router.post('/', authorizeProductManagement, upload.single('image'), uploadToS3(
  *       404:
  *         description: Product not found
  */
-router.put('/:id', authorizeProductManagement, upload.single('image'), validate(updateProductSchema), updateProduct);
+router.put(
+  '/:id',
+  authorizeProductManagement,
+  upload.fields([
+    { name: 'image', maxCount: 1 },
+    { name: 'serial_number_excel', maxCount: 1 }
+  ]),
+  uploadToS3('products'),
+  validate(updateProductSchema),
+  updateProduct
+);
 
 /**
  * @swagger

@@ -24,14 +24,14 @@ const storage = multer.diskStorage({
 
 // File filter
 const fileFilter = (_req: Express.Request, file: Express.Multer.File, cb: multer.FileFilterCallback): void => {
-  const allowedTypes = /jpeg|jpg|png|gif|pdf/;
+  const allowedTypes = /jpeg|jpg|png|gif|pdf|xlsx|xls|csv/;
   const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
   const mimetype = allowedTypes.test(file.mimetype);
 
   if (mimetype && extname) {
     return cb(null, true);
   } else {
-    cb(new Error('Only image files (jpeg, jpg, png, gif) and PDF files are allowed'));
+    cb(new Error('Only image files (jpeg, jpg, png, gif), PDF, and Excel/CSV files are allowed'));
   }
 };
 
@@ -47,37 +47,49 @@ const upload = multer({
 export const uploadToS3 = (folder: string = 'photos') => {
   return async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
     try {
-      if (req.file) {
-        const localFilePath = req.file.path;
-        
+      const skipFields = new Set(['serial_number_excel']);
+      const uploadFile = async (file: Express.Multer.File) => {
+        if (skipFields.has(file.fieldname)) {
+          return;
+        }
+        const localFilePath = file.path;
+
         try {
-          // Upload to S3
           const s3FileInfo = await uploadFileToS3(localFilePath, folder);
-          
-          // Store S3 URL in req.file.location (add custom property)
-          (req.file as any).s3Location = s3FileInfo.filePath;
-          (req.file as any).s3Key = s3FileInfo.key;
-          
-          // Delete local file after successful S3 upload (optional - comment out if you want to keep local copies)
+          (file as any).s3Location = s3FileInfo.filePath;
+          (file as any).s3Key = s3FileInfo.key;
+
           if (process.env.DELETE_LOCAL_AFTER_S3_UPLOAD === 'true') {
             fs.unlinkSync(localFilePath);
             logInfo('🗑️ Deleted local file after S3 upload', { localFilePath });
           }
-          
+
           logInfo('✅ File uploaded to S3', {
-            originalName: req.file.originalname,
+            originalName: file.originalname,
             s3Key: s3FileInfo.key,
             s3Url: s3FileInfo.filePath
           });
         } catch (s3Error) {
           logError('❌ Failed to upload to S3, keeping local file', s3Error, {
             localFilePath,
-            originalName: req.file.originalname
+            originalName: file.originalname
           });
-          // Continue with local file path if S3 upload fails
-          (req.file as any).s3Location = `/uploads/${req.file.filename}`;
+          (file as any).s3Location = `/uploads/${file.filename}`;
+        }
+      };
+
+      if (req.file) {
+        await uploadFile(req.file);
+      }
+
+      const files = (req as any).files;
+      if (files && typeof files === 'object') {
+        const fileArrays = Array.isArray(files) ? files : Object.values(files).flat();
+        for (const file of fileArrays) {
+          await uploadFile(file as Express.Multer.File);
         }
       }
+
       next();
     } catch (error) {
       logError('Upload to S3 middleware error', error);
