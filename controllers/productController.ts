@@ -107,12 +107,35 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
       return;
     }
 
-    // Check if product with same name and model already exists
-    const existingProduct = await Product.findOne({ where: { name, model } });
+    const normalizedName = name.trim().toLowerCase();
+    const normalizedModel = model.trim().toLowerCase();
+
+    // Check if product with same name and model already exists (case-insensitive, trimmed)
+    const existingProduct = await Product.findOne({
+      where: {
+        [Op.and]: [
+          sequelize.where(
+            sequelize.fn('lower', sequelize.fn('trim', sequelize.col('name'))),
+            normalizedName
+          ),
+          sequelize.where(
+            sequelize.fn('lower', sequelize.fn('trim', sequelize.col('model'))),
+            normalizedModel
+          )
+        ]
+      }
+    });
 
     if (existingProduct) {
       res.status(400).json({
-        error: 'Product with this name and model already exists'
+        success: false,
+        error: 'Validation error',
+        details: [
+          {
+            path: 'name',
+            message: `Product with name '${name}' and model '${model}' already exists. Please edit the existing product to add quantity.`
+          }
+        ]
       });
       return;
     }
