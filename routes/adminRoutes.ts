@@ -22,9 +22,8 @@ import { adminUpdateDealerSchema } from '../validations/dealerValidations';
 
 const router: Router = express.Router();
 
-// All routes require admin authentication
+// All routes require authentication
 router.use(authenticate);
-router.use(authorizeAdmin);
 
 /**
  * @swagger
@@ -36,6 +35,9 @@ router.use(authorizeAdmin);
  *       - bearerAuth: []
  */
 router.get('/quotations', getAllQuotations);
+
+// All routes below require admin authorization
+router.use(authorizeAdmin);
 
 /**
  * @swagger

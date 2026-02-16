@@ -3,10 +3,36 @@ import { Quotation, Dealer, Customer, Visitor } from '../models/index-quotation'
 import { Op } from 'sequelize';
 import { logError } from '../utils/loggerHelper';
 
+const resolveDealerIdForInventoryUser = async (userId: string, username?: string): Promise<string | null> => {
+  const candidate = (username || '').trim();
+  const orClauses: any[] = [];
+  if (candidate) {
+    orClauses.push({ username: candidate });
+    if (candidate.includes('@')) {
+      orClauses.push({ email: candidate });
+    }
+    if (/^\d+$/.test(candidate)) {
+      orClauses.push({ mobile: candidate });
+    }
+  }
+  orClauses.push({ id: userId });
+
+  const dealer = await Dealer.findOne({
+    where: { [Op.or]: orClauses },
+    attributes: ['id']
+  });
+  return dealer ? dealer.id : null;
+};
+
 // Get all quotations (admin)
 export const getAllQuotations = async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!req.dealer || req.dealer.role !== 'admin') {
+    const isQuotationAdmin = req.dealer && req.dealer.role === 'admin';
+    const isQuotationDealer = req.dealer && req.dealer.role !== 'admin';
+    const isInventoryAdmin = req.user && (req.user.role === 'admin' || req.user.role === 'super-admin' || req.user.role === 'super-admin-manager');
+    const isInventoryAgent = req.user && (req.user.role === 'agent' || req.user.role === 'account');
+
+    if (!isQuotationAdmin && !isQuotationDealer && !isInventoryAdmin && !isInventoryAgent) {
       res.status(403).json({
         success: false,
         error: { code: 'AUTH_004', message: 'Insufficient permissions' }
@@ -26,6 +52,28 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
 
     if (status) where.status = status;
     if (dealerId) where.dealerId = dealerId;
+
+    if (isQuotationDealer && req.dealer) {
+      where.dealerId = req.dealer.id;
+    } else if (isInventoryAgent && req.user) {
+      const mappedDealerId = await resolveDealerIdForInventoryUser(req.user.id, req.user.username);
+      if (!mappedDealerId) {
+        res.json({
+          success: true,
+          data: {
+            quotations: [],
+            pagination: {
+              page,
+              limit,
+              total: 0,
+              totalPages: 0
+            }
+          }
+        });
+        return;
+      }
+      where.dealerId = mappedDealerId;
+    }
 
     if (startDate || endDate) {
       where.createdAt = {};

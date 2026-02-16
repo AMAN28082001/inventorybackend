@@ -23,6 +23,14 @@ module.exports = {
         allowNull: false,
         unique: true
       },
+      product_name: {
+        type: Sequelize.STRING(255),
+        allowNull: false
+      },
+      category: {
+        type: Sequelize.STRING(255),
+        allowNull: false
+      },
       stock_addition_id: {
         type: Sequelize.STRING(50),
         allowNull: true
@@ -57,6 +65,12 @@ module.exports = {
     });
     await queryInterface.addIndex('product_serial_numbers', ['serial_number'], {
       name: 'idx_product_serial_numbers_serial'
+    });
+    await queryInterface.addIndex('product_serial_numbers', ['product_name'], {
+      name: 'idx_product_serial_numbers_product_name'
+    });
+    await queryInterface.addIndex('product_serial_numbers', ['category'], {
+      name: 'idx_product_serial_numbers_category'
     });
   },
 

@@ -3,6 +3,7 @@ import AWS from 'aws-sdk';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { Quotation, QuotationProduct, CustomPanel, Customer, Visit, VisitAssignment, SystemConfig, Dealer, QuotationDocument } from '../models/index-quotation';
+import { Product } from '../models';
 import { Op } from 'sequelize';
 import { logError, logInfo } from '../utils/loggerHelper';
 
@@ -263,6 +264,113 @@ const calculatePaymentStatus = (paidAmount: number | null | undefined, totalAmou
   return 'partial';
 };
 
+const resolveDealerIdForInventoryUser = async (userId: string, username?: string): Promise<string | null> => {
+  const candidate = (username || '').trim();
+  const orClauses: any[] = [];
+  if (candidate) {
+    orClauses.push({ username: candidate });
+    if (candidate.includes('@')) {
+      orClauses.push({ email: candidate });
+    }
+    if (/^\d+$/.test(candidate)) {
+      orClauses.push({ mobile: candidate });
+    }
+  }
+  orClauses.push({ id: userId });
+
+  const dealer = await Dealer.findOne({
+    where: { [Op.or]: orClauses },
+    attributes: ['id']
+  });
+  return dealer ? dealer.id : null;
+};
+
+const resolveSellingPriceByName = async (name: string | null | undefined): Promise<number | null> => {
+  if (!name) return null;
+  const trimmed = String(name).trim();
+  if (!trimmed) return null;
+  const product = await Product.findOne({
+    where: {
+      name: {
+        [Op.iLike]: trimmed
+      }
+    }
+  });
+  const sellingPrice = product?.selling_price;
+  if (sellingPrice !== undefined && sellingPrice !== null) {
+    return Number(sellingPrice);
+  }
+  const unitPrice = product?.unit_price;
+  return unitPrice !== undefined && unitPrice !== null ? Number(unitPrice) : null;
+};
+
+const applySellingPricesForAgent = async (products: any): Promise<any> => {
+  if (!products || typeof products !== 'object') {
+    return products;
+  }
+  const updated = { ...products };
+
+  const panelPrice = await resolveSellingPriceByName(products.panelBrand);
+  if (panelPrice !== null) {
+    const qty = Number(products.panelQuantity || 1);
+    updated.panelPrice = panelPrice * (isNaN(qty) || qty <= 0 ? 1 : qty);
+  }
+
+  const inverterPrice = await resolveSellingPriceByName(products.inverterBrand);
+  if (inverterPrice !== null) {
+    updated.inverterPrice = inverterPrice;
+  }
+
+  const structurePrice = await resolveSellingPriceByName(products.structureType || products.structureSize);
+  if (structurePrice !== null) {
+    updated.structurePrice = structurePrice;
+  }
+
+  const meterPrice = await resolveSellingPriceByName(products.meterBrand);
+  if (meterPrice !== null) {
+    updated.meterPrice = meterPrice;
+  }
+
+  const acCablePrice = await resolveSellingPriceByName(products.acCableBrand);
+  if (acCablePrice !== null) {
+    updated.acCablePrice = acCablePrice;
+  }
+
+  const dcCablePrice = await resolveSellingPriceByName(products.dcCableBrand);
+  if (dcCablePrice !== null) {
+    updated.dcCablePrice = dcCablePrice;
+  }
+
+  const acdbPrice = await resolveSellingPriceByName(products.acdb);
+  if (acdbPrice !== null) {
+    updated.acdbPrice = acdbPrice;
+  }
+
+  const dcdbPrice = await resolveSellingPriceByName(products.dcdb);
+  if (dcdbPrice !== null) {
+    updated.dcdbPrice = dcdbPrice;
+  }
+
+  const batteryPrice = await resolveSellingPriceByName(products.batteryCapacity);
+  if (batteryPrice !== null) {
+    updated.batteryPrice = batteryPrice;
+  }
+
+  if (Array.isArray(products.customPanels)) {
+    updated.customPanels = await Promise.all(products.customPanels.map(async (panel: any) => {
+      const panelUnitPrice = await resolveSellingPriceByName(panel.brand);
+      if (panelUnitPrice === null) return panel;
+      const qty = Number(panel.quantity || 1);
+      return {
+        ...panel,
+        price: panelUnitPrice * (isNaN(qty) || qty <= 0 ? 1 : qty)
+      };
+    }));
+  }
+
+  return updated;
+};
+
 // Create quotation
 export const createQuotation = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -274,7 +382,7 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
       return;
     }
 
-    const { 
+    let { 
       customerId, 
       customer, 
       products, 
@@ -385,6 +493,11 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
         }
       });
       return;
+    }
+
+    const isAgentPricing = req.user?.role === 'agent' || (req.user?.role === 'dealer' && req.dealer?.role !== 'admin');
+    if (isAgentPricing) {
+      products = await applySellingPricesForAgent(products);
     }
 
     const discountAmountInput = discountAmount ?? req.body.pricing?.discountAmount;
@@ -832,6 +945,32 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
     } else if (req.dealer) {
       // Dealers and admins
       where = req.dealer.role === 'admin' ? {} : { dealerId: req.dealer.id };
+    } else if (req.user) {
+      const isInventoryAdmin = req.user.role === 'admin' || req.user.role === 'super-admin' || req.user.role === 'super-admin-manager';
+      const isInventoryAgent = req.user.role === 'agent' || req.user.role === 'account';
+      if (isInventoryAdmin) {
+        where = {};
+      } else if (isInventoryAgent) {
+        const mappedDealerId = await resolveDealerIdForInventoryUser(req.user.id, req.user.username);
+        if (!mappedDealerId) {
+          res.json({
+            success: true,
+            data: {
+              quotations: [],
+              pagination: {
+                page,
+                limit,
+                total: 0,
+                totalPages: 0,
+                hasNext: false,
+                hasPrev: false
+              }
+            }
+          });
+          return;
+        }
+        where.dealerId = mappedDealerId;
+      }
     }
 
     // Account managers cannot override status filter - they only see approved
@@ -1069,6 +1208,20 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
       // Admins can see all quotations, dealers only see their own
       if (req.dealer.role !== 'admin') {
         where.dealerId = req.dealer.id;
+      }
+    } else if (req.user) {
+      const isInventoryAdmin = req.user.role === 'admin' || req.user.role === 'super-admin' || req.user.role === 'super-admin-manager';
+      const isInventoryAgent = req.user.role === 'agent' || req.user.role === 'account';
+      if (!isInventoryAdmin && isInventoryAgent) {
+        const mappedDealerId = await resolveDealerIdForInventoryUser(req.user.id, req.user.username);
+        if (!mappedDealerId) {
+          res.status(403).json({
+            success: false,
+            error: { code: 'AUTH_004', message: 'Insufficient permissions' }
+          });
+          return;
+        }
+        where.dealerId = mappedDealerId;
       }
     }
     const quotation = await Quotation.findOne({

@@ -270,8 +270,15 @@ export const authorizeDealerAdminOrVisitor = (req: Request, res: Response, next:
   const isDealerOrAdmin = req.dealer !== undefined;
   const isVisitor = req.visitor !== undefined;
   const isAccountManager = req.user && req.user.role === 'account-management';
+  const isInventoryUser = req.user && (
+    req.user.role === 'agent' ||
+    req.user.role === 'admin' ||
+    req.user.role === 'super-admin' ||
+    req.user.role === 'super-admin-manager' ||
+    req.user.role === 'account'
+  );
   
-  if (!isDealerOrAdmin && !isVisitor && !isAccountManager) {
+  if (!isDealerOrAdmin && !isVisitor && !isAccountManager && !isInventoryUser) {
     res.status(401).json({
       success: false,
       error: {

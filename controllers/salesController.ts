@@ -87,8 +87,12 @@ const normalizeSaleItems = async (rawItems: any, transaction: Transaction): Prom
     let unitPrice: number;
     if (item.unit_price !== undefined) {
       unitPrice = Number(item.unit_price);
+    } else if (productRecord && productRecord.selling_price !== null && productRecord.selling_price !== undefined) {
+      unitPrice = Number(productRecord.selling_price);
     } else if (productRecord && productRecord.unit_price !== null && productRecord.unit_price !== undefined) {
       unitPrice = Number(productRecord.unit_price);
+    } else if (productRecord && (productRecord as any).price !== null && (productRecord as any).price !== undefined) {
+      unitPrice = Number((productRecord as any).price);
     } else {
       unitPrice = NaN;
     }

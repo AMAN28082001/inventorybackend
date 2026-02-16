@@ -52,7 +52,12 @@ export const getProductById = async (req: Request, res: Response): Promise<void>
     }
 
     logInfo('Get product by ID', { productId: id });
-    res.json(product);
+    res.json({
+      ...product.toJSON(),
+      selling_price: product.selling_price !== undefined && product.selling_price !== null
+        ? product.selling_price
+        : product.unit_price
+    });
   } catch (error) {
     logError('Get product by ID error', error, { productId: req.params.id });
     res.status(500).json({ error: 'Server error' });
@@ -78,11 +83,24 @@ export const getProductSerialNumbers = async (req: Request, res: Response): Prom
     res.json({
       product_id: id,
       total_serial_numbers: serials.length,
-      serial_numbers: serials.map((s) => ({
-        id: s.id,
-        serial_number: s.serial_number,
-        created_at: s.created_at
-      }))
+      serial_numbers: serials.map((s) => {
+        const resolvedCost = s.cost_price !== undefined && s.cost_price !== null
+          ? Number(s.cost_price)
+          : s.price !== undefined && s.price !== null
+            ? Number(s.price)
+            : null;
+        return {
+          id: s.id,
+          serial_number: s.serial_number,
+          product_id: s.product_id,
+          cost_price: resolvedCost,
+          price: resolvedCost,
+          product_name: s.product_name,
+          category: s.category,
+          status: s.status,
+          created_at: s.created_at
+        };
+      })
     });
   } catch (error) {
     logError('Get product serial numbers error', error, { productId: req.params.id });
@@ -93,7 +111,7 @@ export const getProductSerialNumbers = async (req: Request, res: Response): Prom
 // Create product
 export const createProduct = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { name, model, wattage, category, quantity, unit_price, image } = req.body;
+    const { name, model, wattage, category, quantity, unit_price, selling_price, image, serial_numbers, default_price, cost_price, serial_number_prices, product_name, product_category } = req.body;
 
     if (!name || !model || !category) {
       res.status(400).json({
@@ -140,11 +158,39 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
       return;
     }
 
+    const serialNumbers = serial_numbers ? parseSerialNumbers(serial_numbers) : [];
+    const priceMap = parseSerialNumberPrices(serial_number_prices);
+    const defaultPriceInput = default_price !== undefined && default_price !== null && default_price !== ''
+      ? Number(default_price)
+      : cost_price !== undefined && cost_price !== null && cost_price !== ''
+        ? Number(cost_price)
+        : undefined;
+    const hasDefaultPrice = defaultPriceInput !== undefined && !isNaN(defaultPriceInput);
+    const hasPriceMap = Object.keys(priceMap).length > 0;
+    const maxSerialPrice = hasDefaultPrice
+      ? defaultPriceInput!
+      : hasPriceMap && serialNumbers.length > 0
+        ? Math.max(
+            ...serialNumbers
+              .map((sn) => Number((priceMap as any)[sn]))
+              .filter((price) => !isNaN(price))
+          )
+        : undefined;
+
     const id = uuidv4();
     // Use S3 URL if available, otherwise fall back to local path or provided image
     const imagePath = req.file 
       ? ((req.file as any).s3Location || `/uploads/${req.file.filename}`)
       : image;
+
+    const resolvedCostPrice = unit_price !== undefined && unit_price !== null
+      ? unit_price
+      : maxSerialPrice !== undefined && !isNaN(maxSerialPrice)
+        ? maxSerialPrice
+        : null;
+    const resolvedSellingPrice = selling_price !== undefined && selling_price !== null
+      ? selling_price
+      : null;
 
     const newProduct = await Product.create({
       id,
@@ -153,10 +199,99 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
       wattage: wattage || null,
       category,
       quantity: quantity || 0,
-      unit_price: unit_price !== undefined ? unit_price : null,
+      unit_price: resolvedCostPrice,
+      selling_price: resolvedSellingPrice,
       image: imagePath || null,
       created_by: req.user.id
     });
+
+    if (serial_numbers) {
+      const defaultPrice = defaultPriceInput;
+
+      if (serialNumbers.length === 0) {
+        res.status(400).json({ error: 'Serial numbers array is empty' });
+        return;
+      }
+
+      if (hasDefaultPrice && hasPriceMap) {
+        res.status(400).json({ error: 'Cannot provide both default_price and serial_number_prices' });
+        return;
+      }
+
+      if (hasDefaultPrice && defaultPrice! <= 0) {
+        res.status(400).json({ error: 'default_price must be greater than 0' });
+        return;
+      }
+
+      if (hasPriceMap) {
+        const missingPrices = serialNumbers.filter((sn) => {
+          const price = Number((priceMap as any)[sn]);
+          return isNaN(price) || price <= 0;
+        });
+        if (missingPrices.length > 0) {
+          res.status(400).json({
+            error: 'Validation error',
+            details: [{
+              path: 'serial_number_prices',
+              message: `Missing or invalid prices for serial numbers: ${missingPrices.join(', ')}`
+            }]
+          });
+          return;
+        }
+      }
+
+      if (quantity && serialNumbers.length !== Number(quantity)) {
+        res.status(400).json({
+          error: 'Validation error',
+          details: [{
+            path: 'serial_numbers',
+            message: `Expected ${quantity} serial numbers, got ${serialNumbers.length}`
+          }]
+        });
+        return;
+      }
+
+      const uniqueSerials = Array.from(new Set(serialNumbers));
+      if (uniqueSerials.length !== serialNumbers.length) {
+        res.status(400).json({ error: 'Duplicate serial numbers provided' });
+        return;
+      }
+
+      const existingSerials = await ProductSerialNumber.findAll({
+        where: { serial_number: { [Op.in]: uniqueSerials } },
+        attributes: ['serial_number']
+      });
+      if (existingSerials.length > 0) {
+        const duplicates = existingSerials.map((s) => (s as any).serial_number);
+        res.status(400).json({ error: `Duplicate serial numbers found: ${duplicates.join(', ')}` });
+        return;
+      }
+
+      const ownerType = req.user?.role === 'super-admin' ? 'super-admin' : req.user?.role === 'admin' ? 'admin' : null;
+      const ownerId = ownerType ? req.user?.id : null;
+      const serialProductName = (product_name || name).toString();
+      const serialCategory = (product_category || category).toString();
+
+      for (const serial of uniqueSerials) {
+        const serialPrice = hasDefaultPrice
+          ? defaultPrice!
+          : hasPriceMap
+            ? Number((priceMap as any)[serial])
+            : null;
+        await ProductSerialNumber.create({
+          id: uuidv4(),
+          product_id: newProduct.id,
+          serial_number: serial,
+          owner_id: ownerId,
+          owner_type: ownerType,
+          status: 'available',
+          price: serialPrice,
+          cost_price: serialPrice,
+          product_name: serialProductName,
+          category: serialCategory
+        });
+      }
+    }
 
     logInfo('Product created', { productId: newProduct.id, name: newProduct.name, model: newProduct.model, createdBy: req.user?.id });
     res.status(201).json(newProduct);
@@ -187,6 +322,24 @@ const parseSerialNumbers = (raw: any): string[] => {
       .filter(Boolean);
   }
   return [];
+};
+
+const parseSerialNumberPrices = (raw: any): Record<string, number> => {
+  if (!raw) return {};
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed;
+      }
+    } catch {
+      return {};
+    }
+  }
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    return raw;
+  }
+  return {};
 };
 
 const parseSerialNumbersFromFile = (file: Express.Multer.File): string[] => {
@@ -232,7 +385,7 @@ const parseSerialNumbersFromFile = (file: Express.Multer.File): string[] => {
 export const updateProduct = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const { name, model, wattage, category, quantity, unit_price, image, stock_to_add, serial_numbers } = req.body;
+    const { name, model, wattage, category, quantity, unit_price, selling_price, image, stock_to_add, serial_numbers, default_price, cost_price, serial_number_prices, product_name, product_category, use_max_cost_price } = req.body;
 
     const product = await Product.findByPk(id);
     if (!product) {
@@ -282,6 +435,14 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
       updates.unit_price = unit_price;
     }
 
+    if (selling_price !== undefined) {
+      if (selling_price < 0) {
+        res.status(400).json({ error: 'Selling price cannot be negative' });
+        return;
+      }
+      updates.selling_price = selling_price;
+    }
+
     const imageFile = (req.file as Express.Multer.File) || ((req as any).files?.image?.[0] as Express.Multer.File | undefined);
     if (imageFile) {
       // Use S3 URL if available, otherwise fall back to local path
@@ -322,9 +483,43 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
         const serialNumbers = parseSerialNumbers(serial_numbers);
         const excelSerials = excelFile ? parseSerialNumbersFromFile(excelFile) : [];
         const finalSerials = serialNumbers.length > 0 ? serialNumbers : excelSerials;
+        const priceMap = parseSerialNumberPrices(serial_number_prices);
+        const defaultPriceInput = default_price !== undefined && default_price !== null && default_price !== ''
+          ? Number(default_price)
+          : cost_price !== undefined && cost_price !== null && cost_price !== ''
+            ? Number(cost_price)
+            : undefined;
+        const hasDefaultPrice = defaultPriceInput !== undefined && !isNaN(defaultPriceInput);
+        const hasPriceMap = Object.keys(priceMap).length > 0;
 
         if (finalSerials.length === 0) {
-          throw new Error('Serial numbers are required when adding stock');
+          await product.increment('quantity', { by: stockToAdd, transaction });
+          if (excelFile) {
+            try {
+              fs.unlinkSync(excelFile.path);
+            } catch (error) {
+              logError('Failed to delete serial_number_excel file', error, { path: excelFile.path });
+            }
+          }
+          return;
+        }
+
+        if (hasDefaultPrice && hasPriceMap) {
+          throw new Error('Cannot provide both default_price and serial_number_prices');
+        }
+
+        if (hasDefaultPrice && defaultPriceInput! <= 0) {
+          throw new Error('default_price must be greater than 0');
+        }
+
+        if (hasPriceMap) {
+          const missingPrices = finalSerials.filter((sn) => {
+            const price = Number((priceMap as any)[sn]);
+            return isNaN(price) || price <= 0;
+          });
+          if (missingPrices.length > 0) {
+            throw new Error(`Missing or invalid prices for serial numbers: ${missingPrices.join(', ')}`);
+          }
         }
 
         if (finalSerials.length !== stockToAdd) {
@@ -351,16 +546,48 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
           throw new Error('stock_to_add cannot exceed current product quantity for initial stock');
         }
 
+        const ownerType = req.user?.role === 'super-admin' ? 'super-admin' : req.user?.role === 'admin' ? 'admin' : null;
+        const ownerId = ownerType ? req.user?.id : null;
+        const serialProductName = (product_name || product.name).toString();
+        const serialCategory = (product_category || product.category).toString();
+
         for (const serial of uniqueSerials) {
+          const serialPrice = hasDefaultPrice
+            ? defaultPriceInput!
+            : hasPriceMap
+              ? Number((priceMap as any)[serial])
+              : null;
           await ProductSerialNumber.create({
             id: uuidv4(),
             product_id: product.id,
-            serial_number: serial
+            serial_number: serial,
+            owner_id: ownerId,
+            owner_type: ownerType,
+            status: 'available',
+            price: serialPrice,
+            cost_price: serialPrice,
+            product_name: serialProductName,
+            category: serialCategory
           }, { transaction });
         }
 
         if (stockToAdd < currentQuantity) {
           await product.increment('quantity', { by: stockToAdd, transaction });
+        }
+
+        if (selling_price === undefined && use_max_cost_price !== false) {
+          const maxRow = await ProductSerialNumber.findOne({
+            where: { product_id: product.id },
+            attributes: [[sequelize.literal('COALESCE(MAX(cost_price), MAX(price))'), 'max_price']],
+            raw: true,
+            transaction
+          });
+          const maxPrice = maxRow && (maxRow as any).max_price !== null
+            ? Number((maxRow as any).max_price)
+            : null;
+          if (maxPrice !== null && !isNaN(maxPrice)) {
+            await product.update({ selling_price: maxPrice }, { transaction });
+          }
         }
 
         if (excelFile) {
@@ -369,6 +596,21 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
           } catch (error) {
             logError('Failed to delete serial_number_excel file', error, { path: excelFile.path });
           }
+        }
+      }
+
+      if (use_max_cost_price === true) {
+        const maxRow = await ProductSerialNumber.findOne({
+          where: { product_id: product.id },
+          attributes: [[sequelize.literal('COALESCE(MAX(cost_price), MAX(price))'), 'max_price']],
+          raw: true,
+          transaction
+        });
+        const maxPrice = maxRow && (maxRow as any).max_price !== null
+          ? Number((maxRow as any).max_price)
+          : null;
+        if (maxPrice !== null && !isNaN(maxPrice)) {
+          await product.update({ selling_price: maxPrice }, { transaction });
         }
       }
     });
@@ -383,6 +625,16 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
   } catch (error) {
     logError('Update product error', error, { productId: req.params.id, updatedBy: req.user?.id });
     const message = error instanceof Error ? error.message : 'Server error';
+    if (message.includes('Missing or invalid prices') || message.includes('default_price') || message.includes('serial_number_prices')) {
+      res.status(400).json({
+        error: 'Validation error',
+        details: [{
+          path: 'pricing',
+          message
+        }]
+      });
+      return;
+    }
     res.status(400).json({ error: message });
   }
 };

@@ -23,8 +23,19 @@ export const searchSerialNumber = async (req: Request, res: Response): Promise<v
       attributes: ['id', 'name', 'model']
     });
 
+    const resolvedCost = serial.cost_price !== undefined && serial.cost_price !== null
+      ? Number(serial.cost_price)
+      : serial.price !== undefined && serial.price !== null
+        ? Number(serial.price)
+        : null;
+
     res.json({
       serial_number: serial.serial_number,
+      cost_price: resolvedCost,
+      price: resolvedCost,
+      product_name: serial.product_name,
+      category: serial.category,
+      status: serial.status,
       product: product
         ? { id: product.id, name: product.name, model: product.model }
         : null,

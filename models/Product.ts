@@ -9,13 +9,14 @@ interface ProductAttributes {
   wattage?: string | null;
   quantity: number;
   unit_price?: number | null;
+  selling_price?: number | null;
   image?: string | null;
   created_by?: string | null;
   created_at?: Date;
   updated_at?: Date;
 }
 
-interface ProductCreationAttributes extends Optional<ProductAttributes, 'id' | 'quantity' | 'wattage' | 'unit_price' | 'image' | 'created_by' | 'created_at' | 'updated_at'> {}
+interface ProductCreationAttributes extends Optional<ProductAttributes, 'id' | 'quantity' | 'wattage' | 'unit_price' | 'selling_price' | 'image' | 'created_by' | 'created_at' | 'updated_at'> {}
 
 class Product extends Model<ProductAttributes, ProductCreationAttributes> implements ProductAttributes {
   public id!: string;
@@ -25,6 +26,7 @@ class Product extends Model<ProductAttributes, ProductCreationAttributes> implem
   public wattage!: string | null;
   public quantity!: number;
   public unit_price!: number | null;
+  public selling_price!: number | null;
   public image!: string | null;
   public created_by!: string | null;
   public readonly created_at!: Date;
@@ -62,6 +64,13 @@ Product.init(
       }
     },
     unit_price: {
+      type: DataTypes.DECIMAL(12, 2),
+      allowNull: true,
+      validate: {
+        min: 0
+      }
+    },
+    selling_price: {
       type: DataTypes.DECIMAL(12, 2),
       allowNull: true,
       validate: {
