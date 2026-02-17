@@ -272,9 +272,7 @@ export const getAgentDealerMapping = async (req: Request, res: Response): Promis
     if (req.user.role !== 'agent') {
       res.status(403).json({ error: 'Only agents can access dealer mapping' });
       return;
-    }
-
-    let dealer: Dealer | null = null;
+    }    let dealer: Dealer | null = null;
     const dealerById = await Dealer.findByPk(req.user.id);
     if (dealerById) {
       dealer = dealerById;

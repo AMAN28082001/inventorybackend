@@ -51,12 +51,29 @@ export const getProductById = async (req: Request, res: Response): Promise<void>
       return;
     }
 
+    const serials = await ProductSerialNumber.findAll({
+      where: { product_id: id },
+      order: [['created_at', 'DESC']]
+    });
+
     logInfo('Get product by ID', { productId: id });
     res.json({
       ...product.toJSON(),
       selling_price: product.selling_price !== undefined && product.selling_price !== null
         ? product.selling_price
-        : product.unit_price
+        : product.unit_price,
+      serial_numbers: serials.map((s) => ({
+        id: s.id,
+        serial_number: s.serial_number,
+        product_id: s.product_id,
+        cost_price: s.cost_price !== undefined && s.cost_price !== null
+          ? Number(s.cost_price)
+          : s.price !== undefined && s.price !== null
+            ? Number(s.price)
+            : null,
+        status: s.status,
+        created_at: s.created_at
+      }))
     });
   } catch (error) {
     logError('Get product by ID error', error, { productId: req.params.id });
@@ -205,6 +222,7 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
       created_by: req.user.id
     });
 
+    let createdSerials: string[] = [];
     if (serial_numbers) {
       const defaultPrice = defaultPriceInput;
 
@@ -291,10 +309,14 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
           category: serialCategory
         });
       }
+      createdSerials = uniqueSerials;
     }
 
     logInfo('Product created', { productId: newProduct.id, name: newProduct.name, model: newProduct.model, createdBy: req.user?.id });
-    res.status(201).json(newProduct);
+    res.status(201).json({
+      ...newProduct.toJSON(),
+      serial_numbers: createdSerials
+    });
   } catch (error) {
     logError('Create product error', error, { name: req.body.name, model: req.body.model, createdBy: req.user?.id });
     res.status(500).json({ error: 'Server error' });
@@ -473,6 +495,7 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
       }
     }
 
+    let createdSerials: string[] = [];
     await sequelize.transaction(async (transaction) => {
       if (Object.keys(updates).length > 0) {
         await product.update(updates, { transaction });
@@ -570,6 +593,7 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
             category: serialCategory
           }, { transaction });
         }
+        createdSerials = uniqueSerials;
 
         if (stockToAdd < currentQuantity) {
           await product.increment('quantity', { by: stockToAdd, transaction });
@@ -620,7 +644,8 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
     logInfo('Product updated', { productId: id, updatedBy: req.user?.id, updates: Object.keys(updates) });
     res.json({
       ...updatedProduct?.toJSON(),
-      serial_numbers_added: stockToAdd && stockToAdd > 0 ? stockToAdd : 0
+      serial_numbers_added: stockToAdd && stockToAdd > 0 ? stockToAdd : 0,
+      serial_numbers: createdSerials.length > 0 ? createdSerials : undefined
     });
   } catch (error) {
     logError('Update product error', error, { productId: req.params.id, updatedBy: req.user?.id });
