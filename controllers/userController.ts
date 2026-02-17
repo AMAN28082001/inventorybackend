@@ -183,10 +183,27 @@ export const updateUser = async (req: Request, res: Response): Promise<void> => 
     const { id } = req.params;
     const { username, password, name, role, is_active } = req.body;
 
+    if (!req.user) {
+      res.status(401).json({ error: 'User not authenticated' });
+      return;
+    }
+
     const user = await User.findByPk(id);
     if (!user) {
       res.status(404).json({ error: 'User not found' });
       return;
+    }
+
+    if (req.user.role === 'account') {
+      if (user.role !== 'agent') {
+        res.status(403).json({ error: 'Account role can only approve agents' });
+        return;
+      }
+      const onlyIsActive = Object.keys(req.body).every((key) => key === 'is_active');
+      if (!onlyIsActive) {
+        res.status(403).json({ error: 'Account role can only update is_active' });
+        return;
+      }
     }
 
     const updates: any = {};

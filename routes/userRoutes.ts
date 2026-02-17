@@ -151,7 +151,7 @@ router.post('/', authorize('super-admin', 'admin'), validate(createUserSchema), 
  *       404:
  *         description: User not found
  */
-router.put('/:id', authorize('super-admin'), validate(updateUserSchema), updateUser);
+router.put('/:id', authorize('super-admin', 'account'), validate(updateUserSchema), updateUser);
 
 /**
  * @swagger

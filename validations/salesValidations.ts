@@ -63,6 +63,7 @@ export const createSaleSchema = z.object({
 export const updateSaleSchema = z.object({
   customer_name: z.string().min(1).optional(),
   payment_status: z.enum(['pending', 'completed']).optional(),
+  approval_status: z.enum(['pending', 'approved']).optional(),
   subtotal: z.coerce.number().min(0).optional(),
   tax_amount: z.coerce.number().min(0).optional(),
   discount_amount: z.coerce.number().min(0).optional(),
@@ -71,6 +72,10 @@ export const updateSaleSchema = z.object({
   company_name: z.string().nullable().optional(),
   gst_number: z.string().nullable().optional(),
   contact_person: z.string().nullable().optional(),
+  billing_address_id: z.string().nullable().optional(),
+  billing_address: addressSchema.nullable().optional(),
+  delivery_address_id: z.string().nullable().optional(),
+  delivery_address: addressSchema.nullable().optional(),
   delivery_matches_billing: z.boolean().or(z.string()).optional(),
   customer_email: z.string().email().nullable().optional(),
   customer_phone: z.string().nullable().optional(),

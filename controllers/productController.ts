@@ -222,6 +222,10 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
       created_by: req.user.id
     });
 
+    const normalizedCategory = category ? String(category).toLowerCase() : '';
+    const requiresSerials = ['panels', 'panel', 'inverters', 'inverter', 'meter', 'meters'].includes(normalizedCategory);
+    const hasQuantity = quantity !== undefined && Number(quantity) > 0;
+
     let createdSerials: string[] = [];
     if (serial_numbers) {
       const defaultPrice = defaultPriceInput;
@@ -310,6 +314,11 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
         });
       }
       createdSerials = uniqueSerials;
+    }
+
+    if (requiresSerials && hasQuantity && createdSerials.length === 0) {
+      res.status(400).json({ error: 'Serial numbers are required for this category' });
+      return;
     }
 
     logInfo('Product created', { productId: newProduct.id, name: newProduct.name, model: newProduct.model, createdBy: req.user?.id });
@@ -495,6 +504,9 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
       }
     }
 
+    const effectiveCategory = (category || product.category || '').toString().toLowerCase();
+    const requiresSerials = ['panels', 'panel', 'inverters', 'inverter', 'meter', 'meters'].includes(effectiveCategory);
+
     let createdSerials: string[] = [];
     await sequelize.transaction(async (transaction) => {
       if (Object.keys(updates).length > 0) {
@@ -516,6 +528,9 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
         const hasPriceMap = Object.keys(priceMap).length > 0;
 
         if (finalSerials.length === 0) {
+          if (requiresSerials) {
+            throw new Error('Serial numbers are required for this category');
+          }
           await product.increment('quantity', { by: stockToAdd, transaction });
           if (excelFile) {
             try {

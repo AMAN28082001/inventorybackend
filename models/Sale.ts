@@ -12,6 +12,7 @@ interface SaleAttributes {
   discount_amount: number;
   total_amount: number;
   payment_status: 'pending' | 'completed';
+  approval_status?: 'pending' | 'approved';
   sale_date?: Date;
   image?: string | null;
   created_by?: string | null;
@@ -31,7 +32,7 @@ interface SaleAttributes {
   notes?: string | null;
 }
 
-interface SaleCreationAttributes extends Optional<SaleAttributes, 'id' | 'payment_status' | 'sale_date' | 'tax_amount' | 'discount_amount' | 'image' | 'created_by' | 'company_name' | 'gst_number' | 'contact_person' | 'billing_address_id' | 'delivery_address_id' | 'delivery_matches_billing' | 'customer_email' | 'customer_phone' | 'delivery_instructions' | 'bill_image' | 'bill_confirmed_date' | 'bill_confirmed_by_id' | 'bill_confirmed_by_name' | 'notes'> {}
+interface SaleCreationAttributes extends Optional<SaleAttributes, 'id' | 'payment_status' | 'approval_status' | 'sale_date' | 'tax_amount' | 'discount_amount' | 'image' | 'created_by' | 'company_name' | 'gst_number' | 'contact_person' | 'billing_address_id' | 'delivery_address_id' | 'delivery_matches_billing' | 'customer_email' | 'customer_phone' | 'delivery_instructions' | 'bill_image' | 'bill_confirmed_date' | 'bill_confirmed_by_id' | 'bill_confirmed_by_name' | 'notes'> {}
 
 class Sale extends Model<SaleAttributes, SaleCreationAttributes> implements SaleAttributes {
   public id!: string;
@@ -44,6 +45,7 @@ class Sale extends Model<SaleAttributes, SaleCreationAttributes> implements Sale
   public discount_amount!: number;
   public total_amount!: number;
   public payment_status!: 'pending' | 'completed';
+  public approval_status!: 'pending' | 'approved';
   public sale_date!: Date;
   public image!: string | null;
   public created_by!: string | null;
@@ -120,6 +122,10 @@ Sale.init(
     },
     payment_status: {
       type: DataTypes.ENUM('pending', 'completed'),
+      defaultValue: 'pending'
+    },
+    approval_status: {
+      type: DataTypes.ENUM('pending', 'approved'),
       defaultValue: 'pending'
     },
     sale_date: {

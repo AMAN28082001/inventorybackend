@@ -5,6 +5,7 @@ import {
   createSale,
   updateSale,
   confirmB2BBill,
+  approveSale,
   deleteSale,
   getSalesSummary
 } from '../controllers/salesController';
@@ -129,6 +130,9 @@ router.put('/:id', upload.single('image'), uploadToS3('sales'), validate(updateS
 
 // Confirm B2B bill - only account role
 router.post('/:id/confirm-bill', authorize('account'), upload.single('bill_image'), uploadToS3('sales'), confirmB2BBill);
+
+// Approve sale - only account role
+router.post('/:id/approve', authorize('account'), approveSale);
 
 // Delete - creator or super-admin can delete
 router.delete('/:id', deleteSale);
