@@ -85,6 +85,7 @@ export const getProductById = async (req: Request, res: Response): Promise<void>
 export const getProductSerialNumbers = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
+    const statusFilter = req.query.status as string | undefined;
 
     const product = await Product.findByPk(id);
     if (!product) {
@@ -92,10 +93,42 @@ export const getProductSerialNumbers = async (req: Request, res: Response): Prom
       return;
     }
 
-    const serials = await ProductSerialNumber.findAll({
-      where: { product_id: id },
+    const where: any = { product_id: id };
+    if (statusFilter) {
+      if (statusFilter === 'available') {
+        where.status = {
+          [Op.notIn]: ['dispatched', 'acknowledged', 'sold']
+        };
+      } else {
+        where.status = statusFilter;
+      }
+    }
+
+    let serials = await ProductSerialNumber.findAll({
+      where,
       order: [['created_at', 'DESC']]
     });
+
+    if (serials.length === 0 && product.name) {
+      const byNameWhere: any = {
+        product_name: {
+          [Op.iLike]: product.name
+        }
+      };
+      if (statusFilter) {
+        if (statusFilter === 'available') {
+          byNameWhere.status = {
+            [Op.notIn]: ['dispatched', 'acknowledged', 'sold']
+          };
+        } else {
+          byNameWhere.status = statusFilter;
+        }
+      }
+      serials = await ProductSerialNumber.findAll({
+        where: byNameWhere,
+        order: [['created_at', 'DESC']]
+      });
+    }
 
     res.json({
       product_id: id,
@@ -527,6 +560,11 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
         const hasDefaultPrice = defaultPriceInput !== undefined && !isNaN(defaultPriceInput);
         const hasPriceMap = Object.keys(priceMap).length > 0;
 
+        const currentQuantity = Number(product.quantity);
+        if (currentQuantity === 0) {
+          throw new Error('Cannot add stock to a product with zero quantity. Please set initial quantity first.');
+        }
+
         if (finalSerials.length === 0) {
           if (requiresSerials) {
             throw new Error('Serial numbers are required for this category');
@@ -579,11 +617,6 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
           throw new Error(`Duplicate serial numbers found: ${duplicates.join(', ')}`);
         }
 
-        const currentQuantity = Number(product.quantity);
-        if (stockToAdd > currentQuantity) {
-          throw new Error('stock_to_add cannot exceed current product quantity for initial stock');
-        }
-
         const ownerType = req.user?.role === 'super-admin' ? 'super-admin' : req.user?.role === 'admin' ? 'admin' : null;
         const ownerId = ownerType ? req.user?.id : null;
         const serialProductName = (product_name || product.name).toString();
@@ -610,7 +643,7 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
         }
         createdSerials = uniqueSerials;
 
-        if (stockToAdd < currentQuantity) {
+        if (stockToAdd !== currentQuantity) {
           await product.increment('quantity', { by: stockToAdd, transaction });
         }
 

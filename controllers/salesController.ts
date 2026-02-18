@@ -7,7 +7,8 @@ import {
   Product,
   User,
   AdminInventory,
-  InventoryTransaction
+  InventoryTransaction,
+  ProductSerialNumber
 } from '../models';
 import { v4 as uuidv4 } from 'uuid';
 import { Op } from 'sequelize';
@@ -516,8 +517,9 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
       notes: notes || null
     }, { transaction });
 
+    const createdSaleItems: SaleItem[] = [];
     for (const item of normalizedItems) {
-      await SaleItem.create({
+      const createdItem = await SaleItem.create({
         id: uuidv4(),
         sale_id: saleRecord.id,
         product_id: item.product_id,
@@ -528,6 +530,54 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
         line_total: item.line_total,
         gst_rate: item.gst_rate
       }, { transaction });
+      createdSaleItems.push(createdItem);
+    }
+
+    const serialNumbersRaw = (req.body as any).serial_numbers;
+    if (serialNumbersRaw) {
+      const serialNumbersMap: Record<string, string[]> = typeof serialNumbersRaw === 'string'
+        ? JSON.parse(serialNumbersRaw)
+        : serialNumbersRaw;
+
+      const serialsToUpdate: string[] = Object.values(serialNumbersMap || {}).flatMap((list) =>
+        Array.isArray(list) ? list.map(String) : []
+      );
+      if (serialsToUpdate.length > 0) {
+        const serialRows = await ProductSerialNumber.findAll({
+          where: {
+            serial_number: { [Op.in]: serialsToUpdate }
+          },
+          transaction,
+          lock: transaction.LOCK.UPDATE
+        });
+
+        if (serialRows.length !== serialsToUpdate.length) {
+          await transaction.rollback();
+          res.status(400).json({ error: 'Some serial numbers are invalid' });
+          return;
+        }
+
+        const saleItemByProduct = new Map<string, string>();
+        for (const item of createdSaleItems) {
+          if (item.product_id) {
+            saleItemByProduct.set(item.product_id, item.id);
+          }
+        }
+
+        for (const serialRow of serialRows) {
+          await ProductSerialNumber.update(
+            {
+              status: 'sold',
+              sale_id: saleRecord.id,
+              sale_item_id: saleItemByProduct.get(serialRow.product_id) || null
+            },
+            {
+              where: { id: serialRow.id },
+              transaction
+            }
+          );
+        }
+      }
     }
 
     let adminInventoryOwnerId: string | null = null;
@@ -615,6 +665,7 @@ export const updateSale = async (req: Request, res: Response): Promise<void> => 
 
     const { id } = req.params;
     const {
+      items: rawItems,
       customer_name,
       payment_status,
       approval_status,
@@ -659,6 +710,28 @@ export const updateSale = async (req: Request, res: Response): Promise<void> => 
     }
 
     const updates: any = {};
+
+    let updatedItems: NormalizedSaleItem[] | null = null;
+    if (rawItems !== undefined) {
+      let parsedItems: any = rawItems;
+      if (typeof parsedItems === 'string') {
+        try {
+          parsedItems = JSON.parse(parsedItems);
+        } catch (parseError) {
+          await transaction.rollback();
+          res.status(400).json({ error: 'items must be a valid JSON array' });
+          return;
+        }
+      }
+      updatedItems = await normalizeSaleItems(parsedItems, transaction);
+      const newSubtotal = updatedItems.reduce((sum, item) => sum + item.line_total, 0);
+      updates.subtotal = subtotal !== undefined ? Number(subtotal) : newSubtotal;
+      const taxValue = tax_amount !== undefined ? Number(tax_amount) : 0;
+      const discountValue = discount_amount !== undefined ? Number(discount_amount) : 0;
+      updates.tax_amount = taxValue;
+      updates.discount_amount = discountValue;
+      updates.total_amount = updates.subtotal + taxValue - discountValue;
+    }
 
     if (customer_name) {
       updates.customer_name = customer_name;
@@ -730,6 +803,9 @@ export const updateSale = async (req: Request, res: Response): Promise<void> => 
     if (product_summary) {
       updates.product_summary = product_summary;
     }
+    if (updatedItems) {
+      updates.product_summary = product_summary || buildProductSummary(updatedItems);
+    }
 
     if (company_name !== undefined) {
       updates.company_name = company_name;
@@ -789,6 +865,23 @@ export const updateSale = async (req: Request, res: Response): Promise<void> => 
     }
 
     await sale.update(updates, { transaction });
+
+    if (updatedItems) {
+      await SaleItem.destroy({ where: { sale_id: sale.id }, transaction });
+      for (const item of updatedItems) {
+        await SaleItem.create({
+          id: uuidv4(),
+          sale_id: sale.id,
+          product_id: item.product_id,
+          product_name: item.product_name,
+          model: item.model,
+          quantity: item.quantity,
+          unit_price: item.unit_price,
+          line_total: item.line_total,
+          gst_rate: item.gst_rate
+        }, { transaction });
+      }
+    }
 
     await transaction.commit();
 

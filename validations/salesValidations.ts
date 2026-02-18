@@ -61,6 +61,18 @@ export const createSaleSchema = z.object({
 });
 
 export const updateSaleSchema = z.object({
+  items: z.preprocess((val) => {
+    if (val === '' || val === null) return undefined;
+    if (Array.isArray(val)) return val;
+    if (val && typeof val === 'object') {
+      const values = Object.values(val as Record<string, unknown>);
+      if (values.length && values.every((entry) => entry && typeof entry === 'object')) {
+        return values;
+      }
+      return [val];
+    }
+    return val;
+  }, z.any()).optional(),
   customer_name: z.string().min(1).optional(),
   payment_status: z.enum(['pending', 'completed']).optional(),
   approval_status: z.enum(['pending', 'approved']).optional(),

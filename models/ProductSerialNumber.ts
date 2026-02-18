@@ -10,14 +10,19 @@ interface ProductSerialNumberAttributes {
   product_name: string;
   category: string;
   stock_addition_id?: string | null;
+  stock_request_id?: string | null;
+  dispatched_to_admin_id?: string | null;
+  dispatched_at?: Date | null;
+  sale_id?: string | null;
+  sale_item_id?: string | null;
   owner_id?: string | null;
   owner_type?: 'super-admin' | 'admin' | 'agent' | null;
-  status?: 'available' | 'sold' | 'returned' | 'damaged';
+  status?: 'available' | 'mapped' | 'dispatched' | 'acknowledged' | 'sold' | 'returned' | 'damaged';
   created_at?: Date;
   updated_at?: Date;
 }
 
-interface ProductSerialNumberCreationAttributes extends Optional<ProductSerialNumberAttributes, 'id' | 'price' | 'cost_price' | 'stock_addition_id' | 'owner_id' | 'owner_type' | 'status' | 'created_at' | 'updated_at'> {}
+interface ProductSerialNumberCreationAttributes extends Optional<ProductSerialNumberAttributes, 'id' | 'price' | 'cost_price' | 'stock_addition_id' | 'stock_request_id' | 'dispatched_to_admin_id' | 'dispatched_at' | 'sale_id' | 'sale_item_id' | 'owner_id' | 'owner_type' | 'status' | 'created_at' | 'updated_at'> {}
 
 class ProductSerialNumber extends Model<ProductSerialNumberAttributes, ProductSerialNumberCreationAttributes> implements ProductSerialNumberAttributes {
   public id!: string;
@@ -28,9 +33,14 @@ class ProductSerialNumber extends Model<ProductSerialNumberAttributes, ProductSe
   public product_name!: string;
   public category!: string;
   public stock_addition_id!: string | null;
+  public stock_request_id!: string | null;
+  public dispatched_to_admin_id!: string | null;
+  public dispatched_at!: Date | null;
+  public sale_id!: string | null;
+  public sale_item_id!: string | null;
   public owner_id!: string | null;
   public owner_type!: 'super-admin' | 'admin' | 'agent' | null;
-  public status!: 'available' | 'sold' | 'returned' | 'damaged';
+  public status!: 'available' | 'mapped' | 'dispatched' | 'acknowledged' | 'sold' | 'returned' | 'damaged';
   public readonly created_at!: Date;
   public readonly updated_at!: Date;
 }
@@ -70,6 +80,26 @@ ProductSerialNumber.init(
       type: DataTypes.STRING(50),
       allowNull: true
     },
+    stock_request_id: {
+      type: DataTypes.STRING(50),
+      allowNull: true
+    },
+    dispatched_to_admin_id: {
+      type: DataTypes.STRING(50),
+      allowNull: true
+    },
+    dispatched_at: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
+    sale_id: {
+      type: DataTypes.STRING(50),
+      allowNull: true
+    },
+    sale_item_id: {
+      type: DataTypes.STRING(50),
+      allowNull: true
+    },
     owner_id: {
       type: DataTypes.STRING(50),
       allowNull: true
@@ -79,7 +109,7 @@ ProductSerialNumber.init(
       allowNull: true
     },
     status: {
-      type: DataTypes.ENUM('available', 'sold', 'returned', 'damaged'),
+      type: DataTypes.ENUM('available', 'mapped', 'dispatched', 'acknowledged', 'sold', 'returned', 'damaged'),
       allowNull: false,
       defaultValue: 'available'
     }

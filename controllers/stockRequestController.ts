@@ -452,7 +452,9 @@ export const dispatchStockRequest = async (req: Request, res: Response): Promise
     const { id } = req.params;
     const { rejection_reason } = req.body;
     const serialNumberRangesRaw = (req.body as any).serial_number_ranges;
+    const serialNumbersRaw = (req.body as any).serial_numbers;
     let serialNumberRanges: Record<string, { from: string; to: string }> | null = null;
+    let serialNumbersMap: Record<string, string[]> | null = null;
 
     if (serialNumberRangesRaw) {
       if (req.user.role !== 'super-admin') {
@@ -467,6 +469,18 @@ export const dispatchStockRequest = async (req: Request, res: Response): Promise
       } catch {
         await transaction.rollback();
         res.status(400).json({ error: 'Invalid serial_number_ranges JSON' });
+        return;
+      }
+    }
+
+    if (serialNumbersRaw) {
+      try {
+        serialNumbersMap = typeof serialNumbersRaw === 'string'
+          ? JSON.parse(serialNumbersRaw)
+          : serialNumbersRaw;
+      } catch {
+        await transaction.rollback();
+        res.status(400).json({ error: 'Invalid serial_numbers JSON' });
         return;
       }
     }
@@ -626,7 +640,11 @@ export const dispatchStockRequest = async (req: Request, res: Response): Promise
           await ProductSerialNumber.update(
             {
               owner_id: request.requested_by_id,
-              owner_type: 'admin'
+              owner_type: 'admin',
+              status: 'dispatched',
+              stock_request_id: request.id,
+              dispatched_to_admin_id: request.requested_by_id,
+              dispatched_at: new Date()
             },
             {
               where: { id: { [Op.in]: serialsInRange.map((s) => s.id) } },
@@ -635,6 +653,52 @@ export const dispatchStockRequest = async (req: Request, res: Response): Promise
           );
 
           transferredSerialsByProduct[item.product_id] = serialsInRange.map((s) => s.serial_number);
+        }
+
+        if (serialNumbersMap && serialNumbersMap[item.product_id]) {
+          const serialsList = serialNumbersMap[item.product_id];
+          if (!Array.isArray(serialsList) || serialsList.length === 0) {
+            await transaction.rollback();
+            res.status(400).json({ error: `serial_numbers for product ${item.product_id} must be a non-empty array` });
+            return;
+          }
+
+          const serialRows = await ProductSerialNumber.findAll({
+            where: {
+              product_id: item.product_id,
+              serial_number: { [Op.in]: serialsList },
+              status: 'available'
+            },
+            transaction,
+            lock: transaction.LOCK.UPDATE
+          });
+
+          if (serialRows.length !== serialsList.length) {
+            await transaction.rollback();
+            res.status(400).json({ error: `Some serial numbers are invalid or not available for product ${item.product_id}` });
+            return;
+          }
+
+          const destinationRole = request.requested_by_role === 'admin' ? 'admin' : 'agent';
+          await ProductSerialNumber.update(
+            {
+              owner_id: request.requested_by_id,
+              owner_type: destinationRole,
+              status: 'dispatched',
+              stock_request_id: request.id,
+              dispatched_to_admin_id: request.requested_by_id,
+              dispatched_at: new Date()
+            },
+            {
+              where: { id: { [Op.in]: serialRows.map((s) => s.id) } },
+              transaction
+            }
+          );
+
+          transferredSerialsByProduct[item.product_id] = [
+            ...(transferredSerialsByProduct[item.product_id] || []),
+            ...serialRows.map((s) => s.serial_number)
+          ];
         }
 
         await product.decrement('quantity', { by: item.quantity, transaction });
@@ -867,6 +931,17 @@ export const confirmStockRequest = async (req: Request, res: Response): Promise<
       confirmed_date: new Date(),
       confirmation_image: confirmationImage
     });
+
+    await ProductSerialNumber.update(
+      { status: 'acknowledged' },
+      {
+        where: {
+          stock_request_id: request.id,
+          status: 'dispatched',
+          dispatched_to_admin_id: request.requested_by_id
+        }
+      }
+    );
 
     const updated = await StockRequest.findByPk(id, {
       include: buildRequestIncludes()
