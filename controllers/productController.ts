@@ -671,7 +671,7 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
         }
       }
 
-      if (use_max_cost_price === true) {
+      if (use_max_cost_price === true && selling_price === undefined) {
         const maxRow = await ProductSerialNumber.findOne({
           where: { product_id: product.id },
           attributes: [[sequelize.literal('COALESCE(MAX(cost_price), MAX(price))'), 'max_price']],

@@ -65,6 +65,7 @@ interface NormalizedSaleItem {
   unit_price: number;
   line_total: number;
   gst_rate: number;
+  serial_numbers?: string[] | null;
 }
 
 const normalizeSaleItems = async (rawItems: any, transaction: Transaction): Promise<NormalizedSaleItem[]> => {
@@ -135,7 +136,12 @@ const normalizeSaleItems = async (rawItems: any, transaction: Transaction): Prom
       quantity,
       unit_price: unitPrice,
       line_total: lineTotal,
-      gst_rate: gstRate
+      gst_rate: gstRate,
+      serial_numbers: Array.isArray(item.serial_numbers)
+        ? item.serial_numbers.map(String)
+        : typeof item.serial_numbers === 'string'
+          ? item.serial_numbers.split(/[\n,]+/).map((v: string) => v.trim()).filter(Boolean)
+          : null
     });
   }
 
@@ -528,55 +534,87 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
         quantity: item.quantity,
         unit_price: item.unit_price,
         line_total: item.line_total,
-        gst_rate: item.gst_rate
+        gst_rate: item.gst_rate,
+        serial_numbers: item.serial_numbers && item.serial_numbers.length > 0 ? item.serial_numbers : null
       }, { transaction });
       createdSaleItems.push(createdItem);
     }
 
     const serialNumbersRaw = (req.body as any).serial_numbers;
-    if (serialNumbersRaw) {
-      const serialNumbersMap: Record<string, string[]> = typeof serialNumbersRaw === 'string'
-        ? JSON.parse(serialNumbersRaw)
-        : serialNumbersRaw;
+    const serialNumbersMapFromItems: Record<string, string[]> = {};
+    for (const item of normalizedItems) {
+      if (item.product_id && item.serial_numbers && item.serial_numbers.length > 0) {
+        serialNumbersMapFromItems[item.product_id] = item.serial_numbers;
+      }
+    }
+    const serialNumbersMap: Record<string, string[]> = serialNumbersRaw
+      ? (typeof serialNumbersRaw === 'string' ? JSON.parse(serialNumbersRaw) : serialNumbersRaw)
+      : serialNumbersMapFromItems;
 
-      const serialsToUpdate: string[] = Object.values(serialNumbersMap || {}).flatMap((list) =>
-        Array.isArray(list) ? list.map(String) : []
-      );
-      if (serialsToUpdate.length > 0) {
-        const serialRows = await ProductSerialNumber.findAll({
-          where: {
-            serial_number: { [Op.in]: serialsToUpdate }
-          },
-          transaction,
-          lock: transaction.LOCK.UPDATE
+    const serialsToUpdate: string[] = Object.values(serialNumbersMap || {}).flatMap((list) =>
+      Array.isArray(list) ? list.map(String) : []
+    );
+    if (serialsToUpdate.length > 0) {
+      const serialRows = await ProductSerialNumber.findAll({
+        where: {
+          serial_number: { [Op.in]: serialsToUpdate }
+        },
+        transaction,
+        lock: transaction.LOCK.UPDATE
+      });
+
+      if (serialRows.length !== serialsToUpdate.length) {
+        await transaction.rollback();
+        res.status(400).json({ error: 'Some serial numbers are invalid' });
+        return;
+      }
+
+      const saleItemByProduct = new Map<string, string>();
+      for (const item of createdSaleItems) {
+        if (item.product_id) {
+          saleItemByProduct.set(item.product_id, item.id);
+        }
+      }
+
+      let adminInventoryOwnerId: string | null = null;
+      if (req.user.role === 'agent') {
+        const agentRecord = await User.findByPk(req.user.id, {
+          attributes: ['id', 'created_by_id']
         });
-
-        if (serialRows.length !== serialsToUpdate.length) {
+        adminInventoryOwnerId = agentRecord?.created_by_id || null;
+        if (!adminInventoryOwnerId) {
           await transaction.rollback();
-          res.status(400).json({ error: 'Some serial numbers are invalid' });
+          res.status(400).json({ error: 'Admin mapping not found for agent' });
           return;
         }
+      }
 
-        const saleItemByProduct = new Map<string, string>();
-        for (const item of createdSaleItems) {
-          if (item.product_id) {
-            saleItemByProduct.set(item.product_id, item.id);
+      for (const serialRow of serialRows) {
+        if (req.user.role === 'agent') {
+          if (!['acknowledged', 'dispatched'].includes(serialRow.status || '') || serialRow.dispatched_to_admin_id !== adminInventoryOwnerId) {
+            await transaction.rollback();
+            res.status(400).json({ error: 'Serial number is not available for sale' });
+            return;
+          }
+        } else if (req.user.role === 'admin') {
+          if (!['acknowledged', 'dispatched', 'available'].includes(serialRow.status || '')) {
+            await transaction.rollback();
+            res.status(400).json({ error: 'Serial number is not available for sale' });
+            return;
           }
         }
 
-        for (const serialRow of serialRows) {
-          await ProductSerialNumber.update(
-            {
-              status: 'sold',
-              sale_id: saleRecord.id,
-              sale_item_id: saleItemByProduct.get(serialRow.product_id) || null
-            },
-            {
-              where: { id: serialRow.id },
-              transaction
-            }
-          );
-        }
+        await ProductSerialNumber.update(
+          {
+            status: 'sold',
+            sale_id: saleRecord.id,
+            sale_item_id: saleItemByProduct.get(serialRow.product_id) || null
+          },
+          {
+            where: { id: serialRow.id },
+            transaction
+          }
+        );
       }
     }
 
@@ -878,7 +916,8 @@ export const updateSale = async (req: Request, res: Response): Promise<void> => 
           quantity: item.quantity,
           unit_price: item.unit_price,
           line_total: item.line_total,
-          gst_rate: item.gst_rate
+          gst_rate: item.gst_rate,
+          serial_numbers: item.serial_numbers && item.serial_numbers.length > 0 ? item.serial_numbers : null
         }, { transaction });
       }
     }

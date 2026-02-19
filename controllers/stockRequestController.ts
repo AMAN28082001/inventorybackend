@@ -193,8 +193,36 @@ export const getStockRequestById = async (req: Request, res: Response): Promise<
       return;
     }
 
+    const serialRows = await ProductSerialNumber.findAll({
+      where: {
+        stock_request_id: id,
+        status: { [Op.in]: ['dispatched', 'acknowledged'] }
+      },
+      order: [['created_at', 'DESC']]
+    });
+
+    const serialsByProduct: Record<string, string[]> = {};
+    for (const serial of serialRows) {
+      const productId = serial.product_id;
+      if (!serialsByProduct[productId]) {
+        serialsByProduct[productId] = [];
+      }
+      serialsByProduct[productId].push(serial.serial_number);
+    }
+
+    const response = request.toJSON() as any;
+    if (Object.keys(serialsByProduct).length > 0) {
+      response.dispatched_serial_numbers = serialsByProduct;
+      if (Array.isArray(response.items)) {
+        response.items = response.items.map((item: any) => ({
+          ...item,
+          serial_numbers: item.product_id ? (serialsByProduct[item.product_id] || []) : []
+        }));
+      }
+    }
+
     logInfo('Get stock request by ID', { requestId: id });
-    res.json(request);
+    res.json(response);
   } catch (error) {
     logError('Get stock request by ID error', error, { requestId: req.params.id });
     res.status(500).json({ error: 'Server error' });
