@@ -41,8 +41,9 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
     }
 
     const page = parseInt(req.query.page as string) || 1;
-    const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
-    const offset = (page - 1) * limit;
+    const limitParam = req.query.limit as string | undefined;
+    const limit = limitParam ? Math.min(parseInt(limitParam) || 20, 1000) : undefined;
+    const offset = limit ? (page - 1) * limit : undefined;
     const status = req.query.status as string;
     const dealerId = req.query.dealerId as string;
     const startDate = req.query.startDate as string;
@@ -125,9 +126,9 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
         }),
         pagination: {
           page,
-          limit,
+          limit: limit || quotations.count,
           total: quotations.count,
-          totalPages: Math.ceil(quotations.count / limit)
+          totalPages: limit ? Math.ceil(quotations.count / limit) : 1
         }
       }
     });
