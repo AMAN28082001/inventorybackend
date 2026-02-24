@@ -546,7 +546,7 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
         await product.update(updates, { transaction });
       }
 
-      if (stockToAdd && stockToAdd > 0) {
+      if (stockToAdd !== undefined) {
         const excelFile = (req as any).files?.serial_number_excel?.[0] as Express.Multer.File | undefined;
         const serialNumbers = parseSerialNumbers(serial_numbers);
         const excelSerials = excelFile ? parseSerialNumbersFromFile(excelFile) : [];
@@ -566,10 +566,12 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
         }
 
         if (finalSerials.length === 0) {
-          if (requiresSerials) {
+          if (requiresSerials && stockToAdd > 0) {
             throw new Error('Serial numbers are required for this category');
           }
-          await product.increment('quantity', { by: stockToAdd, transaction });
+          if (stockToAdd > 0) {
+            await product.increment('quantity', { by: stockToAdd, transaction });
+          }
           if (excelFile) {
             try {
               fs.unlinkSync(excelFile.path);
@@ -598,7 +600,7 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
           }
         }
 
-        if (finalSerials.length !== stockToAdd) {
+        if (stockToAdd > 0 && finalSerials.length !== stockToAdd) {
           throw new Error(`Expected ${stockToAdd} serial numbers, got ${finalSerials.length}`);
         }
 
@@ -615,6 +617,21 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
         if (existingSerials.length > 0) {
           const duplicates = existingSerials.map((s) => (s as any).serial_number);
           throw new Error(`Duplicate serial numbers found: ${duplicates.join(', ')}`);
+        }
+
+        const isAssigningSerialsToExistingStock = stockToAdd === 0 && finalSerials.length > 0;
+        if (isAssigningSerialsToExistingStock) {
+          const existingSerialCount = await ProductSerialNumber.count({
+            where: { product_id: product.id },
+            transaction
+          });
+          const availableSlots = currentQuantity - existingSerialCount;
+          if (availableSlots <= 0) {
+            throw new Error('No unassigned stock available to map serial numbers');
+          }
+          if (finalSerials.length > availableSlots) {
+            throw new Error(`Only ${availableSlots} stock units are available for serial assignment`);
+          }
         }
 
         const ownerType = req.user?.role === 'super-admin' ? 'super-admin' : req.user?.role === 'admin' ? 'admin' : null;
@@ -643,7 +660,7 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
         }
         createdSerials = uniqueSerials;
 
-        if (stockToAdd !== currentQuantity) {
+        if (stockToAdd > 0 && stockToAdd !== currentQuantity) {
           await product.increment('quantity', { by: stockToAdd, transaction });
         }
 
