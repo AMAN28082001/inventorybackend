@@ -119,7 +119,7 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
               mobile: qAny.customer.mobile
             } : null,
             systemType: q.systemType,
-            finalAmount: Number(q.finalAmount),
+            finalAmount: Number(q.subtotal),
             status: q.status,
             createdAt: q.createdAt
           };

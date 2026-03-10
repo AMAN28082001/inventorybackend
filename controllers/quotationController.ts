@@ -1094,7 +1094,7 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         paidAmount: q.paidAmount !== undefined && q.paidAmount !== null ? Number(q.paidAmount) : null,
         paymentDate: q.paymentDate,
         paymentStatus: q.paymentStatus,
-        finalAmount: Number(q.finalAmount),
+        finalAmount: Number(q.subtotal),
         documents: documents ? {
           id: documents.id,
           aadharNumber: documents.aadharNumber,
