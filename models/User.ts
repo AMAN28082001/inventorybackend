@@ -167,7 +167,7 @@ interface UserAttributes {
   username: string;
   password: string;
   name: string;
-  role: 'super-admin' | 'super-admin-manager' | 'admin' | 'agent' | 'account';
+  role: 'super-admin' | 'super-admin-manager' | 'admin' | 'agent' | 'account' | 'installer' | 'baldev' | 'confirmation' | 'hr';
   is_active: boolean;
   created_by_id?: string | null;
   created_by_name?: string | null;
@@ -182,7 +182,7 @@ class User extends Model<UserAttributes, UserCreationAttributes> implements User
   public username!: string;
   public password!: string;
   public name!: string;
-  public role!: 'super-admin' | 'super-admin-manager' | 'admin' | 'agent' | 'account';
+  public role!: 'super-admin' | 'super-admin-manager' | 'admin' | 'agent' | 'account' | 'installer' | 'baldev' | 'confirmation' | 'hr';
   public is_active!: boolean;
   public created_by_id!: string | null;
   public created_by_name!: string | null;
@@ -210,7 +210,7 @@ User.init(
       allowNull: false
     },
     role: {
-      type: DataTypes.ENUM('super-admin', 'super-admin-manager', 'admin', 'agent', 'account'),
+      type: DataTypes.ENUM('super-admin', 'super-admin-manager', 'admin', 'agent', 'account', 'installer', 'baldev', 'confirmation', 'hr'),
       allowNull: false
     },
     is_active: {

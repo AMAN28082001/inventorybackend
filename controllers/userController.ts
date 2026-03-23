@@ -113,7 +113,7 @@ export const createUser = async (req: Request, res: Response): Promise<void> => 
       return;
     }
 
-    const validRoles = ['super-admin', 'super-admin-manager', 'admin', 'agent', 'account'];
+    const validRoles = ['super-admin', 'super-admin-manager', 'admin', 'agent', 'account', 'installer', 'baldev', 'confirmation', 'hr'];
     if (!validRoles.includes(role)) {
       res.status(400).json({ error: 'Invalid role' });
       return;
@@ -125,8 +125,8 @@ export const createUser = async (req: Request, res: Response): Promise<void> => 
     }
 
     if (req.user.role !== 'super-admin') {
-      if (req.user.role === 'admin' && role !== 'agent') {
-        res.status(403).json({ error: 'Admins can only create agent accounts' });
+      if (req.user.role === 'admin' && !['agent', 'installer', 'baldev', 'confirmation', 'hr'].includes(role)) {
+        res.status(403).json({ error: 'Admins can only create agent/installer/baldev/hr accounts' });
         return;
       }
 
@@ -229,7 +229,7 @@ export const updateUser = async (req: Request, res: Response): Promise<void> => 
     }
 
     if (role) {
-      const validRoles = ['super-admin', 'super-admin-manager', 'admin', 'agent', 'account'];
+      const validRoles = ['super-admin', 'super-admin-manager', 'admin', 'agent', 'account', 'installer', 'baldev', 'confirmation', 'hr'];
       if (!validRoles.includes(role)) {
         res.status(400).json({ error: 'Invalid role' });
         return;

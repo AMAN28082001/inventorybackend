@@ -228,10 +228,13 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
         : undefined;
 
     const id = uuidv4();
-    // Use S3 URL if available, otherwise fall back to local path or provided image
-    const imagePath = req.file 
-      ? ((req.file as any).s3Location || `/uploads/${req.file.filename}`)
-      : image;
+    // S3-only upload path for product images
+    const uploadedS3Image = req.file ? (req.file as any).s3Location : null;
+    if (req.file && !uploadedS3Image) {
+      res.status(500).json({ error: 'Image upload failed. Could not store file in S3.' });
+      return;
+    }
+    const imagePath = uploadedS3Image || image;
 
     const resolvedCostPrice = unit_price !== undefined && unit_price !== null
       ? unit_price
@@ -509,8 +512,12 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
 
     const imageFile = (req.file as Express.Multer.File) || ((req as any).files?.image?.[0] as Express.Multer.File | undefined);
     if (imageFile) {
-      // Use S3 URL if available, otherwise fall back to local path
-      updates.image = (imageFile as any).s3Location || `/uploads/${imageFile.filename}`;
+      const uploadedS3Image = (imageFile as any).s3Location;
+      if (!uploadedS3Image) {
+        res.status(500).json({ error: 'Image upload failed. Could not store file in S3.' });
+        return;
+      }
+      updates.image = uploadedS3Image;
       
       // Delete old image from S3 if it exists
       if (product.image) {

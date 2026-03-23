@@ -1,6 +1,16 @@
 import { z } from 'zod';
 
-const roleEnum = z.enum(['super-admin', 'super-admin-manager', 'admin', 'agent', 'account']);
+const roleEnum = z.enum([
+  'super-admin',
+  'super-admin-manager',
+  'admin',
+  'agent',
+  'account',
+  'installer',
+  'baldev',
+  'confirmation',
+  'hr'
+]);
 
 export const createUserSchema = z.object({
   username: z.string().min(1, 'Username is required').max(100, 'Username must be less than 100 characters'),

@@ -148,7 +148,16 @@ export const updateDiscountSchema = z.object({
 });
 
 export const updateProductsSchema = z.object({
-  products: productsSchema
+  products: productsSchema.partial().refine((val) => {
+    if (val.systemType === 'customize') {
+      return Array.isArray(val.customPanels) && val.customPanels.length > 0;
+    }
+    return true;
+  }, {
+    message: 'customPanels is required when systemType is customize'
+  })
+}).refine((data) => Object.keys(data.products || {}).length > 0, {
+  message: 'At least one products field must be provided'
 });
 
 export const updatePricingSchema = z.object({
@@ -170,13 +179,27 @@ export const updatePricingSchema = z.object({
   message: 'At least one pricing field must be provided'
 });
 
+const aadharRegex = /^\d{12}$/;
+const phoneRegex = /^\d{10}$/;
+const panRegex = /^[A-Z]{5}\d{4}[A-Z]$/;
+
+const panSchema = z
+  .string()
+  .min(1)
+  .transform((val) => val.toUpperCase())
+  .refine((val) => panRegex.test(val), { message: 'PAN must be in format ABCDE1234F' });
+
 export const quotationDocumentsSchema = z.object({
-  aadharNumber: z.string().min(1).optional(),
+  aadharNumber: z.string().min(1).optional().refine((val) => !val || aadharRegex.test(val), {
+    message: 'Aadhar number must be 12 digits'
+  }),
   aadharFront: z.string().min(1).optional(),
   aadharBack: z.string().min(1).optional(),
-  phoneNumber: z.string().min(1).optional(),
+  phoneNumber: z.string().min(1).optional().refine((val) => !val || phoneRegex.test(val), {
+    message: 'Phone number must be 10 digits'
+  }),
   emailId: z.string().email().optional(),
-  panNumber: z.string().min(1).optional(),
+  panNumber: panSchema.optional(),
   panImage: z.string().min(1).optional(),
   electricityKno: z.string().min(1).optional(),
   electricityBillImage: z.string().min(1).optional(),
@@ -186,16 +209,37 @@ export const quotationDocumentsSchema = z.object({
   bankBranch: z.string().min(1).optional(),
   bankPassbookImage: z.string().min(1).optional(),
   isCompliantSenior: booleanOrString.optional(),
-  compliantAadharNumber: z.string().min(1).optional(),
+  compliantAadharNumber: z.string().min(1).optional().refine((val) => !val || aadharRegex.test(val), {
+    message: 'Compliant Aadhar number must be 12 digits'
+  }),
   compliantAadharFront: z.string().min(1).optional(),
   compliantAadharBack: z.string().min(1).optional(),
-  compliantContactPhone: z.string().min(1).optional()
+  compliantContactPhone: z.string().min(1).optional().refine((val) => !val || phoneRegex.test(val), {
+    message: 'Compliant phone number must be 10 digits'
+  }),
+  compliantPanNumber: panSchema.optional(),
+  compliantPanImage: z.string().min(1).optional(),
+  compliantBankAccountNumber: z.string().min(1).optional(),
+  compliantBankIfsc: z.string().min(1).optional(),
+  compliantBankName: z.string().min(1).optional(),
+  compliantBankBranch: z.string().min(1).optional(),
+  compliantBankPassbookImage: z.string().min(1).optional()
 }).refine((data) => {
   const isCompliant = data.isCompliantSenior === true;
   if (!isCompliant) return true;
-  return !!data.compliantAadharFront && !!data.compliantAadharBack && !!data.compliantContactPhone;
+  return !!data.compliantAadharNumber &&
+    !!data.compliantContactPhone &&
+    !!data.compliantAadharFront &&
+    !!data.compliantAadharBack &&
+    !!data.compliantPanNumber &&
+    !!data.compliantPanImage &&
+    !!data.compliantBankAccountNumber &&
+    !!data.compliantBankIfsc &&
+    !!data.compliantBankName &&
+    !!data.compliantBankBranch &&
+    !!data.compliantBankPassbookImage;
 }, {
-  message: 'Compliant Aadhar front/back and contact phone are required when isCompliantSenior is true'
+  message: 'Compliant documents are required when isCompliantSenior is true'
 });
 
 

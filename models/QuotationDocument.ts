@@ -23,6 +23,13 @@ interface QuotationDocumentAttributes {
   compliantAadharFront?: string | null;
   compliantAadharBack?: string | null;
   compliantContactPhone?: string | null;
+  compliantPanNumber?: string | null;
+  compliantPanImage?: string | null;
+  compliantBankAccountNumber?: string | null;
+  compliantBankIfsc?: string | null;
+  compliantBankName?: string | null;
+  compliantBankBranch?: string | null;
+  compliantBankPassbookImage?: string | null;
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -49,6 +56,13 @@ interface QuotationDocumentCreationAttributes extends Optional<
   | 'compliantAadharFront'
   | 'compliantAadharBack'
   | 'compliantContactPhone'
+  | 'compliantPanNumber'
+  | 'compliantPanImage'
+  | 'compliantBankAccountNumber'
+  | 'compliantBankIfsc'
+  | 'compliantBankName'
+  | 'compliantBankBranch'
+  | 'compliantBankPassbookImage'
   | 'createdAt'
   | 'updatedAt'
 > {}
@@ -78,6 +92,13 @@ class QuotationDocument
   public compliantAadharFront!: string | null;
   public compliantAadharBack!: string | null;
   public compliantContactPhone!: string | null;
+  public compliantPanNumber!: string | null;
+  public compliantPanImage!: string | null;
+  public compliantBankAccountNumber!: string | null;
+  public compliantBankIfsc!: string | null;
+  public compliantBankName!: string | null;
+  public compliantBankBranch!: string | null;
+  public compliantBankPassbookImage!: string | null;
   public readonly createdAt!: Date;
   public readonly updatedAt!: Date;
 }
@@ -111,7 +132,14 @@ QuotationDocument.init(
     compliantAadharNumber: { type: DataTypes.STRING(50), allowNull: true },
     compliantAadharFront: { type: DataTypes.STRING(255), allowNull: true },
     compliantAadharBack: { type: DataTypes.STRING(255), allowNull: true },
-    compliantContactPhone: { type: DataTypes.STRING(20), allowNull: true }
+    compliantContactPhone: { type: DataTypes.STRING(20), allowNull: true },
+    compliantPanNumber: { type: DataTypes.STRING(20), allowNull: true },
+    compliantPanImage: { type: DataTypes.STRING(255), allowNull: true },
+    compliantBankAccountNumber: { type: DataTypes.STRING(50), allowNull: true },
+    compliantBankIfsc: { type: DataTypes.STRING(20), allowNull: true },
+    compliantBankName: { type: DataTypes.STRING(100), allowNull: true },
+    compliantBankBranch: { type: DataTypes.STRING(100), allowNull: true },
+    compliantBankPassbookImage: { type: DataTypes.STRING(255), allowNull: true }
   },
   {
     sequelize,

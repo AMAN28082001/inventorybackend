@@ -92,7 +92,13 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
       }
 
       // Check if it's an account manager
-      if (decoded.role === 'account-management') {
+      if (
+        decoded.role === 'account-management' ||
+        decoded.role === 'installer' ||
+        decoded.role === 'baldev' ||
+        decoded.role === 'confirmation' ||
+        decoded.role === 'hr'
+      ) {
         const accountManager = await AccountManager.findByPk(decoded.id);
         if (!accountManager || !accountManager.isActive) {
           res.status(401).json({
@@ -108,14 +114,24 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
         req.user = {
           id: accountManager.id,
           username: accountManager.username,
-          role: 'account-management'
+          role: accountManager.role as any
         };
         next();
         return;
       }
 
       // Check if it's an Inventory System user (super-admin, admin, agent, account)
-      if (decoded.role === 'super-admin' || decoded.role === 'super-admin-manager' || decoded.role === 'admin' || decoded.role === 'agent' || decoded.role === 'account') {
+      if (
+        decoded.role === 'super-admin' ||
+        decoded.role === 'super-admin-manager' ||
+        decoded.role === 'admin' ||
+        decoded.role === 'agent' ||
+        decoded.role === 'account' ||
+        decoded.role === 'installer' ||
+        decoded.role === 'baldev' ||
+        decoded.role === 'confirmation' ||
+        decoded.role === 'hr'
+      ) {
         const user = await User.findByPk(decoded.id);
         if (!user || !user.is_active) {
           res.status(401).json({
@@ -131,7 +147,7 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
         req.user = {
           id: user.id,
           username: user.username,
-          role: user.role as 'admin' | 'super-admin'
+          role: user.role as any
         } as any; // Type assertion needed due to union type differences
         next();
         return;
@@ -176,7 +192,7 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
 
 // Authorize dealer only
 export const authorizeDealer = (req: Request, res: Response, next: NextFunction): void => {
-  if (req.user && req.user.role === 'account-management') {
+  if (req.user && (req.user.role === 'account-management' || req.user.role === 'hr')) {
     res.status(403).json({
       success: false,
       error: {
@@ -201,7 +217,7 @@ export const authorizeDealer = (req: Request, res: Response, next: NextFunction)
 
 // Authorize dealer or admin (both can access)
 export const authorizeDealerOrAdmin = (req: Request, res: Response, next: NextFunction): void => {
-  if (req.user && req.user.role === 'account-management') {
+  if (req.user && (req.user.role === 'account-management' || req.user.role === 'hr')) {
     res.status(403).json({
       success: false,
       error: {
@@ -269,13 +285,17 @@ export const authorizeDealerAdminOrVisitor = (req: Request, res: Response, next:
   // Allow dealers/admins, visitors, or account managers
   const isDealerOrAdmin = req.dealer !== undefined;
   const isVisitor = req.visitor !== undefined;
-  const isAccountManager = req.user && req.user.role === 'account-management';
+  const isAccountManager = req.user && (req.user.role === 'account-management' || req.user.role === 'hr');
   const isInventoryUser = req.user && (
     req.user.role === 'agent' ||
     req.user.role === 'admin' ||
     req.user.role === 'super-admin' ||
     req.user.role === 'super-admin-manager' ||
-    req.user.role === 'account'
+    req.user.role === 'account' ||
+    req.user.role === 'installer' ||
+    req.user.role === 'baldev' ||
+    req.user.role === 'confirmation' ||
+    req.user.role === 'hr'
   );
   
   if (!isDealerOrAdmin && !isVisitor && !isAccountManager && !isInventoryUser) {
@@ -291,13 +311,35 @@ export const authorizeDealerAdminOrVisitor = (req: Request, res: Response, next:
   next();
 };
 
+export const authorizeInstaller = (req: Request, res: Response, next: NextFunction): void => {
+  if (req.user && req.user.role === 'installer') {
+    next();
+    return;
+  }
+  res.status(403).json({
+    success: false,
+    error: { code: 'AUTH_004', message: 'Insufficient permissions' }
+  });
+};
+
+export const authorizeBaldev = (req: Request, res: Response, next: NextFunction): void => {
+  if (req.user && (req.user.role === 'baldev' || req.user.role === 'confirmation')) {
+    next();
+    return;
+  }
+  res.status(403).json({
+    success: false,
+    error: { code: 'AUTH_004', message: 'Insufficient permissions' }
+  });
+};
+
 // Allow dealer/admin or account manager
 export const authorizeDealerOrAccountManager = (req: Request, res: Response, next: NextFunction): void => {
   if (req.dealer) {
     next();
     return;
   }
-  if (req.user && req.user.role === 'account-management') {
+  if (req.user && (req.user.role === 'account-management' || req.user.role === 'hr')) {
     next();
     return;
   }
@@ -312,7 +354,7 @@ export const authorizeDealerOrAccountManager = (req: Request, res: Response, nex
 
 // Reject account managers (used to hard-block read endpoints beyond approved list)
 export const rejectAccountManager = (req: Request, res: Response, next: NextFunction): void => {
-  if (req.user && req.user.role === 'account-management') {
+  if (req.user && (req.user.role === 'account-management' || req.user.role === 'hr')) {
     res.status(403).json({
       success: false,
       error: {
@@ -331,7 +373,7 @@ export const authorizeDealerOrAccountManagerPayment = (req: Request, res: Respon
     next();
     return;
   }
-  if (req.user && req.user.role === 'account-management') {
+  if (req.user && (req.user.role === 'account-management' || req.user.role === 'hr')) {
     next();
     return;
   }

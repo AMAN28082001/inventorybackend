@@ -1,8 +1,10 @@
 import express, { Router } from 'express';
 import { registerDealer, getDealerProfile, updateDealerProfile, getDealerStatistics, getVisitors } from '../controllers/dealerController';
+import { getDealerCallingQueueCurrent, getDealerCallingQueueNext, updateDealerCallingQueueAction } from '../controllers/callingLeadController';
 import { authenticate, authorizeDealer } from '../middleware/authQuotation';
 import { validate } from '../middleware/validate';
 import { registerDealerSchema, updateDealerSchema } from '../validations/dealerValidations';
+import { dealerLeadActionSchema } from '../validations/callingLeadValidations';
 
 const router: Router = express.Router();
 
@@ -279,6 +281,10 @@ router.get('/me/statistics', getDealerStatistics);
  *         description: Unauthorized
  */
 router.get('/visitors', getVisitors);
+
+router.get('/me/calling-queue/next', getDealerCallingQueueNext);
+router.get('/me/calling-queue/current', getDealerCallingQueueCurrent);
+router.patch('/me/calling-queue/:leadId/action', validate(dealerLeadActionSchema), updateDealerCallingQueueAction);
 
 export default router;
 

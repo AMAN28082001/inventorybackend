@@ -121,6 +121,9 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
             systemType: q.systemType,
             finalAmount: Number(q.subtotal),
             status: q.status,
+            installationStatus: (q as any).installationStatus || 'pending_installer',
+            approvedAt: (q as any).approvedAt || null,
+            installerApprovedAt: (q as any).installerApprovedAt || null,
             createdAt: q.createdAt
           };
         }),
@@ -176,13 +179,20 @@ export const updateQuotationStatus = async (req: Request, res: Response): Promis
       return;
     }
 
-    await quotation.update({ status });
+    const updateData: any = { status };
+    if (status === 'approved') {
+      updateData.installationStatus = 'pending_installer';
+      updateData.approvedAt = new Date();
+    }
+    await quotation.update(updateData);
 
     res.json({
       success: true,
       data: {
         id: quotation.id,
         status: quotation.status,
+        installationStatus: (quotation as any).installationStatus,
+        approvedAt: (quotation as any).approvedAt || null,
         updatedAt: quotation.updatedAt
       }
     });

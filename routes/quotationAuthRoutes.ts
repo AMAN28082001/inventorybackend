@@ -108,7 +108,7 @@ router.post('/refresh', refreshToken);
  *       401:
  *         description: Unauthorized
  */
-router.post('/logout', authenticate, logout);
+router.post('/logout', logout);
 
 /**
  * @swagger

@@ -14,6 +14,8 @@ import StockReturn from './StockReturn';
 import AccountManager from './AccountManager';
 import AccountManagerHistory from './AccountManagerHistory';
 import ProductSerialNumber from './ProductSerialNumber';
+import CallingLead from './CallingLead';
+import DealerLeadAssignment from './DealerLeadAssignment';
 
 // Define all associations
 // User associations
@@ -79,6 +81,10 @@ StockReturn.belongsTo(Product, { foreignKey: 'product_id', as: 'product' });
 AccountManager.hasMany(AccountManagerHistory, { foreignKey: 'accountManagerId', as: 'history', onDelete: 'CASCADE' });
 AccountManagerHistory.belongsTo(AccountManager, { foreignKey: 'accountManagerId', as: 'accountManager' });
 
+// Calling lead module associations
+CallingLead.hasOne(DealerLeadAssignment, { foreignKey: 'leadId', as: 'assignment', onDelete: 'CASCADE' });
+DealerLeadAssignment.belongsTo(CallingLead, { foreignKey: 'leadId', as: 'lead' });
+
 // Sync database (use with caution in production)
 export const syncDatabase = async (force: boolean = false): Promise<void> => {
   try {
@@ -103,7 +109,9 @@ export {
   StockReturn,
   AccountManager,
   AccountManagerHistory,
-  ProductSerialNumber
+  ProductSerialNumber,
+  CallingLead,
+  DealerLeadAssignment
 };
 
 

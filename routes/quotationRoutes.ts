@@ -11,6 +11,7 @@ import {
   getProductCatalog,
   saveQuotationDocuments
 } from '../controllers/quotationController';
+import { getWorkflowHistory } from '../controllers/workflowController';
 import { getVisitsForQuotation } from '../controllers/visitController';
 import { authenticate, authorizeDealer, authorizeDealerAdminOrVisitor, authorizeDealerOrAccountManager, rejectAccountManager } from '../middleware/authQuotation';
 import { validate } from '../middleware/validate';
@@ -22,11 +23,11 @@ const router: Router = express.Router();
 const documentsUpload = multer({
   storage: multer.memoryStorage(),
   fileFilter: (_req, file, cb) => {
-    if (file.mimetype.startsWith('image/')) {
+    if (file.mimetype.startsWith('image/') || file.mimetype === 'application/pdf') {
       cb(null, true);
       return;
     }
-    cb(new Error('Only image uploads are allowed'));
+    cb(new Error('Only image or PDF uploads are allowed'));
   },
   limits: { fileSize: 10 * 1024 * 1024 }
 });
@@ -526,7 +527,9 @@ router.post(
     { name: 'electricityBillImage', maxCount: 1 },
     { name: 'bankPassbookImage', maxCount: 1 },
     { name: 'compliantAadharFront', maxCount: 1 },
-    { name: 'compliantAadharBack', maxCount: 1 }
+    { name: 'compliantAadharBack', maxCount: 1 },
+    { name: 'compliantPanImage', maxCount: 1 },
+    { name: 'compliantBankPassbookImage', maxCount: 1 }
   ]),
   saveQuotationDocuments
 );
@@ -541,7 +544,9 @@ router.patch(
     { name: 'electricityBillImage', maxCount: 1 },
     { name: 'bankPassbookImage', maxCount: 1 },
     { name: 'compliantAadharFront', maxCount: 1 },
-    { name: 'compliantAadharBack', maxCount: 1 }
+    { name: 'compliantAadharBack', maxCount: 1 },
+    { name: 'compliantPanImage', maxCount: 1 },
+    { name: 'compliantBankPassbookImage', maxCount: 1 }
   ]),
   saveQuotationDocuments
 );
@@ -616,6 +621,7 @@ router.get('/:quotationId/pdf', rejectAccountManager, authorizeDealerAdminOrVisi
  *         description: Unauthorized
  */
 router.get('/:quotationId/visits', rejectAccountManager, authorizeDealerAdminOrVisitor, getVisitsForQuotation);
+router.get('/:quotationId/workflow-history', authorizeDealerAdminOrVisitor, getWorkflowHistory);
 
 export default router;
 

@@ -210,13 +210,13 @@ export const login = async (req: Request, res: Response): Promise<void> => {
 
       const expiresIn: string = process.env.JWT_EXPIRE || '7d';
       const token = jwt.sign(
-        { id: accountManager.id, role: 'account-management' },
+        { id: accountManager.id, role: accountManager.role },
         jwtSecret,
         { expiresIn } as SignOptions
       );
 
       const refreshToken = jwt.sign(
-        { id: accountManager.id, role: 'account-management', type: 'refresh' },
+        { id: accountManager.id, role: accountManager.role, type: 'refresh' },
         jwtSecret,
         { expiresIn: '30d' } as SignOptions
       );
@@ -238,7 +238,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
             lastName: updatedAccountManager!.lastName,
             email: updatedAccountManager!.email,
             mobile: updatedAccountManager!.mobile || '',
-            role: 'account-management',
+            role: updatedAccountManager!.role,
             isActive: updatedAccountManager!.isActive,
             emailVerified: updatedAccountManager!.emailVerified || false,
             loginCount: updatedAccountManager!.loginCount,
@@ -424,7 +424,7 @@ export const refreshToken = async (req: Request, res: Response): Promise<void> =
 export const logout = async (req: Request, res: Response): Promise<void> => {
   try {
     // Log logout history for account managers
-    if (req.user && req.user.role === 'account-management') {
+    if (req.user && (req.user.role === 'account-management' || req.user.role === 'hr')) {
       try {
         await AccountManagerHistory.create({
           id: uuidv4(),
@@ -803,4 +803,4 @@ export const forgotPassword = async (req: Request, res: Response): Promise<void>
   }
 };
 
-
+//pushing

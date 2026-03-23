@@ -2,10 +2,12 @@ import { Request, Response } from 'express';
 import AWS from 'aws-sdk';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
-import { Quotation, QuotationProduct, CustomPanel, Customer, Visit, VisitAssignment, SystemConfig, Dealer, QuotationDocument } from '../models/index-quotation';
+import { Quotation, QuotationProduct, CustomPanel, Customer, Visit, VisitAssignment, SystemConfig, Dealer, QuotationDocument, QuotationInstallationDoc } from '../models/index-quotation';
 import { Product } from '../models';
 import { Op } from 'sequelize';
 import { logError, logInfo } from '../utils/loggerHelper';
+import { deleteFileFromS3IfExists } from '../middleware/upload';
+import { generatePublicUrl } from '../utils/s3Service';
 
 // Helper function to normalize catalog data - ensures all arrays are arrays (never null/undefined)
 const normalizeCatalog = (catalog: any): any => {
@@ -877,7 +879,7 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
     const sortOrder = (req.query.sortOrder as string) || 'desc';
 
     // Check if user is account manager
-    const isAccountManager = req.user && req.user.role === 'account-management';
+    const isAccountManager = req.user && (req.user.role === 'account-management' || req.user.role === 'hr');
     if (isAccountManager && status && status !== 'approved') {
       res.status(403).json({
         success: false,
@@ -1015,6 +1017,11 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
             required: false
           },
           {
+            model: QuotationInstallationDoc,
+            as: 'installationDocs',
+            required: false
+          },
+          {
             model: Dealer,
             as: 'dealer',
             attributes: ['id', 'firstName', 'lastName', 'email', 'mobile', 'username', 'role'],
@@ -1045,6 +1052,11 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
             required: false
           },
           {
+            model: QuotationInstallationDoc,
+            as: 'installationDocs',
+            required: false
+          },
+          {
             model: Dealer,
             as: 'dealer',
             attributes: ['id', 'firstName', 'lastName', 'email', 'mobile', 'username', 'role'],
@@ -1057,11 +1069,13 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
       });
     }
 
-    const formattedQuotations = quotations.rows.map(q => {
+    const formattedQuotations = await Promise.all(quotations.rows.map(async q => {
       const customer = (q as any).customer;
       const products = (q as any).products;
       const dealer = (q as any).dealer;
       const documents = (q as any).documents;
+      const installationDocs = (q as any).installationDocs || [];
+      const resolvedDocuments = await resolveQuotationDocumentUrls(documents);
       
       // Calculate pricing if products exist
       const pricing = products 
@@ -1095,30 +1109,13 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         paymentDate: q.paymentDate,
         paymentStatus: q.paymentStatus,
         finalAmount: Number(q.subtotal),
-        documents: documents ? {
-          id: documents.id,
-          aadharNumber: documents.aadharNumber,
-          aadharFront: documents.aadharFront,
-          aadharBack: documents.aadharBack,
-          phoneNumber: documents.phoneNumber,
-          emailId: documents.emailId,
-          panNumber: documents.panNumber,
-          panImage: documents.panImage,
-          electricityKno: documents.electricityKno,
-          electricityBillImage: documents.electricityBillImage,
-          bankAccountNumber: documents.bankAccountNumber,
-          bankIfsc: documents.bankIfsc,
-          bankName: documents.bankName,
-          bankBranch: documents.bankBranch,
-          bankPassbookImage: documents.bankPassbookImage,
-          isCompliantSenior: documents.isCompliantSenior,
-          compliantAadharNumber: documents.compliantAadharNumber,
-          compliantAadharFront: documents.compliantAadharFront,
-          compliantAadharBack: documents.compliantAadharBack,
-          compliantContactPhone: documents.compliantContactPhone,
-          createdAt: documents.createdAt,
-          updatedAt: documents.updatedAt
-        } : null,
+        installationStatus: (q as any).installationStatus || 'pending_installer',
+        approvedAt: (q as any).approvedAt || null,
+        installerApprovedAt: (q as any).installerApprovedAt || null,
+        installationDocuments: groupInstallationDocsByType(
+          installationDocs.map((doc: any) => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc))
+        ),
+        documents: resolvedDocuments,
         pricing: pricing ? {
           subtotal: (q as any).subtotal !== undefined && (q as any).subtotal !== null 
             ? Number((q as any).subtotal) 
@@ -1140,7 +1137,7 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         createdAt: q.createdAt,
         validUntil: q.validUntil
       };
-    });
+    }));
 
     res.json({
       success: true,
@@ -1173,7 +1170,7 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
     const where: any = { id: quotationId };
     
     // Check if user is account manager
-    const isAccountManager = req.user && req.user.role === 'account-management';
+    const isAccountManager = req.user && (req.user.role === 'account-management' || req.user.role === 'hr');
     
     // Check permissions
     if (isAccountManager) {
@@ -1245,6 +1242,10 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
           as: 'documents'
         },
         {
+          model: QuotationInstallationDoc,
+          as: 'installationDocs'
+        },
+        {
           model: Dealer,
           as: 'dealer',
           attributes: ['id', 'firstName', 'lastName', 'email', 'mobile', 'username', 'role']
@@ -1265,6 +1266,8 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
     const customer = quotationAny.customer;
     const dealer = quotationAny.dealer;
     const documents = quotationAny.documents;
+    const installationDocs = quotationAny.installationDocs || [];
+    const resolvedDocuments = await resolveQuotationDocumentUrls(documents);
     
     // Calculate pricing breakdown (component prices for display)
     const pricing = calculatePricing(products || {}, quotation.discount, (quotation as any).discountAmount);
@@ -1335,31 +1338,14 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
         } : null,
         pricing: finalPricing,
         status: quotation.status,
+        installationStatus: quotationAny.installationStatus || 'pending_installer',
+        approvedAt: quotationAny.approvedAt || null,
+        installerApprovedAt: quotationAny.installerApprovedAt || null,
         discount: quotation.discount,
-        documents: documents ? {
-          id: documents.id,
-          aadharNumber: documents.aadharNumber,
-          aadharFront: documents.aadharFront,
-          aadharBack: documents.aadharBack,
-          phoneNumber: documents.phoneNumber,
-          emailId: documents.emailId,
-          panNumber: documents.panNumber,
-          panImage: documents.panImage,
-          electricityKno: documents.electricityKno,
-          electricityBillImage: documents.electricityBillImage,
-          bankAccountNumber: documents.bankAccountNumber,
-          bankIfsc: documents.bankIfsc,
-          bankName: documents.bankName,
-          bankBranch: documents.bankBranch,
-          bankPassbookImage: documents.bankPassbookImage,
-          isCompliantSenior: documents.isCompliantSenior,
-          compliantAadharNumber: documents.compliantAadharNumber,
-          compliantAadharFront: documents.compliantAadharFront,
-          compliantAadharBack: documents.compliantAadharBack,
-          compliantContactPhone: documents.compliantContactPhone,
-          createdAt: documents.createdAt,
-          updatedAt: documents.updatedAt
-        } : null,
+        installationDocuments: groupInstallationDocsByType(
+          installationDocs.map((doc: any) => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc))
+        ),
+        documents: resolvedDocuments,
         paymentMode: quotation.paymentMode,
         paidAmount: quotation.paidAmount ? Number(quotation.paidAmount) : null,
         paymentDate: quotation.paymentDate,
@@ -1497,7 +1483,7 @@ export const updateQuotationDiscount = async (req: Request, res: Response): Prom
 // Update quotation products/system configuration
 export const updateQuotationProducts = async (req: Request, res: Response): Promise<void> => {
   try {
-    const isAccountManager = req.user && req.user.role === 'account-management';
+    const isAccountManager = req.user && (req.user.role === 'account-management' || req.user.role === 'hr');
     if (!req.dealer && !isAccountManager) {
       res.status(401).json({
         success: false,
@@ -1585,27 +1571,28 @@ export const updateQuotationProducts = async (req: Request, res: Response): Prom
       });
     }
 
-    // Handle custom panels if systemType is 'customize'
-    if (products.systemType === 'customize' && products.customPanels) {
-      // Delete existing custom panels
-      await CustomPanel.destroy({ where: { quotationId: quotation.id } });
-      
-      // Create new custom panels
-      if (Array.isArray(products.customPanels) && products.customPanels.length > 0) {
-        await CustomPanel.bulkCreate(
-          products.customPanels.map((panel: any) => ({
-            id: uuidv4(),
-            quotationId: quotation.id,
-            brand: panel.brand,
-            size: panel.size,
-            quantity: panel.quantity,
-            type: panel.type,
-            price: panel.price
-          }))
-        );
+    const effectiveSystemType = products.systemType || quotationProduct?.systemType || quotation.systemType;
+
+    // Handle custom panels updates safely for partial product updates
+    if (effectiveSystemType === 'customize') {
+      if (products.customPanels !== undefined) {
+        await CustomPanel.destroy({ where: { quotationId: quotation.id } });
+        if (Array.isArray(products.customPanels) && products.customPanels.length > 0) {
+          await CustomPanel.bulkCreate(
+            products.customPanels.map((panel: any) => ({
+              id: uuidv4(),
+              quotationId: quotation.id,
+              brand: panel.brand,
+              size: panel.size,
+              quantity: panel.quantity,
+              type: panel.type,
+              price: panel.price
+            }))
+          );
+        }
       }
-    } else {
-      // If system type changed from customize, remove custom panels
+    } else if (products.systemType !== undefined && products.systemType !== 'customize') {
+      // Clear custom panels only when caller explicitly switches away from customize
       await CustomPanel.destroy({ where: { quotationId: quotation.id } });
     }
 
@@ -1651,7 +1638,7 @@ export const updateQuotationProducts = async (req: Request, res: Response): Prom
 // Update quotation pricing
 export const updateQuotationPricing = async (req: Request, res: Response): Promise<void> => {
   try {
-    const isAccountManager = req.user && req.user.role === 'account-management';
+    const isAccountManager = req.user && (req.user.role === 'account-management' || req.user.role === 'hr');
     if (!req.dealer && !isAccountManager) {
       res.status(401).json({
         success: false,
@@ -1770,7 +1757,7 @@ export const updateQuotationPricing = async (req: Request, res: Response): Promi
       : (amountAfterSubsidy * newDiscount) / 100;
     const calculatedTotalAmount = amountAfterSubsidy - effectiveDiscountAmount;
     const calculatedFinalAmount = calculatedTotalAmount;
-    const finalFinalAmount = calculatedFinalAmount;
+    const finalFinalAmount = newFinalAmount !== undefined ? newFinalAmount : calculatedFinalAmount;
 
     // Validate finalAmount is reasonable
     if (newFinalAmount !== undefined && (isNaN(newFinalAmount) || newFinalAmount < 0 || newFinalAmount > newSubtotal)) {
@@ -1921,10 +1908,92 @@ const getUploadedFileUrl = async (req: Request, fieldName: string, quotationId: 
   return undefined;
 };
 
+const extractS3KeyFromDocumentUrl = (value: string): string | null => {
+  if (!value) return null;
+
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  if (trimmed.startsWith('/uploads/') || trimmed.startsWith('uploads/')) {
+    return null;
+  }
+
+  if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
+    return trimmed.startsWith('quotation-documents/') ? trimmed : null;
+  }
+
+  const publicBase = process.env.AWS_S3_PUBLIC_URL?.replace(/\/$/, '');
+  if (publicBase && trimmed.startsWith(publicBase)) {
+    const key = trimmed.slice(publicBase.length + 1);
+    return key || null;
+  }
+
+  try {
+    const parsed = new URL(trimmed);
+    const isS3Host = parsed.hostname.includes('amazonaws.com') || parsed.hostname.startsWith('s3.');
+    if (!isS3Host) {
+      return null;
+    }
+    const key = parsed.pathname.replace(/^\/+/, '');
+    return key || null;
+  } catch {
+    return null;
+  }
+};
+
+const resolveDocumentImageUrl = async (value: string | null | undefined): Promise<string | null> => {
+  if (!value) return null;
+
+  const key = extractS3KeyFromDocumentUrl(value);
+  if (!key) {
+    return value;
+  }
+
+  try {
+    return await generatePublicUrl(key, 24 * 60 * 60);
+  } catch (error) {
+    logError('Failed to generate signed URL for quotation document', error, { key });
+    return value;
+  }
+};
+
+const resolveQuotationDocumentUrls = async (documents: any) => {
+  if (!documents) return null;
+
+  const json = typeof documents.toJSON === 'function' ? documents.toJSON() : { ...documents };
+  const imageFields = [
+    'aadharFront',
+    'aadharBack',
+    'panImage',
+    'electricityBillImage',
+    'bankPassbookImage',
+    'compliantAadharFront',
+    'compliantAadharBack',
+    'compliantPanImage',
+    'compliantBankPassbookImage'
+  ];
+
+  for (const field of imageFields) {
+    json[field] = await resolveDocumentImageUrl(json[field]);
+  }
+
+  return json;
+};
+
+const groupInstallationDocsByType = (docs: any[]) => {
+  const grouped: Record<string, any[]> = {};
+  for (const doc of docs || []) {
+    const key = doc.docType || 'other';
+    if (!grouped[key]) grouped[key] = [];
+    grouped[key].push(doc);
+  }
+  return grouped;
+};
+
 // Save quotation documents (upsert)
 export const saveQuotationDocuments = async (req: Request, res: Response): Promise<void> => {
   try {
-    const isAccountManager = req.user && req.user.role === 'account-management';
+    const isAccountManager = req.user && (req.user.role === 'account-management' || req.user.role === 'hr');
     if (!req.dealer && !isAccountManager) {
       res.status(401).json({
         success: false,
@@ -1951,11 +2020,14 @@ export const saveQuotationDocuments = async (req: Request, res: Response): Promi
     }
 
     const body: any = req.body || {};
-    const isCompliantSenior =
-      body.isCompliantSenior === true ||
-      body.isCompliantSenior === 'true' ||
-      body.isCompliantSenior === 1 ||
-      body.isCompliantSenior === '1';
+    const existing = await QuotationDocument.findOne({ where: { quotationId: quotation.id } });
+    const hasIsCompliantSenior = body.isCompliantSenior !== undefined && body.isCompliantSenior !== null;
+    const isCompliantSenior = hasIsCompliantSenior
+      ? body.isCompliantSenior === true ||
+        body.isCompliantSenior === 'true' ||
+        body.isCompliantSenior === 1 ||
+        body.isCompliantSenior === '1'
+      : !!existing?.isCompliantSenior;
 
     const aadharFrontUrl = await getUploadedFileUrl(req, 'aadharFront', quotation.id);
     const aadharBackUrl = await getUploadedFileUrl(req, 'aadharBack', quotation.id);
@@ -1964,6 +2036,8 @@ export const saveQuotationDocuments = async (req: Request, res: Response): Promi
     const bankPassbookImageUrl = await getUploadedFileUrl(req, 'bankPassbookImage', quotation.id);
     const compliantAadharFrontUrl = await getUploadedFileUrl(req, 'compliantAadharFront', quotation.id);
     const compliantAadharBackUrl = await getUploadedFileUrl(req, 'compliantAadharBack', quotation.id);
+    const compliantPanImageUrl = await getUploadedFileUrl(req, 'compliantPanImage', quotation.id);
+    const compliantBankPassbookImageUrl = await getUploadedFileUrl(req, 'compliantBankPassbookImage', quotation.id);
 
     logInfo('Quotation document uploads processed', {
       quotationId: quotation.id,
@@ -1973,46 +2047,176 @@ export const saveQuotationDocuments = async (req: Request, res: Response): Promi
       electricityBillImageUrl,
       bankPassbookImageUrl,
       compliantAadharFrontUrl,
-      compliantAadharBackUrl
+      compliantAadharBackUrl,
+      compliantPanImageUrl,
+      compliantBankPassbookImageUrl
     });
+
+    if (existing) {
+      const replacements = [
+        { newUrl: aadharFrontUrl, oldUrl: existing.aadharFront },
+        { newUrl: aadharBackUrl, oldUrl: existing.aadharBack },
+        { newUrl: panImageUrl, oldUrl: existing.panImage },
+        { newUrl: electricityBillImageUrl, oldUrl: existing.electricityBillImage },
+        { newUrl: bankPassbookImageUrl, oldUrl: existing.bankPassbookImage },
+        { newUrl: compliantAadharFrontUrl, oldUrl: existing.compliantAadharFront },
+        { newUrl: compliantAadharBackUrl, oldUrl: existing.compliantAadharBack },
+        { newUrl: compliantPanImageUrl, oldUrl: existing.compliantPanImage },
+        { newUrl: compliantBankPassbookImageUrl, oldUrl: existing.compliantBankPassbookImage }
+      ];
+
+      for (const { newUrl, oldUrl } of replacements) {
+        if (newUrl && oldUrl && newUrl !== oldUrl) {
+          await deleteFileFromS3IfExists(oldUrl);
+        }
+      }
+    }
+
+    const resolveValue = (
+      uploadedUrl: string | undefined,
+      bodyValue: any,
+      existingValue: any
+    ): any => {
+      if (uploadedUrl !== undefined) return uploadedUrl;
+      if (bodyValue !== undefined) return bodyValue === '' ? null : bodyValue;
+      return existingValue ?? null;
+    };
+
+    const resolveMediaValue = (
+      uploadedUrl: string | undefined,
+      bodyValue: any,
+      existingValue: any
+    ): string | null => {
+      if (uploadedUrl !== undefined) return uploadedUrl;
+      if (bodyValue === undefined) return existingValue ?? null;
+      if (bodyValue === '' || bodyValue === null) return null;
+      if (typeof bodyValue !== 'string') return existingValue ?? null;
+
+      const trimmed = bodyValue.trim();
+      if (!trimmed) return null;
+      if (trimmed.startsWith('blob:') || trimmed.startsWith('data:')) {
+        return existingValue ?? null;
+      }
+
+      // Only accept persisted S3-style document values; ignore transient frontend values.
+      const possibleKey = extractS3KeyFromDocumentUrl(trimmed);
+      if (!possibleKey) {
+        return existingValue ?? null;
+      }
+      return trimmed;
+    };
 
     const payload = {
       quotationId: quotation.id,
-      aadharNumber: body.aadharNumber || null,
-      aadharFront: aadharFrontUrl || body.aadharFront || null,
-      aadharBack: aadharBackUrl || body.aadharBack || null,
-      phoneNumber: body.phoneNumber || null,
-      emailId: body.emailId || null,
-      panNumber: body.panNumber || null,
-      panImage: panImageUrl || body.panImage || null,
-      electricityKno: body.electricityKno || null,
-      electricityBillImage: electricityBillImageUrl || body.electricityBillImage || null,
-      bankAccountNumber: body.bankAccountNumber || null,
-      bankIfsc: body.bankIfsc || null,
-      bankName: body.bankName || null,
-      bankBranch: body.bankBranch || null,
-      bankPassbookImage: bankPassbookImageUrl || body.bankPassbookImage || null,
+      aadharNumber: resolveValue(undefined, body.aadharNumber, existing?.aadharNumber),
+      aadharFront: resolveMediaValue(aadharFrontUrl, body.aadharFront, existing?.aadharFront),
+      aadharBack: resolveMediaValue(aadharBackUrl, body.aadharBack, existing?.aadharBack),
+      phoneNumber: resolveValue(undefined, body.phoneNumber, existing?.phoneNumber),
+      emailId: resolveValue(undefined, body.emailId, existing?.emailId),
+      panNumber: resolveValue(
+        undefined,
+        body.panNumber ? String(body.panNumber).toUpperCase() : body.panNumber,
+        existing?.panNumber
+      ),
+      panImage: resolveMediaValue(panImageUrl, body.panImage, existing?.panImage),
+      electricityKno: resolveValue(undefined, body.electricityKno, existing?.electricityKno),
+      electricityBillImage: resolveMediaValue(
+        electricityBillImageUrl,
+        body.electricityBillImage,
+        existing?.electricityBillImage
+      ),
+      bankAccountNumber: resolveValue(undefined, body.bankAccountNumber, existing?.bankAccountNumber),
+      bankIfsc: resolveValue(undefined, body.bankIfsc, existing?.bankIfsc),
+      bankName: resolveValue(undefined, body.bankName, existing?.bankName),
+      bankBranch: resolveValue(undefined, body.bankBranch, existing?.bankBranch),
+      bankPassbookImage: resolveMediaValue(
+        bankPassbookImageUrl,
+        body.bankPassbookImage,
+        existing?.bankPassbookImage
+      ),
       isCompliantSenior: isCompliantSenior ? true : false,
-      compliantAadharNumber: body.compliantAadharNumber || null,
-      compliantAadharFront: compliantAadharFrontUrl || body.compliantAadharFront || null,
-      compliantAadharBack: compliantAadharBackUrl || body.compliantAadharBack || null,
-      compliantContactPhone: body.compliantContactPhone || null
+      compliantAadharNumber: resolveValue(
+        undefined,
+        body.compliantAadharNumber,
+        existing?.compliantAadharNumber
+      ),
+      compliantAadharFront: resolveMediaValue(
+        compliantAadharFrontUrl,
+        body.compliantAadharFront,
+        existing?.compliantAadharFront
+      ),
+      compliantAadharBack: resolveMediaValue(
+        compliantAadharBackUrl,
+        body.compliantAadharBack,
+        existing?.compliantAadharBack
+      ),
+      compliantContactPhone: resolveValue(
+        undefined,
+        body.compliantContactPhone,
+        existing?.compliantContactPhone
+      ),
+      compliantPanNumber: resolveValue(
+        undefined,
+        body.compliantPanNumber ? String(body.compliantPanNumber).toUpperCase() : body.compliantPanNumber,
+        existing?.compliantPanNumber
+      ),
+      compliantPanImage: resolveMediaValue(
+        compliantPanImageUrl,
+        body.compliantPanImage,
+        existing?.compliantPanImage
+      ),
+      compliantBankAccountNumber: resolveValue(
+        undefined,
+        body.compliantBankAccountNumber,
+        existing?.compliantBankAccountNumber
+      ),
+      compliantBankIfsc: resolveValue(
+        undefined,
+        body.compliantBankIfsc,
+        existing?.compliantBankIfsc
+      ),
+      compliantBankName: resolveValue(
+        undefined,
+        body.compliantBankName,
+        existing?.compliantBankName
+      ),
+      compliantBankBranch: resolveValue(
+        undefined,
+        body.compliantBankBranch,
+        existing?.compliantBankBranch
+      ),
+      compliantBankPassbookImage: resolveMediaValue(
+        compliantBankPassbookImageUrl,
+        body.compliantBankPassbookImage,
+        existing?.compliantBankPassbookImage
+      )
     };
 
     if (payload.isCompliantSenior) {
-      if (!payload.compliantAadharFront || !payload.compliantAadharBack || !payload.compliantContactPhone) {
+      if (
+        !payload.compliantAadharNumber ||
+        !payload.compliantContactPhone ||
+        !payload.compliantAadharFront ||
+        !payload.compliantAadharBack ||
+        !payload.compliantPanNumber ||
+        !payload.compliantPanImage ||
+        !payload.compliantBankAccountNumber ||
+        !payload.compliantBankIfsc ||
+        !payload.compliantBankName ||
+        !payload.compliantBankBranch ||
+        !payload.compliantBankPassbookImage
+      ) {
         res.status(400).json({
           success: false,
           error: {
             code: 'VAL_001',
-            message: 'Compliant Aadhar front/back and contact phone are required when isCompliantSenior is true'
+            message: 'Compliant documents are required when isCompliantSenior is true'
           }
         });
         return;
       }
     }
 
-    const existing = await QuotationDocument.findOne({ where: { quotationId: quotation.id } });
     let documents;
     if (existing) {
       documents = await existing.update(payload);
@@ -2023,11 +2227,13 @@ export const saveQuotationDocuments = async (req: Request, res: Response): Promi
       });
     }
 
+    const resolvedSavedDocuments = await resolveQuotationDocumentUrls(documents);
+
     res.json({
       success: true,
       data: {
         quotationId: quotation.id,
-        documents
+        documents: resolvedSavedDocuments
       }
     });
   } catch (error) {

@@ -8,11 +8,13 @@ import Quotation from './Quotation';
 import QuotationProduct from './QuotationProduct';
 import CustomPanel from './CustomPanel';
 import QuotationDocument from './QuotationDocument';
+import QuotationInstallationDoc from './QuotationInstallationDoc';
 import Visit from './Visit';
 import VisitAssignment from './VisitAssignment';
 import ProductCatalog from './ProductCatalog';
 import PricingRule from './PricingRule';
 import SystemConfig from './SystemConfig';
+import DealerRequest from './DealerRequest';
 
 // ================================================================================
 // DEALER ASSOCIATIONS
@@ -28,6 +30,10 @@ Quotation.belongsTo(Dealer, { foreignKey: 'dealerId', as: 'dealer' });
 // Dealers create visits
 Dealer.hasMany(Visit, { foreignKey: 'dealerId', as: 'visits' });
 Visit.belongsTo(Dealer, { foreignKey: 'dealerId', as: 'dealer' });
+
+// Dealers can be assigned incoming requests
+Dealer.hasMany(DealerRequest, { foreignKey: 'assignedDealerId', as: 'assignedRequests' });
+DealerRequest.belongsTo(Dealer, { foreignKey: 'assignedDealerId', as: 'assignedDealer' });
 
 // ================================================================================
 // CUSTOMER ASSOCIATIONS
@@ -46,6 +52,10 @@ QuotationProduct.belongsTo(Quotation, { foreignKey: 'quotationId', as: 'quotatio
 // Quotations have one documents record (1:1)
 Quotation.hasOne(QuotationDocument, { foreignKey: 'quotationId', as: 'documents', onDelete: 'CASCADE' });
 QuotationDocument.belongsTo(Quotation, { foreignKey: 'quotationId', as: 'quotation' });
+
+// Quotations can have multiple installation workflow documents (1:N)
+Quotation.hasMany(QuotationInstallationDoc, { foreignKey: 'quotationId', as: 'installationDocs', onDelete: 'CASCADE' });
+QuotationInstallationDoc.belongsTo(Quotation, { foreignKey: 'quotationId', as: 'quotation' });
 
 // Quotations can have multiple custom panels (1:N)
 Quotation.hasMany(CustomPanel, { foreignKey: 'quotationId', as: 'customPanels', onDelete: 'CASCADE' });
@@ -92,10 +102,12 @@ export {
   QuotationProduct,
   CustomPanel,
   QuotationDocument,
+  QuotationInstallationDoc,
   Visit,
   VisitAssignment,
   ProductCatalog,
   PricingRule,
-  SystemConfig
+  SystemConfig,
+  DealerRequest
 };
 

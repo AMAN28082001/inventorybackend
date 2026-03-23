@@ -839,10 +839,11 @@ export const dispatchStockRequest = async (req: Request, res: Response): Promise
       }
     }
 
-    // Use S3 URL if available, otherwise fall back to local path or existing image
-    const dispatchImage = req.file 
-      ? ((req.file as any).s3Location || `/uploads/${req.file.filename}`)
-      : request.dispatch_image;
+    const uploadedS3DispatchImage = req.file ? (req.file as any).s3Location : null;
+    if (req.file && !uploadedS3DispatchImage) {
+      throw new Error('Dispatch image upload failed. Could not store file in S3.');
+    }
+    const dispatchImage = uploadedS3DispatchImage || request.dispatch_image;
     
     // Delete old dispatch image from S3 if it exists
     if (request.dispatch_image && req.file) {
@@ -943,10 +944,12 @@ export const confirmStockRequest = async (req: Request, res: Response): Promise<
       return;
     }
 
-    // Use S3 URL if available, otherwise fall back to local path or existing image
-    const confirmationImage = req.file 
-      ? ((req.file as any).s3Location || `/uploads/${req.file.filename}`)
-      : request.confirmation_image;
+    const uploadedS3ConfirmationImage = req.file ? (req.file as any).s3Location : null;
+    if (req.file && !uploadedS3ConfirmationImage) {
+      res.status(500).json({ error: 'Confirmation image upload failed. Could not store file in S3.' });
+      return;
+    }
+    const confirmationImage = uploadedS3ConfirmationImage || request.confirmation_image;
     
     // Delete old confirmation image from S3 if it exists
     if (request.confirmation_image && req.file) {

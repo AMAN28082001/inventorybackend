@@ -491,10 +491,12 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
       deliveryAddressId = billingAddressId;
     }
 
-    // Use S3 URL if available, otherwise fall back to local path
-    const imagePath = req.file 
-      ? ((req.file as any).s3Location || `/uploads/${req.file.filename}`)
-      : null;
+    // S3-only upload path for sale image
+    const uploadedS3Image = req.file ? (req.file as any).s3Location : null;
+    if (req.file && !uploadedS3Image) {
+      throw new Error('Image upload failed. Could not store file in S3.');
+    }
+    const imagePath = uploadedS3Image;
 
     const saleRecord = await Sale.create({
       id: uuidv4(),
@@ -893,8 +895,11 @@ export const updateSale = async (req: Request, res: Response): Promise<void> => 
     }
 
     if (req.file) {
-      // Use S3 URL if available, otherwise fall back to local path
-      updates.image = (req.file as any).s3Location || `/uploads/${req.file.filename}`;
+      const uploadedS3Image = (req.file as any).s3Location;
+      if (!uploadedS3Image) {
+        throw new Error('Image upload failed. Could not store file in S3.');
+      }
+      updates.image = uploadedS3Image;
       
       // Delete old image from S3 if it exists
       if (sale.image) {
@@ -965,10 +970,12 @@ export const confirmB2BBill = async (req: Request, res: Response): Promise<void>
       return;
     }
 
-    // Use S3 URL if available, otherwise fall back to local path or existing image
-    const billImage = req.file 
-      ? ((req.file as any).s3Location || `/uploads/${req.file.filename}`)
-      : sale.bill_image;
+    const uploadedS3BillImage = req.file ? (req.file as any).s3Location : null;
+    if (req.file && !uploadedS3BillImage) {
+      res.status(500).json({ error: 'Bill upload failed. Could not store file in S3.' });
+      return;
+    }
+    const billImage = uploadedS3BillImage || sale.bill_image;
     
     // Delete old bill image from S3 if it exists
     if (sale.bill_image && req.file) {

@@ -74,6 +74,7 @@ export const getAllAccountManagers = async (req: Request, res: Response): Promis
           lastName: am.lastName,
           email: am.email,
           mobile: am.mobile,
+          role: am.role,
           isActive: am.isActive,
           emailVerified: am.emailVerified,
           loginCount: am.loginCount,
@@ -125,6 +126,7 @@ export const getAccountManagerById = async (req: Request, res: Response): Promis
         lastName: accountManager.lastName,
         email: accountManager.email,
         mobile: accountManager.mobile,
+        role: accountManager.role,
         isActive: accountManager.isActive,
         emailVerified: accountManager.emailVerified,
         loginCount: accountManager.loginCount,
@@ -146,7 +148,19 @@ export const getAccountManagerById = async (req: Request, res: Response): Promis
 export const createAccountManager = async (req: Request, res: Response): Promise<void> => {
   try {
     // Authorization is handled by middleware (authorizeAdmin)
-    const { username, password, firstName, lastName, email, mobile } = req.body;
+    const { username, password, firstName, lastName, email, mobile, role } = req.body;
+
+    if (!role || !['account-management', 'installer', 'baldev', 'hr'].includes(role)) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VAL_001',
+          message: 'Validation error',
+          details: [{ field: 'role', message: 'Role must be one of: account-management, installer, baldev, hr' }]
+        }
+      });
+      return;
+    }
 
     // Check if username already exists
     const existingUsername = await AccountManager.findOne({ where: { username } });
@@ -187,7 +201,7 @@ export const createAccountManager = async (req: Request, res: Response): Promise
       lastName,
       email,
       mobile,
-      role: 'account-management',
+      role,
       isActive: true,
       emailVerified: false,
       loginCount: 0,
@@ -209,6 +223,7 @@ export const createAccountManager = async (req: Request, res: Response): Promise
         lastName: accountManager.lastName,
         email: accountManager.email,
         mobile: accountManager.mobile,
+        role: accountManager.role,
         isActive: accountManager.isActive,
         emailVerified: accountManager.emailVerified,
         loginCount: accountManager.loginCount,
@@ -231,7 +246,7 @@ export const updateAccountManager = async (req: Request, res: Response): Promise
   try {
     // Authorization is handled by middleware (authorizeAdmin)
     const { accountManagerId } = req.params;
-    const { firstName, lastName, email, mobile, password, isActive, emailVerified } = req.body;
+    const { firstName, lastName, email, mobile, password, role, isActive, emailVerified } = req.body;
 
     const accountManager = await AccountManager.findByPk(accountManagerId);
 
@@ -267,6 +282,7 @@ export const updateAccountManager = async (req: Request, res: Response): Promise
     if (lastName !== undefined) updateData.lastName = lastName;
     if (email !== undefined) updateData.email = email;
     if (mobile !== undefined) updateData.mobile = mobile;
+    if (role !== undefined) updateData.role = role;
     if (isActive !== undefined) updateData.isActive = isActive;
     if (emailVerified !== undefined) updateData.emailVerified = emailVerified;
     
@@ -297,6 +313,7 @@ export const updateAccountManager = async (req: Request, res: Response): Promise
         lastName: updatedAccountManager!.lastName,
         email: updatedAccountManager!.email,
         mobile: updatedAccountManager!.mobile,
+        role: updatedAccountManager!.role,
         isActive: updatedAccountManager!.isActive,
         emailVerified: updatedAccountManager!.emailVerified,
         createdAt: updatedAccountManager!.createdAt,

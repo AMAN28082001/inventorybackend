@@ -70,11 +70,11 @@ export const uploadToS3 = (folder: string = 'photos') => {
             s3Url: s3FileInfo.filePath
           });
         } catch (s3Error) {
-          logError('❌ Failed to upload to S3, keeping local file', s3Error, {
+          logError('❌ Failed to upload to S3', s3Error, {
             localFilePath,
             originalName: file.originalname
           });
-          (file as any).s3Location = `/uploads/${file.filename}`;
+          throw s3Error;
         }
       };
 
@@ -93,7 +93,7 @@ export const uploadToS3 = (folder: string = 'photos') => {
       next();
     } catch (error) {
       logError('Upload to S3 middleware error', error);
-      next(); // Continue even if middleware fails
+      next(error as any);
     }
   };
 };

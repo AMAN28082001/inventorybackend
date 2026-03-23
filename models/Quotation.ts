@@ -20,6 +20,17 @@ interface QuotationAttributes {
   paidAmount?: number | null;
   paymentDate?: Date | null;
   paymentStatus?: 'pending' | 'partial' | 'completed' | null;
+  approvedAt?: Date | null;
+  installationStatus?: 'pending_installer' | 'installer_in_progress' | 'installer_approved' | 'installer_rejected' | 'pending_baldev' | 'baldev_approved' | 'baldev_rejected' | 'completed';
+  installerId?: string | null;
+  installerActionAt?: Date | null;
+  installerInProgressAt?: Date | null;
+  installerApprovedAt?: Date | null;
+  installerRemarks?: string | null;
+  baldevId?: string | null;
+  baldevActionAt?: Date | null;
+  baldevRemarks?: string | null;
+  completionAt?: Date | null;
   createdAt?: Date;
   updatedAt?: Date;
   validUntil: Date;
@@ -27,7 +38,7 @@ interface QuotationAttributes {
 
 interface QuotationCreationAttributes extends Optional<
   QuotationAttributes,
-  'id' | 'status' | 'discount' | 'createdAt' | 'updatedAt' | 'centralSubsidy' | 'stateSubsidy' | 'totalSubsidy' | 'amountAfterSubsidy' | 'discountAmount' | 'paymentMode' | 'paidAmount' | 'paymentDate' | 'paymentStatus'
+  'id' | 'status' | 'discount' | 'createdAt' | 'updatedAt' | 'centralSubsidy' | 'stateSubsidy' | 'totalSubsidy' | 'amountAfterSubsidy' | 'discountAmount' | 'paymentMode' | 'paidAmount' | 'paymentDate' | 'paymentStatus' | 'approvedAt' | 'installationStatus' | 'installerId' | 'installerActionAt' | 'installerInProgressAt' | 'installerApprovedAt' | 'installerRemarks' | 'baldevId' | 'baldevActionAt' | 'baldevRemarks' | 'completionAt'
 > {}
 
 class Quotation extends Model<QuotationAttributes, QuotationCreationAttributes> implements QuotationAttributes {
@@ -49,6 +60,17 @@ class Quotation extends Model<QuotationAttributes, QuotationCreationAttributes> 
   public paidAmount!: number | null;
   public paymentDate!: Date | null;
   public paymentStatus!: 'pending' | 'partial' | 'completed' | null;
+  public approvedAt!: Date | null;
+  public installationStatus!: 'pending_installer' | 'installer_in_progress' | 'installer_approved' | 'installer_rejected' | 'pending_baldev' | 'baldev_approved' | 'baldev_rejected' | 'completed';
+  public installerId!: string | null;
+  public installerActionAt!: Date | null;
+  public installerInProgressAt!: Date | null;
+  public installerApprovedAt!: Date | null;
+  public installerRemarks!: string | null;
+  public baldevId!: string | null;
+  public baldevActionAt!: Date | null;
+  public baldevRemarks!: string | null;
+  public completionAt!: Date | null;
   public readonly createdAt!: Date;
   public readonly updatedAt!: Date;
   public validUntil!: Date;
@@ -136,6 +158,60 @@ Quotation.init(
       allowNull: true,
       defaultValue: 'pending'
     },
+    approvedAt: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
+    installationStatus: {
+      type: DataTypes.ENUM(
+        'pending_installer',
+        'installer_in_progress',
+        'installer_approved',
+        'installer_rejected',
+        'pending_baldev',
+        'baldev_approved',
+        'baldev_rejected',
+        'completed'
+      ),
+      allowNull: false,
+      defaultValue: 'pending_installer'
+    },
+    installerId: {
+      type: DataTypes.STRING(50),
+      allowNull: true
+    },
+    installerActionAt: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
+    installerInProgressAt: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
+    installerApprovedAt: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
+    installerRemarks: {
+      type: DataTypes.TEXT,
+      allowNull: true
+    },
+    baldevId: {
+      type: DataTypes.STRING(50),
+      allowNull: true
+    },
+    baldevActionAt: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
+    baldevRemarks: {
+      type: DataTypes.TEXT,
+      allowNull: true
+    },
+    completionAt: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
     validUntil: {
       type: DataTypes.DATEONLY,
       allowNull: false
@@ -155,7 +231,9 @@ Quotation.init(
       { fields: ['status'] },
       { fields: ['createdAt'] },
       { fields: ['dealerId', 'status'] },
-      { fields: ['createdAt', 'status'] }
+      { fields: ['createdAt', 'status'] },
+      { fields: ['installationStatus'] },
+      { fields: ['installationStatus', 'createdAt'] }
     ]
   }
 );
