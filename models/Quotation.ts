@@ -16,10 +16,26 @@ interface QuotationAttributes {
   totalSubsidy: number;    // Total subsidy (central + state)
   amountAfterSubsidy: number; // Amount after subsidy
   discountAmount: number;  // Discount amount
-  paymentMode?: 'cash' | 'upi' | 'loan' | 'netbanking' | 'bank_transfer' | 'cheque' | 'card' | null;
+  paymentMode?: 'cash' | 'upi' | 'loan' | 'netbanking' | 'bank_transfer' | 'cheque' | 'card' | 'mix' | null;
+  paymentType?: 'loan' | 'cash' | 'mix' | null;
   paidAmount?: number | null;
   paymentDate?: Date | null;
   paymentStatus?: 'pending' | 'partial' | 'completed' | null;
+  paymentPhases?: Array<{
+    phaseNumber: number;
+    phaseName: string;
+    amount: number;
+    paidAmount: number;
+    status: 'pending' | 'partial' | 'completed';
+    dueDate?: string | null;
+    paymentDate?: string | null;
+    paymentMode?: 'cash' | 'upi' | 'loan' | 'netbanking' | 'bank_transfer' | 'cheque' | 'card' | 'mix' | null;
+    transactionId?: string | null;
+    updatedBy?: string | null;
+    updatedAt?: string | null;
+  }> | null;
+  paymentPlanUpdatedBy?: string | null;
+  paymentPlanUpdatedAt?: Date | null;
   approvedAt?: Date | null;
   installationStatus?: 'pending_installer' | 'installer_in_progress' | 'installer_approved' | 'installer_rejected' | 'pending_baldev' | 'baldev_approved' | 'baldev_rejected' | 'completed';
   installerId?: string | null;
@@ -38,7 +54,7 @@ interface QuotationAttributes {
 
 interface QuotationCreationAttributes extends Optional<
   QuotationAttributes,
-  'id' | 'status' | 'discount' | 'createdAt' | 'updatedAt' | 'centralSubsidy' | 'stateSubsidy' | 'totalSubsidy' | 'amountAfterSubsidy' | 'discountAmount' | 'paymentMode' | 'paidAmount' | 'paymentDate' | 'paymentStatus' | 'approvedAt' | 'installationStatus' | 'installerId' | 'installerActionAt' | 'installerInProgressAt' | 'installerApprovedAt' | 'installerRemarks' | 'baldevId' | 'baldevActionAt' | 'baldevRemarks' | 'completionAt'
+  'id' | 'status' | 'discount' | 'createdAt' | 'updatedAt' | 'centralSubsidy' | 'stateSubsidy' | 'totalSubsidy' | 'amountAfterSubsidy' | 'discountAmount' | 'paymentMode' | 'paymentType' | 'paidAmount' | 'paymentDate' | 'paymentStatus' | 'paymentPhases' | 'paymentPlanUpdatedBy' | 'paymentPlanUpdatedAt' | 'approvedAt' | 'installationStatus' | 'installerId' | 'installerActionAt' | 'installerInProgressAt' | 'installerApprovedAt' | 'installerRemarks' | 'baldevId' | 'baldevActionAt' | 'baldevRemarks' | 'completionAt'
 > {}
 
 class Quotation extends Model<QuotationAttributes, QuotationCreationAttributes> implements QuotationAttributes {
@@ -56,10 +72,26 @@ class Quotation extends Model<QuotationAttributes, QuotationCreationAttributes> 
   public totalSubsidy!: number;    // Total subsidy (central + state)
   public amountAfterSubsidy!: number; // Amount after subsidy
   public discountAmount!: number;  // Discount amount
-  public paymentMode!: 'cash' | 'upi' | 'loan' | 'netbanking' | 'bank_transfer' | 'cheque' | 'card' | null;
+  public paymentMode!: 'cash' | 'upi' | 'loan' | 'netbanking' | 'bank_transfer' | 'cheque' | 'card' | 'mix' | null;
+  public paymentType!: 'loan' | 'cash' | 'mix' | null;
   public paidAmount!: number | null;
   public paymentDate!: Date | null;
   public paymentStatus!: 'pending' | 'partial' | 'completed' | null;
+  public paymentPhases!: Array<{
+    phaseNumber: number;
+    phaseName: string;
+    amount: number;
+    paidAmount: number;
+    status: 'pending' | 'partial' | 'completed';
+    dueDate?: string | null;
+    paymentDate?: string | null;
+    paymentMode?: 'cash' | 'upi' | 'loan' | 'netbanking' | 'bank_transfer' | 'cheque' | 'card' | null;
+    transactionId?: string | null;
+    updatedBy?: string | null;
+    updatedAt?: string | null;
+  }> | null;
+  public paymentPlanUpdatedBy!: string | null;
+  public paymentPlanUpdatedAt!: Date | null;
   public approvedAt!: Date | null;
   public installationStatus!: 'pending_installer' | 'installer_in_progress' | 'installer_approved' | 'installer_rejected' | 'pending_baldev' | 'baldev_approved' | 'baldev_rejected' | 'completed';
   public installerId!: string | null;
@@ -145,6 +177,10 @@ Quotation.init(
       type: DataTypes.STRING(30),
       allowNull: true
     },
+    paymentType: {
+      type: DataTypes.STRING(10),
+      allowNull: true
+    },
     paidAmount: {
       type: DataTypes.DECIMAL(12, 2),
       allowNull: true
@@ -157,6 +193,18 @@ Quotation.init(
       type: DataTypes.ENUM('pending', 'partial', 'completed'),
       allowNull: true,
       defaultValue: 'pending'
+    },
+    paymentPhases: {
+      type: DataTypes.JSONB,
+      allowNull: true
+    },
+    paymentPlanUpdatedBy: {
+      type: DataTypes.STRING(50),
+      allowNull: true
+    },
+    paymentPlanUpdatedAt: {
+      type: DataTypes.DATE,
+      allowNull: true
     },
     approvedAt: {
       type: DataTypes.DATE,

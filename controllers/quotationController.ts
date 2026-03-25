@@ -2,9 +2,10 @@ import { Request, Response } from 'express';
 import AWS from 'aws-sdk';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
+import XLSX from 'xlsx';
 import { Quotation, QuotationProduct, CustomPanel, Customer, Visit, VisitAssignment, SystemConfig, Dealer, QuotationDocument, QuotationInstallationDoc } from '../models/index-quotation';
 import { Product } from '../models';
-import { Op } from 'sequelize';
+import { Op, Sequelize } from 'sequelize';
 import { logError, logInfo } from '../utils/loggerHelper';
 import { deleteFileFromS3IfExists } from '../middleware/upload';
 import { generatePublicUrl } from '../utils/s3Service';
@@ -264,6 +265,68 @@ const calculatePaymentStatus = (paidAmount: number | null | undefined, totalAmou
     return 'completed';
   }
   return 'partial';
+};
+
+type PaymentPhaseRecord = {
+  phaseNumber: number;
+  phaseName: string;
+  amount: number;
+  paidAmount: number;
+  status: 'pending' | 'partial' | 'completed';
+  dueDate?: string | null;
+  paymentDate?: string | null;
+  paymentMode?: 'cash' | 'upi' | 'loan' | 'netbanking' | 'bank_transfer' | 'cheque' | 'card' | 'mix' | null;
+  transactionId?: string | null;
+  updatedBy?: string | null;
+  updatedAt?: string | null;
+};
+
+const calculatePhaseStatus = (paidAmount: number, amount: number): 'pending' | 'partial' | 'completed' => {
+  if (paidAmount <= 0) return 'pending';
+  if (amount > 0 && paidAmount >= amount) return 'completed';
+  return 'partial';
+};
+
+const normalizeDateString = (value: unknown): string | null => {
+  if (value === undefined || value === null || value === '') return null;
+  const parsed = new Date(String(value));
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toISOString();
+};
+
+const normalizePaymentPhases = (phases: any[], updatedBy: string | null): PaymentPhaseRecord[] => {
+  return phases
+    .map((phase) => {
+      const amount = Number(phase.amount ?? 0);
+      const paidAmount = Number(phase.paidAmount ?? 0);
+      const paymentModeRaw = phase.paymentMode ? String(phase.paymentMode) : null;
+      const paymentMode = paymentModeRaw && ['cash', 'upi', 'loan', 'netbanking', 'bank_transfer', 'cheque', 'card', 'mix'].includes(paymentModeRaw)
+        ? (paymentModeRaw as PaymentPhaseRecord['paymentMode'])
+        : null;
+      return {
+        phaseNumber: Number(phase.phaseNumber),
+        phaseName: String(phase.phaseName || '').trim(),
+        amount: Number.isFinite(amount) ? amount : 0,
+        paidAmount: Number.isFinite(paidAmount) ? paidAmount : 0,
+        status: calculatePhaseStatus(
+          Number.isFinite(paidAmount) ? paidAmount : 0,
+          Number.isFinite(amount) ? amount : 0
+        ),
+        dueDate: normalizeDateString(phase.dueDate),
+        paymentDate: normalizeDateString(phase.paymentDate),
+        paymentMode,
+        transactionId: phase.transactionId ? String(phase.transactionId) : null,
+        updatedBy,
+        updatedAt: new Date().toISOString()
+      } as PaymentPhaseRecord;
+    })
+    .sort((a, b) => a.phaseNumber - b.phaseNumber);
+};
+
+const resolveActorForAudit = (req: Request): { actorId: string | null; actorRole: string | null } => {
+  if (req.user?.id) return { actorId: req.user.id, actorRole: req.user.role || null };
+  if (req.dealer?.id) return { actorId: req.dealer.id, actorRole: req.dealer.role || null };
+  return { actorId: null, actorRole: null };
 };
 
 const resolveDealerIdForInventoryUser = async (userId: string, username?: string): Promise<string | null> => {
@@ -830,6 +893,7 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
         status: quotation.status,
         discount: quotation.discount,
         paymentMode: quotation.paymentMode,
+        paymentType: (quotation as any).paymentType || null,
         paidAmount: quotation.paidAmount ? Number(quotation.paidAmount) : null,
         paymentDate: quotation.paymentDate,
         paymentStatus: quotation.paymentStatus,
@@ -875,6 +939,8 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
     const search = req.query.search as string;
     const startDate = req.query.startDate as string;
     const endDate = req.query.endDate as string;
+    const paymentType = (req.query.paymentType as string | undefined) || (req.query.paymentMode as string | undefined);
+    const paymentStatus = req.query.paymentStatus as string | undefined;
     const sortBy = (req.query.sortBy as string) || 'createdAt';
     const sortOrder = (req.query.sortOrder as string) || 'desc';
 
@@ -987,24 +1053,41 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
       if (startDate) where.createdAt[Op.gte] = new Date(startDate);
       if (endDate) where.createdAt[Op.lte] = new Date(endDate);
     }
+    if (paymentType) {
+      where[Op.or] = [
+        ...(Array.isArray(where[Op.or]) ? where[Op.or] : []),
+        { paymentType },
+        { paymentMode: paymentType }
+      ];
+    }
+    if (paymentStatus) {
+      where.paymentStatus = paymentStatus;
+    }
 
     let quotations;
     if (search) {
       // Search by quotation ID or customer name/mobile
+      const whereWithSearch: any = {
+        ...where,
+        [Op.and]: [
+          ...(Array.isArray(where[Op.and]) ? where[Op.and] : []),
+          {
+            [Op.or]: [
+              { id: { [Op.iLike]: `%${search}%` } },
+              Sequelize.where(Sequelize.col('customer.firstName'), { [Op.iLike]: `%${search}%` }),
+              Sequelize.where(Sequelize.col('customer.lastName'), { [Op.iLike]: `%${search}%` }),
+              Sequelize.where(Sequelize.col('customer.mobile'), { [Op.iLike]: `%${search}%` })
+            ]
+          }
+        ]
+      };
       quotations = await Quotation.findAndCountAll({
-        where,
+        where: whereWithSearch,
         include: [
           {
             model: Customer,
             as: 'customer',
-            where: {
-              [Op.or]: [
-                { firstName: { [Op.iLike]: `%${search}%` } },
-                { lastName: { [Op.iLike]: `%${search}%` } },
-                { mobile: { [Op.iLike]: `%${search}%` } }
-              ]
-            },
-            required: true
+            required: false
           },
           {
             model: QuotationProduct,
@@ -1104,10 +1187,13 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
           phase: products.phase
         } : null,
         systemType: q.systemType,
-        paymentMode: q.paymentMode,
+        paymentType: (q as any).paymentType || null,
+        paymentMode: (q as any).paymentType || q.paymentMode,
         paidAmount: q.paidAmount !== undefined && q.paidAmount !== null ? Number(q.paidAmount) : null,
         paymentDate: q.paymentDate,
         paymentStatus: q.paymentStatus,
+        installments: (q as any).paymentPhases || [],
+        paymentPhases: (q as any).paymentPhases || [],
         finalAmount: Number(q.subtotal),
         installationStatus: (q as any).installationStatus || 'pending_installer',
         approvedAt: (q as any).approvedAt || null,
@@ -1155,6 +1241,122 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
     });
   } catch (error) {
     logError('Get quotations error', error, { dealerId: req.dealer?.id });
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
+};
+
+export const downloadQuotationsExcel = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const status = req.query.status as string | undefined;
+    const search = req.query.search as string | undefined;
+    const startDate = req.query.startDate as string | undefined;
+    const endDate = req.query.endDate as string | undefined;
+    const paymentType = (req.query.paymentType as string | undefined) || (req.query.paymentMode as string | undefined);
+    const paymentStatus = req.query.paymentStatus as string | undefined;
+
+    const isAccountManager = req.user && (req.user.role === 'account-management' || req.user.role === 'hr');
+    const where: any = {};
+
+    if (isAccountManager) {
+      where.status = 'approved';
+    } else if (req.dealer) {
+      where.dealerId = req.dealer.role === 'admin' ? { [Op.ne]: null } : req.dealer.id;
+      if (req.dealer.role === 'admin') delete where.dealerId;
+    } else if (req.user) {
+      const isInventoryAdmin = req.user.role === 'admin' || req.user.role === 'super-admin' || req.user.role === 'super-admin-manager';
+      const isInventoryAgent = req.user.role === 'agent' || req.user.role === 'account';
+      if (isInventoryAgent && !isInventoryAdmin) {
+        const mappedDealerId = await resolveDealerIdForInventoryUser(req.user.id, req.user.username);
+        if (!mappedDealerId) {
+          res.status(200).json({ success: true, data: { message: 'No data to export' } });
+          return;
+        }
+        where.dealerId = mappedDealerId;
+      }
+    }
+
+    if (!isAccountManager && status) where.status = status;
+    if (startDate || endDate) {
+      where.createdAt = {};
+      if (startDate) where.createdAt[Op.gte] = new Date(startDate);
+      if (endDate) where.createdAt[Op.lte] = new Date(endDate);
+    }
+    if (paymentType) {
+      where[Op.or] = [
+        { paymentType },
+        { paymentMode: paymentType }
+      ];
+    }
+    if (paymentStatus) {
+      where.paymentStatus = paymentStatus;
+    }
+
+    const include: any[] = [
+      {
+        model: Customer,
+        as: 'customer',
+        attributes: ['firstName', 'lastName', 'mobile'],
+        required: false
+      },
+      {
+        model: Dealer,
+        as: 'dealer',
+        attributes: ['firstName', 'lastName', 'mobile'],
+        required: false
+      }
+    ];
+
+    const whereWithSearch: any = search
+      ? {
+        ...where,
+        [Op.and]: [
+          ...(Array.isArray(where[Op.and]) ? where[Op.and] : []),
+          {
+            [Op.or]: [
+              { id: { [Op.iLike]: `%${search}%` } },
+              Sequelize.where(Sequelize.col('customer.firstName'), { [Op.iLike]: `%${search}%` }),
+              Sequelize.where(Sequelize.col('customer.lastName'), { [Op.iLike]: `%${search}%` }),
+              Sequelize.where(Sequelize.col('customer.mobile'), { [Op.iLike]: `%${search}%` })
+            ]
+          }
+        ]
+      }
+      : where;
+
+    const quotations = await Quotation.findAll({
+      where: whereWithSearch,
+      include,
+      order: [['createdAt', 'DESC']]
+    });
+
+    const rows = quotations.map((q: any) => ({
+      'Quotation ID': q.id,
+      'Customer Name': `${q.customer?.firstName || ''} ${q.customer?.lastName || ''}`.trim(),
+      'Mobile': q.customer?.mobile || '',
+      'Payment Type': q.paymentType || q.paymentMode || '',
+      'Payment Status': q.paymentStatus || '',
+      'Installments': Array.isArray(q.paymentPhases)
+        ? q.paymentPhases.map((phase: any) => `${phase.phaseName || `Phase ${phase.phaseNumber}`}: ${Number(phase.paidAmount || 0)}/${Number(phase.amount || 0)} (${phase.status || ''})`).join(' | ')
+        : '',
+      'Subtotal': Number(q.subtotal || 0),
+      'Paid': q.paidAmount !== null && q.paidAmount !== undefined ? Number(q.paidAmount) : 0,
+      'Remaining': Math.max(0, Number(q.totalAmount || 0) - Number(q.paidAmount || 0))
+    }));
+
+    const workbook = XLSX.utils.book_new();
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Payment Management');
+    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+    const stamp = new Date().toISOString().slice(0, 10);
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="payment-management-${stamp}.xlsx"`);
+    res.send(buffer);
+  } catch (error) {
+    logError('Download quotations excel error', error, { userId: req.user?.id, dealerId: req.dealer?.id });
     res.status(500).json({
       success: false,
       error: { code: 'SYS_001', message: 'Internal server error' }
@@ -1346,10 +1548,13 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
           installationDocs.map((doc: any) => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc))
         ),
         documents: resolvedDocuments,
-        paymentMode: quotation.paymentMode,
+        paymentType: quotationAny.paymentType || null,
+        paymentMode: quotationAny.paymentType || quotation.paymentMode,
         paidAmount: quotation.paidAmount ? Number(quotation.paidAmount) : null,
         paymentDate: quotation.paymentDate,
         paymentStatus: quotation.paymentStatus,
+        installments: quotationAny.paymentPhases || [],
+        paymentPhases: quotationAny.paymentPhases || [],
         createdAt: quotation.createdAt,
         validUntil: quotation.validUntil
       }
@@ -1848,6 +2053,104 @@ export const updateQuotationPricing = async (req: Request, res: Response): Promi
     });
   } catch (error) {
     logError('Update quotation pricing error', error, { quotationId: req.params.quotationId });
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
+};
+
+export const updateQuotationPaymentDetails = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { quotationId } = req.params;
+    const { paymentMode, paymentType: paymentTypeBody } = req.body as {
+      paymentType?: 'loan' | 'cash' | 'mix';
+      paymentMode?: 'cash' | 'upi' | 'loan' | 'netbanking' | 'bank_transfer' | 'cheque' | 'card' | 'mix';
+      paymentStatus?: 'pending' | 'partial' | 'completed';
+      phases?: any[];
+      installments?: any[];
+      paymentPhases?: any[];
+    };
+    const paymentType =
+      paymentTypeBody ||
+      (paymentMode && ['loan', 'cash', 'mix'].includes(paymentMode) ? (paymentMode as 'loan' | 'cash' | 'mix') : undefined);
+    const phasePayload = req.body.phases || req.body.installments || req.body.paymentPhases;
+
+    const isAccountManager = req.user && req.user.role === 'account-management';
+    const isInventoryAdmin = req.user && (
+      req.user.role === 'admin' ||
+      req.user.role === 'super-admin' ||
+      req.user.role === 'super-admin-manager'
+    );
+    const isQuotationAdmin = req.dealer && req.dealer.role === 'admin';
+
+    if (!isAccountManager && !isInventoryAdmin && !isQuotationAdmin) {
+      res.status(403).json({
+        success: false,
+        error: { code: 'AUTH_004', message: 'Insufficient permissions' }
+      });
+      return;
+    }
+
+    const where: any = { id: quotationId, status: 'approved' };
+
+    const quotation = await Quotation.findOne({ where });
+    if (!quotation) {
+      res.status(404).json({
+        success: false,
+        error: { code: 'RES_001', message: 'Quotation not found' }
+      });
+      return;
+    }
+
+    const { actorId } = resolveActorForAudit(req);
+    if (phasePayload && Array.isArray(phasePayload)) {
+      const normalizedPhases = normalizePaymentPhases(phasePayload, actorId);
+      const totalAmount = normalizedPhases.reduce((sum, phase) => sum + Number(phase.amount || 0), 0);
+      const totalPaidAmount = normalizedPhases.reduce((sum, phase) => sum + Number(phase.paidAmount || 0), 0);
+      const effectivePaymentStatus = calculatePaymentStatus(totalPaidAmount, totalAmount);
+      const latestPaymentDate = normalizedPhases
+        .map((phase) => phase.paymentDate)
+        .filter((value): value is string => !!value)
+        .sort()
+        .pop() || null;
+
+      await quotation.update({
+        paymentMode: paymentMode !== undefined ? paymentMode : quotation.paymentMode,
+        paymentType: paymentType !== undefined ? paymentType : (quotation as any).paymentType,
+        paymentStatus: effectivePaymentStatus,
+        paidAmount: totalPaidAmount,
+        paymentDate: latestPaymentDate ? new Date(latestPaymentDate) : quotation.paymentDate,
+        paymentPhases: normalizedPhases,
+        paymentPlanUpdatedBy: actorId,
+        paymentPlanUpdatedAt: new Date()
+      });
+    } else {
+      await quotation.update({
+        paymentMode: paymentMode !== undefined ? paymentMode : quotation.paymentMode,
+        paymentType: paymentType !== undefined ? paymentType : (quotation as any).paymentType,
+        paymentPlanUpdatedBy: actorId,
+        paymentPlanUpdatedAt: new Date()
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        id: quotation.id,
+        quotationId: quotation.id,
+        paymentType: (quotation as any).paymentType || null,
+        paymentMode: (quotation as any).paymentType || quotation.paymentMode,
+        paymentStatus: quotation.paymentStatus,
+        installments: quotation.paymentPhases || [],
+        paymentPhases: quotation.paymentPhases || [],
+        paymentPlanUpdatedBy: (quotation as any).paymentPlanUpdatedBy || null,
+        paymentPlanUpdatedAt: (quotation as any).paymentPlanUpdatedAt || null,
+        updatedAt: quotation.updatedAt
+      }
+    });
+  } catch (error) {
+    logError('Update quotation payment details error', error, { quotationId: req.params.quotationId });
     res.status(500).json({
       success: false,
       error: { code: 'SYS_001', message: 'Internal server error' }

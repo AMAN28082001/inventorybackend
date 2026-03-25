@@ -249,7 +249,8 @@ export const authorizeAdmin = (req: Request, res: Response, next: NextFunction):
   // Check Inventory System admin/super-admin
   const isInventoryAdmin = req.user && (
     req.user.role === 'admin' || 
-    req.user.role === 'super-admin'
+    req.user.role === 'super-admin' ||
+    req.user.role === 'super-admin-manager'
   );
   
   if (!isQuotationAdmin && !isInventoryAdmin) {

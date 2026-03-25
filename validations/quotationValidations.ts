@@ -62,7 +62,7 @@ const productsSchema = z.object({
 });
 
 const paymentModeEnum = z.enum(
-  ['cash', 'upi', 'loan', 'netbanking', 'bank_transfer', 'cheque', 'card'],
+  ['cash', 'upi', 'loan', 'netbanking', 'bank_transfer', 'cheque', 'card', 'mix'],
   { message: 'Invalid payment mode' }
 );
 
@@ -177,6 +177,42 @@ export const updatePricingSchema = z.object({
   return hasValue;
 }, {
   message: 'At least one pricing field must be provided'
+});
+
+const paymentPhaseSchema = z.object({
+  phaseNumber: z.coerce.number().int().positive(),
+  phaseName: z.string().min(1),
+  amount: z.coerce.number().min(0),
+  paidAmount: z.coerce.number().min(0),
+  status: paymentStatusEnum.optional(),
+  dueDate: z.string().datetime().or(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).optional(),
+  paymentDate: z.string().datetime().or(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).optional(),
+  paymentMode: paymentModeEnum.optional(),
+  transactionId: z.string().max(255).optional()
+});
+
+export const updatePaymentDetailsSchema = z.object({
+  paymentType: z.enum(['loan', 'cash', 'mix']).optional(),
+  paymentMode: paymentModeEnum.optional(),
+  paymentStatus: paymentStatusEnum.optional(),
+  phases: z.array(paymentPhaseSchema).optional(),
+  installments: z.array(paymentPhaseSchema).optional(),
+  paymentPhases: z.array(paymentPhaseSchema).optional()
+}).refine((data) => {
+  return Array.isArray(data.phases) || Array.isArray(data.installments) || Array.isArray(data.paymentPhases);
+}, {
+  message: 'phases (or installments/paymentPhases) is required'
+}).refine((data) => {
+  const selected = data.phases || data.installments || data.paymentPhases || [];
+  const phaseNumbers = selected.map((phase) => phase.phaseNumber);
+  return new Set(phaseNumbers).size === phaseNumbers.length;
+}, {
+  message: 'phaseNumber must be unique per quotation',
+  path: ['phases']
+});
+
+export const updatePaymentModeSchema = z.object({
+  paymentMode: paymentModeEnum
 });
 
 const aadharRegex = /^\d{12}$/;

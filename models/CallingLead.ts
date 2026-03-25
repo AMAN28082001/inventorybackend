@@ -3,6 +3,7 @@ import sequelize from '../config/database';
 
 interface CallingLeadAttributes {
   id: string;
+  batchId?: string | null;
   name: string;
   mobile: string;
   mobileNormalized: string;
@@ -17,10 +18,11 @@ interface CallingLeadAttributes {
   updatedAt?: Date;
 }
 
-interface CallingLeadCreationAttributes extends Optional<CallingLeadAttributes, 'id' | 'altMobile' | 'kNumber' | 'address' | 'city' | 'state' | 'customerNote' | 'rawPayload' | 'createdAt' | 'updatedAt'> {}
+interface CallingLeadCreationAttributes extends Optional<CallingLeadAttributes, 'id' | 'batchId' | 'altMobile' | 'kNumber' | 'address' | 'city' | 'state' | 'customerNote' | 'rawPayload' | 'createdAt' | 'updatedAt'> {}
 
 class CallingLead extends Model<CallingLeadAttributes, CallingLeadCreationAttributes> implements CallingLeadAttributes {
   public id!: string;
+  public batchId!: string | null;
   public name!: string;
   public mobile!: string;
   public mobileNormalized!: string;
@@ -40,6 +42,10 @@ CallingLead.init(
     id: {
       type: DataTypes.STRING(50),
       primaryKey: true
+    },
+    batchId: {
+      type: DataTypes.STRING(50),
+      allowNull: true
     },
     name: {
       type: DataTypes.STRING(150),
@@ -91,6 +97,7 @@ CallingLead.init(
     freezeTableName: true,
     underscored: false,
     indexes: [
+      { fields: ['batchId'] },
       { fields: ['mobile'], unique: true },
       { fields: ['mobileNormalized'], unique: true },
       { fields: ['createdAt'] }

@@ -1,10 +1,19 @@
 import { Request, Response } from 'express';
-import { Op, Sequelize } from 'sequelize';
+import { Op, Sequelize, WhereOptions } from 'sequelize';
 import { v4 as uuidv4 } from 'uuid';
 import XLSX from 'xlsx';
-import { CallingLead, DealerLeadAssignment, User, sequelize } from '../models';
+import {
+  CallingActionHistory,
+  CallingLead,
+  CallingLeadUploadBatch,
+  CallingLeadUploadRow,
+  DealerLeadAssignment,
+  User,
+  sequelize
+} from '../models';
 import { Dealer } from '../models/index-quotation';
 import { logError, logInfo } from '../utils/loggerHelper';
+import { emitRealtime, realtimeEvents } from '../utils/realtime';
 
 const MOBILE_KEYS = ['mobile', 'phone', 'contact', 'contact no', 'contact no.', 'contactnumber', 'phone_number', 'phone number', 'mobile number'];
 const NAME_KEYS = ['name', 'customername', 'customer name', 'full name'];
@@ -17,6 +26,23 @@ const NOTE_KEYS = ['customernote', 'customer note', 'note', 'notes', 'remark', '
 const ACTIVE_STATUSES = ['assigned', 'in_progress', 'rescheduled'];
 const ACTIONABLE_STATUSES = ['assigned', 'in_progress', 'rescheduled'];
 const DEFAULT_ACTIVE_LIMIT_PER_DEALER = Number(process.env.ACTIVE_LIMIT_PER_DEALER || 8);
+const CALLING_ACTION_FILTER_RANGES = ['daily', 'weekly', 'monthly', 'last_month', 'all'] as const;
+const REPORT_ACTIONS = ['called', 'follow_up', 'not_interested', 'rescheduled'] as const;
+const ALLOWED_STATUS_CATEGORIES = [
+  'call_connectivity',
+  'lead_validity',
+  'customer_intent',
+  'financial',
+  'competition',
+  'schedule',
+  'other'
+] as const;
+const DATE_RANGE_ALIASES = ['today', 'week', 'month', 'custom'] as const;
+
+type CallingActionType = 'called' | 'follow_up' | 'not_interested' | 'rescheduled';
+type CallingActionFilterRange = (typeof CALLING_ACTION_FILTER_RANGES)[number];
+type ReasonCategory = 'interested' | 'follow_up' | 'not_interested' | 'others';
+type UploadRowStatus = 'created' | 'duplicate' | 'invalid';
 
 const normalizeMobile = (value: unknown): string | null => {
   if (value === undefined || value === null) return null;
@@ -53,6 +79,306 @@ const parseDateSafe = (value: string | undefined): Date | null => {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return null;
   return parsed;
+};
+
+const parsePositiveInt = (value: unknown, fallback: number): number => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  const normalized = Math.floor(parsed);
+  return normalized > 0 ? normalized : fallback;
+};
+
+const parseDateBoundary = (value: unknown, boundary: 'start' | 'end'): Date | null => {
+  if (value === undefined || value === null || value === '') return null;
+  const parsed = new Date(String(value));
+  if (Number.isNaN(parsed.getTime())) return null;
+  if (boundary === 'start') parsed.setHours(0, 0, 0, 0);
+  if (boundary === 'end') parsed.setHours(23, 59, 59, 999);
+  return parsed;
+};
+
+const getMonthRange = (reference: Date): { from: Date; to: Date } => {
+  const year = reference.getFullYear();
+  const month = reference.getMonth();
+  const from = new Date(year, month, 1);
+  from.setHours(0, 0, 0, 0);
+  const to = new Date(year, month + 1, 0);
+  to.setHours(23, 59, 59, 999);
+  return { from, to };
+};
+
+const getReasonCategoryFromAction = (action: CallingActionType): ReasonCategory => {
+  if (action === 'called') return 'interested';
+  if (action === 'follow_up') return 'follow_up';
+  if (action === 'not_interested') return 'not_interested';
+  return 'others';
+};
+
+const buildCustomerAddress = (lead: { address?: string | null; city?: string | null; state?: string | null }): string | null => {
+  const parts = [lead.address, lead.city, lead.state].map((value) => String(value || '').trim()).filter(Boolean);
+  return parts.length ? parts.join(', ') : null;
+};
+
+const inferStatusCategoryFromRemark = (remark?: string | null): string | null => {
+  const normalized = String(remark || '').toLowerCase();
+  if (!normalized) return null;
+  if (normalized.includes('switched off') || normalized.includes('not reachable') || normalized.includes('busy')) {
+    return 'call_connectivity';
+  }
+  if (normalized.includes('invalid') || normalized.includes('wrong number')) {
+    return 'lead_validity';
+  }
+  if (normalized.includes('not interested') || normalized.includes('budget') || normalized.includes('converted')) {
+    return 'customer_intent';
+  }
+  if (normalized.includes('follow up') || normalized.includes('reschedule')) {
+    return 'schedule';
+  }
+  return null;
+};
+
+type LeadStatusMeta = {
+  statusCategory: string | null;
+  statusLabel: string | null;
+  statusReason: string | null;
+  isCustomReason: boolean;
+};
+
+const resolveReportDateRange = (
+  range: CallingActionFilterRange,
+  reqDateRangeRaw: string,
+  startDate: Date | null,
+  endDate: Date | null
+): { rangeStart: Date | null; rangeEnd: Date | null } => {
+  let rangeStart: Date | null = startDate;
+  let rangeEnd: Date | null = endDate;
+  const reqDateRange = reqDateRangeRaw.toLowerCase();
+
+  if (reqDateRange === 'custom' && (startDate || endDate)) {
+    return { rangeStart, rangeEnd };
+  }
+
+  const now = new Date();
+  const usePresetByDateRange = (DATE_RANGE_ALIASES as readonly string[]).includes(reqDateRange);
+  const effectivePreset = usePresetByDateRange ? reqDateRange : range;
+
+  if (!startDate && !endDate) {
+    if (effectivePreset === 'daily' || effectivePreset === 'today') {
+      rangeStart = new Date(now);
+      rangeStart.setHours(0, 0, 0, 0);
+      rangeEnd = new Date(now);
+      rangeEnd.setHours(23, 59, 59, 999);
+    } else if (effectivePreset === 'weekly' || effectivePreset === 'week') {
+      rangeStart = new Date(now);
+      rangeStart.setDate(now.getDate() - 6);
+      rangeStart.setHours(0, 0, 0, 0);
+      rangeEnd = new Date(now);
+      rangeEnd.setHours(23, 59, 59, 999);
+    } else if (effectivePreset === 'monthly' || effectivePreset === 'month') {
+      const monthRange = getMonthRange(now);
+      rangeStart = monthRange.from;
+      rangeEnd = monthRange.to;
+    } else if (effectivePreset === 'last_month') {
+      const previousMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const monthRange = getMonthRange(previousMonth);
+      rangeStart = monthRange.from;
+      rangeEnd = monthRange.to;
+    }
+  }
+
+  return { rangeStart, rangeEnd };
+};
+
+const buildLatestStatusMetaMap = async (dealerId: string, leadIds: string[]): Promise<Map<string, LeadStatusMeta>> => {
+  if (!leadIds.length) return new Map();
+
+  const rows = await CallingActionHistory.findAll({
+    where: {
+      dealerId,
+      leadId: { [Op.in]: leadIds }
+    },
+    order: [['actionAt', 'DESC'], ['createdAt', 'DESC']]
+  });
+
+  const map = new Map<string, LeadStatusMeta>();
+  for (const row of rows) {
+    if (!map.has(row.leadId)) {
+      map.set(row.leadId, {
+        statusCategory: row.statusCategory || inferStatusCategoryFromRemark(row.callRemark) || null,
+        statusLabel: row.statusLabel || null,
+        statusReason: row.statusReason || null,
+        isCustomReason: Boolean(row.isCustomReason)
+      });
+    }
+  }
+
+  return map;
+};
+
+const buildCallingActionsFilter = (req: Request): WhereOptions => {
+  const requestedRange = String(req.query.range || 'all').toLowerCase();
+  const range: CallingActionFilterRange =
+    (CALLING_ACTION_FILTER_RANGES as readonly string[]).includes(requestedRange)
+      ? (requestedRange as CallingActionFilterRange)
+      : 'all';
+  const dealerId = req.query.dealerId ? String(req.query.dealerId) : undefined;
+  const category = req.query.category ? String(req.query.category).trim() : '';
+  const statusCategoryKey = req.query.statusCategoryKey ? String(req.query.statusCategoryKey).trim() : '';
+  const reason = req.query.reason ? String(req.query.reason).trim() : '';
+  const action = req.query.action ? String(req.query.action).trim() : '';
+  const search = req.query.search ? String(req.query.search).trim() : '';
+  const dateRange = req.query.dateRange ? String(req.query.dateRange).trim().toLowerCase() : '';
+  const startDate = parseDateBoundary(req.query.startDate, 'start');
+  const endDate = parseDateBoundary(req.query.endDate, 'end');
+
+  const { rangeStart, rangeEnd } = resolveReportDateRange(range, dateRange, startDate, endDate);
+
+  const filter: WhereOptions = {};
+  if (dealerId) {
+    (filter as any).dealerId = dealerId;
+  }
+  if (rangeStart || rangeEnd) {
+    (filter as any).actionAt = {};
+    if (rangeStart) {
+      (filter as any).actionAt[Op.gte] = rangeStart;
+    }
+    if (rangeEnd) {
+      (filter as any).actionAt[Op.lte] = rangeEnd;
+    }
+  }
+  if (category || statusCategoryKey) {
+    (filter as any).statusCategory = statusCategoryKey || category;
+  }
+  if (reason) {
+    (filter as any).statusReason = { [Op.iLike]: `%${reason}%` };
+  }
+  if (action && (REPORT_ACTIONS as readonly string[]).includes(action)) {
+    (filter as any).action = action;
+  } else {
+    (filter as any).action = { [Op.in]: REPORT_ACTIONS };
+  }
+  if (search) {
+    (filter as any)[Op.or] = [
+      { leadId: { [Op.iLike]: `%${search}%` } },
+      { customerName: { [Op.iLike]: `%${search}%` } },
+      { customerMobile: { [Op.iLike]: `%${search}%` } },
+      { dealerName: { [Op.iLike]: `%${search}%` } },
+      { statusReason: { [Op.iLike]: `%${search}%` } },
+      { callRemark: { [Op.iLike]: `%${search}%` } }
+    ];
+  }
+  return filter;
+};
+
+const buildCallingActionsResponse = async (req: Request) => {
+  const page = parsePositiveInt(req.query.page, 1);
+  const limit = Math.min(parsePositiveInt(req.query.limit, 20), 100);
+  const offset = (page - 1) * limit;
+  const where = buildCallingActionsFilter(req);
+
+  const [rows, groupedCounts] = await Promise.all([
+    CallingActionHistory.findAndCountAll({
+      where,
+      order: [['actionAt', 'DESC'], ['createdAt', 'DESC']],
+      limit,
+      offset
+    }),
+    CallingActionHistory.findAll({
+      attributes: ['action', [Sequelize.fn('COUNT', Sequelize.col('id')), 'count']],
+      where,
+      group: ['action']
+    })
+  ]);
+
+  const actionDealerIds = Array.from(new Set(rows.rows.map((row) => row.dealerId)));
+  const [allDealers, actionDealers] = await Promise.all([
+    Dealer.findAll({
+      where: { role: 'dealer', isActive: true },
+      attributes: ['id', 'firstName', 'lastName'],
+      order: [['firstName', 'ASC'], ['lastName', 'ASC']]
+    }),
+    actionDealerIds.length
+      ? Dealer.findAll({
+        where: { id: { [Op.in]: actionDealerIds } },
+        attributes: ['id', 'firstName', 'lastName']
+      })
+      : Promise.resolve([])
+  ]);
+  const dealerNameMap = new Map<string, string>();
+  for (const dealer of actionDealers) {
+    dealerNameMap.set(dealer.id, `${dealer.firstName || ''} ${dealer.lastName || ''}`.trim());
+  }
+
+  const total = rows.count;
+  const summarySeed = {
+    interested: 0,
+    follow_up: 0,
+    not_interested: 0,
+    others: 0,
+    total
+  };
+  const summary = groupedCounts.reduce((acc, row: any) => {
+    const action = row.get('action') as CallingActionType;
+    const count = Number(row.get('count') || 0);
+    if (action === 'called') acc.interested += count;
+    else if (action === 'follow_up') acc.follow_up += count;
+    else if (action === 'not_interested') acc.not_interested += count;
+    else acc.others += count;
+    return acc;
+  }, summarySeed);
+
+  const actionRows = rows.rows.map((row) => ({
+      id: row.id,
+      leadId: row.leadId,
+      dealerId: row.dealerId,
+      dealerName: row.dealerName || dealerNameMap.get(row.dealerId) || '',
+      action: row.action,
+      reasonCategory: row.reasonCategory || getReasonCategoryFromAction(row.action as CallingActionType),
+      callRemark: row.callRemark,
+      statusCategory: row.statusCategory,
+      statusLabel: row.statusLabel,
+      statusReason: row.statusReason,
+      isCustomReason: row.isCustomReason,
+      statusCategoryKey: row.statusCategory,
+      statusCategoryLabel: row.statusLabel,
+      actionAt: row.actionAt,
+      nextFollowUpAt: row.nextFollowUpAt,
+      customerName: row.customerName,
+      customerMobile: row.customerMobile,
+      customerAddress: row.customerAddress,
+      createdAt: row.createdAt
+    }));
+
+  const dealers = allDealers.map((dealer) => ({
+    dealerId: dealer.id,
+    dealerName: `${dealer.firstName || ''} ${dealer.lastName || ''}`.trim()
+  }));
+
+  return {
+    // Primary list key
+    actions: actionRows,
+    // Compatibility aliases for different frontend integrations
+    list: actionRows,
+    rows: actionRows,
+    items: actionRows,
+    summary: {
+      interested: summary.interested,
+      followUp: summary.follow_up,
+      notInterested: summary.not_interested,
+      others: summary.others,
+      total: summary.total
+    },
+    summaryCounts: summary,
+    dealers,
+    pagination: {
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit),
+      hasNext: page < Math.ceil(total / limit),
+      hasPrev: page > 1
+    }
+  };
 };
 
 const resolveAssignedByUserId = async (req: Request, transaction: any): Promise<string> => {
@@ -199,7 +525,9 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
     }
 
     const parsed = rows.length;
+    const batchId = uuidv4();
     const normalizedRows: Array<{
+      rowIndex: number;
       name: string;
       mobile: string;
       altMobile: string | null;
@@ -210,20 +538,23 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
       customerNote: string | null;
       rawPayload: Record<string, unknown>;
     }> = [];
+    const rowAudit: Array<{
+      rowIndex: number;
+      status: UploadRowStatus;
+      customerName: string | null;
+      customerMobile: string | null;
+      customerAddress: string | null;
+      leadId?: string | null;
+      rawPayload: Record<string, unknown>;
+    }> = [];
     const duplicateInFile = new Set<string>();
     const seenMobiles = new Set<string>();
 
-    for (const row of rows) {
+    for (let index = 0; index < rows.length; index += 1) {
+      const row = rows[index];
+      const rowIndex = index + 1;
       const mobileRaw = extractCell(row, MOBILE_KEYS);
       const mobile = normalizeMobile(mobileRaw);
-      if (!mobile) continue;
-
-      if (seenMobiles.has(mobile)) {
-        duplicateInFile.add(mobile);
-        continue;
-      }
-      seenMobiles.add(mobile);
-
       const name = String(extractCell(row, NAME_KEYS) || '').trim() || 'Unknown';
       const altMobile = normalizeMobile(extractCell(row, ALT_MOBILE_KEYS));
       const kNumber = String(extractCell(row, K_NUMBER_KEYS) || '').trim() || null;
@@ -231,8 +562,36 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
       const city = String(extractCell(row, CITY_KEYS) || '').trim() || null;
       const state = String(extractCell(row, STATE_KEYS) || '').trim() || null;
       const customerNote = String(extractCell(row, NOTE_KEYS) || '').trim() || null;
+      const customerAddress = buildCustomerAddress({ address, city, state });
+
+      if (!mobile) {
+        rowAudit.push({
+          rowIndex,
+          status: 'invalid',
+          customerName: name,
+          customerMobile: null,
+          customerAddress,
+          rawPayload: row
+        });
+        continue;
+      }
+
+      if (seenMobiles.has(mobile)) {
+        duplicateInFile.add(mobile);
+        rowAudit.push({
+          rowIndex,
+          status: 'duplicate',
+          customerName: name,
+          customerMobile: mobile,
+          customerAddress,
+          rawPayload: row
+        });
+        continue;
+      }
+      seenMobiles.add(mobile);
 
       normalizedRows.push({
+        rowIndex,
         name,
         mobile,
         altMobile,
@@ -261,6 +620,19 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
 
     const rowsToCreate = normalizedRows.filter((row) => !existingMobiles.has(row.mobile));
     const skippedDuplicate = duplicateInFile.size + normalizedRows.length - rowsToCreate.length;
+    const rowsByMobile = new Map(normalizedRows.map((row) => [row.mobile, row]));
+    for (const existingMobile of existingMobiles) {
+      const row = rowsByMobile.get(existingMobile);
+      if (!row) continue;
+      rowAudit.push({
+        rowIndex: row.rowIndex,
+        status: 'duplicate',
+        customerName: row.name,
+        customerMobile: row.mobile,
+        customerAddress: buildCustomerAddress(row),
+        rawPayload: row.rawPayload
+      });
+    }
 
     let created = 0;
     let assigned = 0;
@@ -269,6 +641,15 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
     let queuedDealerPointer = 0;
 
     await sequelize.transaction(async (transaction) => {
+      await CallingLeadUploadBatch.create({
+        id: batchId,
+        fileName: file.originalname || 'upload.csv',
+        uploadedBy: req.user?.id || 'unknown',
+        uploadedAt: new Date(),
+        rowCount: parsed,
+        assignedDealers: dealerIds
+      }, { transaction });
+
       const assignedByUserId = await resolveAssignedByUserId(req, transaction);
 
       const dealerActiveCount: Record<string, number> = {};
@@ -290,6 +671,7 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
         const lead = await CallingLead.create(
           {
             id: uuidv4(),
+            batchId,
             name: row.name,
             mobile: row.mobile,
             mobileNormalized: row.mobile,
@@ -346,6 +728,36 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
         } else {
           queued += 1;
         }
+
+        rowAudit.push({
+          rowIndex: row.rowIndex,
+          status: 'created',
+          customerName: row.name,
+          customerMobile: row.mobile,
+          customerAddress: buildCustomerAddress(row),
+          leadId: lead.id,
+          rawPayload: row.rawPayload
+        });
+      }
+
+      if (rowAudit.length > 0) {
+        await CallingLeadUploadRow.bulkCreate(
+          rowAudit
+            .filter((row) => row.rowIndex > 0)
+            .sort((a, b) => a.rowIndex - b.rowIndex)
+            .map((row) => ({
+              id: uuidv4(),
+              batchId,
+              rowIndex: row.rowIndex,
+              customerName: row.customerName,
+              customerMobile: row.customerMobile,
+              customerAddress: row.customerAddress,
+              status: row.status,
+              leadId: row.leadId || null,
+              rawPayload: row.rawPayload
+            })),
+          { transaction }
+        );
       }
     });
 
@@ -363,12 +775,27 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
       success: true,
       data: {
         parsed,
+        batchId,
+        fileName: file.originalname || 'upload.csv',
+        uploadedBy: req.user?.id || 'unknown',
         created,
         skippedDuplicate,
         assigned,
         queued,
-        activeLimitPerDealer
+        activeLimitPerDealer,
+        rowCount: parsed,
+        assignedDealers: dealerIds
       }
+    });
+
+    emitRealtime(realtimeEvents.callingUploadsUpdated, {
+      batchId,
+      uploadedAt: new Date().toISOString(),
+      assignedDealers: dealerIds
+    });
+    emitRealtime(realtimeEvents.callingActionsUpdated, {
+      source: 'upload-calling-leads',
+      at: new Date().toISOString()
     });
   } catch (error) {
     logError('Upload calling leads CSV error', error, { userId: req.user?.id });
@@ -414,6 +841,8 @@ const buildCurrentLeadResponse = async (dealerId: string) => {
 
   const lead = assignment ? (assignment as any).lead : null;
   if (!assignment || !lead) return null;
+  const latestStatusMap = await buildLatestStatusMetaMap(dealerId, [lead.id]);
+  const latestStatus = latestStatusMap.get(lead.id);
 
   return {
     id: lead.id,
@@ -427,6 +856,12 @@ const buildCurrentLeadResponse = async (dealerId: string) => {
     customerNote: lead.customerNote,
     status: assignment.status,
     callRemark: assignment.callRemark,
+    statusCategory: latestStatus?.statusCategory || null,
+    statusLabel: latestStatus?.statusLabel || null,
+    statusReason: latestStatus?.statusReason || null,
+    isCustomReason: latestStatus?.isCustomReason || false,
+    statusCategoryKey: latestStatus?.statusCategory || null,
+    statusCategoryLabel: latestStatus?.statusLabel || null,
     nextFollowUpAt: assignment.nextFollowUpAt,
     actionAt: assignment.actionAt
   };
@@ -466,6 +901,8 @@ const buildScheduledLeads = async (dealerId: string) => {
     order: [['nextFollowUpAt', 'ASC'], ['assignedAt', 'ASC']],
     limit: 100
   });
+  const leadIds = rows.map((row: any) => String(row.leadId)).filter(Boolean);
+  const latestStatusMap = await buildLatestStatusMetaMap(dealerId, leadIds);
 
   return rows.map((row: any) => ({
     leadId: row.leadId,
@@ -481,19 +918,24 @@ const buildScheduledLeads = async (dealerId: string) => {
     action: row.action,
     actionAt: row.actionAt,
     callRemark: row.callRemark,
+    statusCategory: latestStatusMap.get(String(row.leadId))?.statusCategory || null,
+    statusLabel: latestStatusMap.get(String(row.leadId))?.statusLabel || null,
+    statusReason: latestStatusMap.get(String(row.leadId))?.statusReason || null,
+    isCustomReason: latestStatusMap.get(String(row.leadId))?.isCustomReason || false,
+    statusCategoryKey: latestStatusMap.get(String(row.leadId))?.statusCategory || null,
+    statusCategoryLabel: latestStatusMap.get(String(row.leadId))?.statusLabel || null,
     nextFollowUpAt: row.nextFollowUpAt,
     status: row.status
   }));
 };
 
 const buildRecentActions = async (dealerId: string) => {
-  const rows = await DealerLeadAssignment.findAll({
+  const rows = await CallingActionHistory.findAll({
     where: {
-      dealerId,
-      action: { [Op.ne]: null }
+      dealerId
     },
     include: [{ model: CallingLead, as: 'lead' }],
-    order: [['actionAt', 'DESC'], ['updatedAt', 'DESC']],
+    order: [['actionAt', 'DESC'], ['createdAt', 'DESC']],
     limit: 30
   });
 
@@ -504,6 +946,12 @@ const buildRecentActions = async (dealerId: string) => {
     action: row.action,
     actionAt: row.actionAt,
     callRemark: row.callRemark,
+    statusCategory: row.statusCategory,
+    statusLabel: row.statusLabel,
+    statusReason: row.statusReason,
+    isCustomReason: row.isCustomReason,
+    statusCategoryKey: row.statusCategory,
+    statusCategoryLabel: row.statusLabel,
     nextFollowUpAt: row.nextFollowUpAt,
     status: row.status
   }));
@@ -565,12 +1013,47 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
     }
 
     const { leadId } = req.params;
-    const { action, callRemark, nextFollowUpAt, actionAt } = req.body as {
+    const {
+      action,
+      callRemark,
+      nextFollowUpAt,
+      actionAt,
+      statusCategory,
+      statusLabel,
+      statusReason,
+      isCustomReason,
+      statusCategoryKey,
+      statusCategoryLabel
+    } = req.body as {
       action: 'start' | 'called' | 'follow_up' | 'not_interested' | 'rescheduled';
       callRemark?: string;
       nextFollowUpAt?: string;
       actionAt?: string;
+      statusCategory?: string;
+      statusLabel?: string;
+      statusReason?: string;
+      isCustomReason?: boolean;
+      statusCategoryKey?: string;
+      statusCategoryLabel?: string;
     };
+
+    const effectiveStatusCategory = statusCategoryKey || statusCategory || inferStatusCategoryFromRemark(callRemark) || null;
+    const effectiveStatusLabel = statusCategoryLabel || statusLabel || null;
+
+    if (effectiveStatusCategory && !(ALLOWED_STATUS_CATEGORIES as readonly string[]).includes(effectiveStatusCategory)) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VAL_001',
+          message: 'Validation error',
+          details: [{
+            field: 'statusCategoryKey',
+            message: `Invalid statusCategory. Allowed values: ${ALLOWED_STATUS_CATEGORIES.join(', ')}`
+          }]
+        }
+      });
+      return;
+    }
 
     if (action === 'rescheduled' && !nextFollowUpAt) {
       res.status(400).json({
@@ -586,6 +1069,39 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
       res.status(400).json({
         success: false,
         error: { code: 'VAL_001', message: 'Validation error', details: [{ field: 'nextFollowUpAt', message: 'Invalid datetime format' }] }
+      });
+      return;
+    }
+    if (action === 'rescheduled') {
+      if (!followUpDate) {
+        res.status(400).json({
+          success: false,
+          error: { code: 'VAL_001', message: 'Validation error', details: [{ field: 'nextFollowUpAt', message: 'Invalid datetime format' }] }
+        });
+        return;
+      }
+      if (followUpDate.getTime() <= Date.now()) {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'VAL_001',
+            message: 'Validation error',
+            details: [{ field: 'nextFollowUpAt', message: 'nextFollowUpAt must be a future datetime for rescheduled action' }]
+          }
+        });
+        return;
+      }
+    }
+
+    const requiresManualReason = statusReason === 'Others' || isCustomReason === true;
+    if (requiresManualReason && (!callRemark || !callRemark.trim())) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VAL_001',
+          message: 'Validation error',
+          details: [{ field: 'callRemark', message: 'Manual reason is required when statusReason is Others or custom mode is used' }]
+        }
       });
       return;
     }
@@ -614,6 +1130,10 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
       }
 
       const effectiveActionAt = actionDate || new Date();
+      const effectiveCallRemark = action === 'start'
+        ? (callRemark ?? assignment.callRemark ?? null)
+        : (callRemark ?? null);
+      const effectiveNextFollowUpAt = action === 'rescheduled' ? followUpDate : null;
       if (action === 'start') {
         if (assignment.status !== 'assigned') {
           const error: any = new Error('INVALID_TRANSITION');
@@ -624,26 +1144,69 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
         await assignment.update({
           status: 'in_progress',
           action: null,
-          callRemark: callRemark || assignment.callRemark || null,
+          callRemark: effectiveCallRemark,
           actionAt: effectiveActionAt
         }, { transaction });
       } else if (action === 'rescheduled') {
         await assignment.update({
           status: 'rescheduled',
           action,
-          callRemark: callRemark || null,
-          nextFollowUpAt: followUpDate,
+          callRemark: effectiveCallRemark,
+          nextFollowUpAt: effectiveNextFollowUpAt,
           actionAt: effectiveActionAt
         }, { transaction });
       } else {
         await assignment.update({
           status: 'completed',
           action,
-          callRemark: callRemark || null,
+          callRemark: effectiveCallRemark,
           actionAt: effectiveActionAt
         }, { transaction });
       }
 
+      if (action !== 'start') {
+        const [dealer, lead] = await Promise.all([
+          Dealer.findByPk(assignment.dealerId, {
+            attributes: ['firstName', 'lastName'],
+            transaction
+          }),
+          CallingLead.findByPk(assignment.leadId, {
+            attributes: ['name', 'mobile', 'address', 'city', 'state'],
+            transaction
+          })
+        ]);
+
+        const dealerName = dealer ? `${dealer.firstName || ''} ${dealer.lastName || ''}`.trim() : null;
+        const customerName = lead?.name || null;
+        const customerMobile = lead?.mobile || null;
+        const customerAddress = lead
+          ? buildCustomerAddress({
+            address: lead.address,
+            city: lead.city,
+            state: lead.state
+          })
+          : null;
+
+        await CallingActionHistory.create({
+          id: uuidv4(),
+          leadId: assignment.leadId,
+          dealerId: assignment.dealerId,
+          dealerName,
+          action,
+          reasonCategory: getReasonCategoryFromAction(action),
+          callRemark: effectiveCallRemark,
+          statusCategory: effectiveStatusCategory,
+          statusLabel: effectiveStatusLabel,
+          statusReason: statusReason || null,
+          isCustomReason: Boolean(isCustomReason),
+          actionAt: effectiveActionAt,
+          nextFollowUpAt: effectiveNextFollowUpAt,
+          customerName,
+          customerMobile,
+          customerAddress
+        }, { transaction });
+      }
+        
       // Refill active slot only when work is completed.
       // Rescheduled leads stay with the same dealer and keep occupying an active slot.
       if (action === 'called' || action === 'not_interested' || action === 'follow_up') {
@@ -667,6 +1230,15 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
         ...(await buildDealerQueueSnapshot(req.dealer.id))
       }
     });
+
+    if (action !== 'start') {
+      emitRealtime(realtimeEvents.callingActionsUpdated, {
+        dealerId: req.dealer.id,
+        leadId,
+        action,
+        actionAt: (updatedData?.actionAt || new Date()).toISOString?.() || new Date().toISOString()
+      });
+    }
   } catch (error) {
     const errorCode = (error as any)?.code;
     if (errorCode === 'LEAD_004') {
@@ -691,9 +1263,15 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
 export const getHrDealersForAssignment = async (_req: Request, res: Response): Promise<void> => {
   try {
     const dealers = await Dealer.findAll({
-      where: { role: 'dealer', isActive: true },
-      attributes: ['id', 'firstName', 'lastName', 'mobile', 'email'],
-      order: [['firstName', 'ASC']]
+      where: {
+        role: 'dealer',
+        [Op.or]: [
+          { isActive: true },
+          { emailVerified: true }
+        ]
+      },
+      attributes: ['id', 'firstName', 'lastName', 'mobile', 'email', 'isActive', 'emailVerified'],
+      order: [['firstName', 'ASC'], ['lastName', 'ASC']]
     });
 
     res.json({
@@ -705,8 +1283,12 @@ export const getHrDealersForAssignment = async (_req: Request, res: Response): P
           lastName: dealer.lastName,
           fullName: `${dealer.firstName} ${dealer.lastName}`.trim(),
           mobile: dealer.mobile,
-          email: dealer.email
-        }))
+          email: dealer.email,
+          isActive: dealer.isActive,
+          emailVerified: dealer.emailVerified,
+          isApproved: dealer.isActive || dealer.emailVerified
+        })),
+        total: dealers.length
       }
     });
   } catch (error) {
@@ -761,6 +1343,176 @@ export const getHrDealerAssignmentStats = async (_req: Request, res: Response): 
     });
   } catch (error) {
     logError('Get HR dealer assignment stats error', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
+};
+
+export const getHrLeadUploadBatches = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const page = parsePositiveInt(req.query.page, 1);
+    const limit = Math.min(parsePositiveInt(req.query.limit, 20), 100);
+    const offset = (page - 1) * limit;
+
+    const batches = await CallingLeadUploadBatch.findAndCountAll({
+      order: [['uploadedAt', 'DESC'], ['createdAt', 'DESC']],
+      limit,
+      offset
+    });
+
+    const dealerIds = new Set<string>();
+    for (const batch of batches.rows) {
+      const assignedDealers = Array.isArray(batch.assignedDealers) ? batch.assignedDealers : [];
+      for (const dealerId of assignedDealers) {
+        dealerIds.add(String(dealerId));
+      }
+    }
+
+    const dealerList = dealerIds.size
+      ? await Dealer.findAll({
+        where: { id: { [Op.in]: Array.from(dealerIds) } },
+        attributes: ['id', 'firstName', 'lastName']
+      })
+      : [];
+    const dealerNameMap = new Map<string, string>();
+    for (const dealer of dealerList) {
+      dealerNameMap.set(dealer.id, `${dealer.firstName || ''} ${dealer.lastName || ''}`.trim());
+    }
+
+    const total = batches.count;
+    res.json({
+      success: true,
+      data: {
+        batches: batches.rows.map((batch) => {
+          const assignedDealers = Array.isArray(batch.assignedDealers) ? batch.assignedDealers : [];
+          return {
+            id: batch.id,
+            batchId: batch.id,
+            fileName: batch.fileName,
+            uploadedBy: batch.uploadedBy,
+            uploadedAt: batch.uploadedAt,
+            rowCount: batch.rowCount,
+            assignedDealers,
+            assignedDealerDetails: assignedDealers.map((dealerId) => ({
+              dealerId,
+              dealerName: dealerNameMap.get(String(dealerId)) || ''
+            }))
+          };
+        }),
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit),
+          hasNext: page < Math.ceil(total / limit),
+          hasPrev: page > 1
+        }
+      }
+    });
+  } catch (error) {
+    logError('Get HR lead upload batches error', error, { userId: req.user?.id });
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
+};
+
+export const getHrLeadUploadBatchRows = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { batchId } = req.params;
+    const page = parsePositiveInt(req.query.page, 1);
+    const limit = Math.min(parsePositiveInt(req.query.limit, 100), 500);
+    const offset = (page - 1) * limit;
+
+    const batch = await CallingLeadUploadBatch.findByPk(batchId);
+    if (!batch) {
+      res.status(404).json({
+        success: false,
+        error: { code: 'RES_001', message: 'Upload batch not found' }
+      });
+      return;
+    }
+
+    const rows = await CallingLeadUploadRow.findAndCountAll({
+      where: { batchId },
+      order: [['rowIndex', 'ASC']],
+      limit,
+      offset
+    });
+
+    const total = rows.count;
+    res.json({
+      success: true,
+      data: {
+        batch: {
+          id: batch.id,
+          batchId: batch.id,
+          fileName: batch.fileName,
+          uploadedBy: batch.uploadedBy,
+          uploadedAt: batch.uploadedAt,
+          rowCount: batch.rowCount,
+          assignedDealers: batch.assignedDealers
+        },
+        rows: rows.rows.map((row) => ({
+          id: row.id,
+          rowIndex: row.rowIndex,
+          customerName: row.customerName,
+          customerMobile: row.customerMobile,
+          customerAddress: row.customerAddress,
+          status: row.status,
+          leadId: row.leadId,
+          rawPayload: row.rawPayload
+        })),
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit),
+          hasNext: page < Math.ceil(total / limit),
+          hasPrev: page > 1
+        }
+      }
+    });
+  } catch (error) {
+    logError('Get HR lead upload batch rows error', error, {
+      userId: req.user?.id,
+      batchId: req.params.batchId
+    });
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
+};
+
+export const getAdminCallingActions = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const data = await buildCallingActionsResponse(req);
+    res.json({
+      success: true,
+      data
+    });
+  } catch (error) {
+    logError('Get admin calling actions error', error, { userId: req.user?.id });
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
+};
+
+export const getHrCallingActions = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const data = await buildCallingActionsResponse(req);
+    res.json({
+      success: true,
+      data
+    });
+  } catch (error) {
+    logError('Get HR calling actions error', error, { userId: req.user?.id });
     res.status(500).json({
       success: false,
       error: { code: 'SYS_001', message: 'Internal server error' }

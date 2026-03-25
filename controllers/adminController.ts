@@ -1,7 +1,8 @@
 import { Request, Response } from 'express';
 import { Quotation, Dealer, Customer, Visitor } from '../models/index-quotation';
 import { Op } from 'sequelize';
-import { logError } from '../utils/loggerHelper';
+import { logError, logInfo } from '../utils/loggerHelper';
+import { emitRealtime, realtimeEvents } from '../utils/realtime';
 
 const resolveDealerIdForInventoryUser = async (userId: string, username?: string): Promise<string | null> => {
   const candidate = (username || '').trim();
@@ -119,6 +120,8 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
               mobile: qAny.customer.mobile
             } : null,
             systemType: q.systemType,
+            paymentType: (q as any).paymentType || null,
+            paymentMode: (q as any).paymentType || q.paymentMode || null,
             finalAmount: Number(q.subtotal),
             status: q.status,
             installationStatus: (q as any).installationStatus || 'pending_installer',
@@ -156,7 +159,12 @@ export const updateQuotationStatus = async (req: Request, res: Response): Promis
     }
 
     const { quotationId } = req.params;
-    const { status } = req.body;
+    const { status, paymentType: incomingPaymentType, paymentMode } = req.body as {
+      status: 'pending' | 'approved' | 'rejected' | 'completed';
+      paymentType?: 'loan' | 'cash' | 'mix';
+      paymentMode?: 'loan' | 'cash' | 'mix';
+    };
+    const paymentType = incomingPaymentType || paymentMode;
 
     if (!['pending', 'approved', 'rejected', 'completed'].includes(status)) {
       res.status(400).json({
@@ -180,6 +188,23 @@ export const updateQuotationStatus = async (req: Request, res: Response): Promis
     }
 
     const updateData: any = { status };
+    if (status === 'approved' && !paymentType) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VAL_001',
+          message: 'paymentType is required when approving quotation',
+          details: [{ field: 'paymentType', message: 'paymentType is required when approving quotation' }]
+        }
+      });
+      return;
+    }
+
+    if (paymentType !== undefined) {
+      updateData.paymentType = paymentType;
+      // backward-compatible mirror for existing consumers
+      updateData.paymentMode = paymentType;
+    }
     if (status === 'approved') {
       updateData.installationStatus = 'pending_installer';
       updateData.approvedAt = new Date();
@@ -191,13 +216,82 @@ export const updateQuotationStatus = async (req: Request, res: Response): Promis
       data: {
         id: quotation.id,
         status: quotation.status,
+        paymentType: (quotation as any).paymentType || null,
+        paymentMode: (quotation as any).paymentType || (quotation as any).paymentMode || null,
         installationStatus: (quotation as any).installationStatus,
         approvedAt: (quotation as any).approvedAt || null,
         updatedAt: quotation.updatedAt
       }
     });
+
+    logInfo('Quotation status updated by admin', {
+      quotationId: quotation.id,
+      adminId: req.dealer.id,
+      status: quotation.status,
+      paymentType: (quotation as any).paymentType || null,
+      timestamp: new Date().toISOString()
+    });
   } catch (error) {
     logError('Update quotation status error', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
+};
+
+export const getAdminQuotationById = async (req: Request, res: Response): Promise<void> => {
+  try {
+    if (!req.dealer || req.dealer.role !== 'admin') {
+      res.status(403).json({
+        success: false,
+        error: { code: 'AUTH_004', message: 'Insufficient permissions' }
+      });
+      return;
+    }
+
+    const { quotationId } = req.params;
+    const quotation = await Quotation.findByPk(quotationId, {
+      include: [
+        {
+          model: Dealer,
+          as: 'dealer',
+          attributes: ['id', 'firstName', 'lastName', 'email', 'mobile']
+        },
+        {
+          model: Customer,
+          as: 'customer',
+          attributes: ['id', 'firstName', 'lastName', 'mobile', 'email']
+        }
+      ]
+    });
+
+    if (!quotation) {
+      res.status(404).json({
+        success: false,
+        error: { code: 'RES_001', message: 'Quotation not found' }
+      });
+      return;
+    }
+
+    const quotationAny = quotation as any;
+    res.json({
+      success: true,
+      data: {
+        id: quotation.id,
+        status: quotation.status,
+        paymentType: quotationAny.paymentType || null,
+        paymentMode: quotationAny.paymentType || quotation.paymentMode || null,
+        dealer: quotationAny.dealer || null,
+        customer: quotationAny.customer || null,
+        finalAmount: Number(quotation.subtotal),
+        createdAt: quotation.createdAt,
+        approvedAt: quotationAny.approvedAt || null,
+        updatedAt: quotation.updatedAt
+      }
+    });
+  } catch (error) {
+    logError('Get admin quotation by id error', error, { quotationId: req.params.quotationId });
     res.status(500).json({
       success: false,
       error: { code: 'SYS_001', message: 'Internal server error' }
@@ -418,6 +512,15 @@ export const updateDealer = async (req: Request, res: Response): Promise<void> =
       success: true,
       data: responseData
     });
+
+    if (updateData.isActive !== undefined || updateData.emailVerified !== undefined) {
+      emitRealtime(realtimeEvents.dealerDirectoryUpdated, {
+        dealerId,
+        isActive: responseData.isActive,
+        emailVerified: responseData.emailVerified,
+        updatedAt: responseData.updatedAt || new Date().toISOString()
+      });
+    }
   } catch (error) {
     logError('Update dealer error', error, { dealerId: req.params.dealerId });
     res.status(500).json({
@@ -459,6 +562,12 @@ export const activateDealer = async (req: Request, res: Response): Promise<void>
         isActive: true,
         updatedAt: dealer.updatedAt
       }
+    });
+
+    emitRealtime(realtimeEvents.dealerDirectoryUpdated, {
+      dealerId: dealer.id,
+      isActive: true,
+      updatedAt: dealer.updatedAt || new Date().toISOString()
     });
   } catch (error) {
     logError('Activate dealer error', error, { dealerId: req.params.dealerId });

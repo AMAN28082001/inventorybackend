@@ -16,6 +16,9 @@ import AccountManagerHistory from './AccountManagerHistory';
 import ProductSerialNumber from './ProductSerialNumber';
 import CallingLead from './CallingLead';
 import DealerLeadAssignment from './DealerLeadAssignment';
+import CallingActionHistory from './CallingActionHistory';
+import CallingLeadUploadBatch from './CallingLeadUploadBatch';
+import CallingLeadUploadRow from './CallingLeadUploadRow';
 
 // Define all associations
 // User associations
@@ -84,6 +87,12 @@ AccountManagerHistory.belongsTo(AccountManager, { foreignKey: 'accountManagerId'
 // Calling lead module associations
 CallingLead.hasOne(DealerLeadAssignment, { foreignKey: 'leadId', as: 'assignment', onDelete: 'CASCADE' });
 DealerLeadAssignment.belongsTo(CallingLead, { foreignKey: 'leadId', as: 'lead' });
+CallingLead.hasMany(CallingActionHistory, { foreignKey: 'leadId', as: 'actionHistory', onDelete: 'CASCADE' });
+CallingActionHistory.belongsTo(CallingLead, { foreignKey: 'leadId', as: 'lead' });
+CallingLeadUploadBatch.hasMany(CallingLeadUploadRow, { foreignKey: 'batchId', as: 'rows', onDelete: 'CASCADE' });
+CallingLeadUploadRow.belongsTo(CallingLeadUploadBatch, { foreignKey: 'batchId', as: 'batch' });
+CallingLeadUploadBatch.hasMany(CallingLead, { foreignKey: 'batchId', as: 'leads', onDelete: 'SET NULL' });
+CallingLead.belongsTo(CallingLeadUploadBatch, { foreignKey: 'batchId', as: 'batch' });
 
 // Sync database (use with caution in production)
 export const syncDatabase = async (force: boolean = false): Promise<void> => {
@@ -111,7 +120,10 @@ export {
   AccountManagerHistory,
   ProductSerialNumber,
   CallingLead,
-  DealerLeadAssignment
+  DealerLeadAssignment,
+  CallingActionHistory,
+  CallingLeadUploadBatch,
+  CallingLeadUploadRow
 };
 
 

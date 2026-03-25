@@ -7,6 +7,8 @@ import {
   updateQuotationDiscount,
   updateQuotationProducts,
   updateQuotationPricing,
+  updateQuotationPaymentDetails,
+  downloadQuotationsExcel,
   downloadQuotationPDF,
   getProductCatalog,
   saveQuotationDocuments
@@ -16,7 +18,7 @@ import { getVisitsForQuotation } from '../controllers/visitController';
 import { authenticate, authorizeDealer, authorizeDealerAdminOrVisitor, authorizeDealerOrAccountManager, rejectAccountManager } from '../middleware/authQuotation';
 import { validate } from '../middleware/validate';
 import { logRequestBeforeValidation, logRequestAfterValidation } from '../middleware/requestLogger';
-import { createQuotationSchema, updateDiscountSchema, updateProductsSchema, updatePricingSchema } from '../validations/quotationValidations';
+import { createQuotationSchema, updateDiscountSchema, updateProductsSchema, updatePricingSchema, updatePaymentDetailsSchema, updatePaymentModeSchema } from '../validations/quotationValidations';
 
 const router: Router = express.Router();
 
@@ -229,6 +231,7 @@ router.get('/product-catalog', rejectAccountManager, authorizeDealerAdminOrVisit
  *         description: Unauthorized
  */
 router.get('/', authorizeDealerAdminOrVisitor, getQuotations);
+router.get('/export', authorizeDealerAdminOrVisitor, downloadQuotationsExcel);
 
 /**
  * @swagger
@@ -516,6 +519,10 @@ router.patch('/:quotationId/products', authorizeDealerOrAccountManager, validate
  *         description: Unauthorized
  */
 router.patch('/:quotationId/pricing', authorizeDealerOrAccountManager, validate(updatePricingSchema), updateQuotationPricing);
+router.patch('/:quotationId/payment-details', authorizeDealerOrAccountManager, validate(updatePaymentDetailsSchema), updateQuotationPaymentDetails);
+router.patch('/:quotationId/installments', authorizeDealerOrAccountManager, validate(updatePaymentDetailsSchema), updateQuotationPaymentDetails);
+router.put('/:quotationId/installments', authorizeDealerOrAccountManager, validate(updatePaymentDetailsSchema), updateQuotationPaymentDetails);
+router.patch('/:quotationId/payment-mode', authorizeDealerOrAccountManager, validate(updatePaymentModeSchema), updateQuotationPaymentDetails);
 
 router.post(
   '/:quotationId/documents',

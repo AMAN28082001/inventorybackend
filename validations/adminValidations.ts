@@ -1,7 +1,15 @@
 import { z } from 'zod';
 
 export const updateStatusSchema = z.object({
-  status: z.enum(['pending', 'approved', 'rejected', 'completed'])
+  status: z.enum(['pending', 'approved', 'rejected', 'completed']),
+  paymentType: z.enum(['loan', 'cash', 'mix']).optional(),
+  paymentMode: z.enum(['loan', 'cash', 'mix']).optional()
+}).refine((data) => {
+  if (data.status !== 'approved') return true;
+  return !!(data.paymentType || data.paymentMode);
+}, {
+  message: 'paymentType is required when approving quotation',
+  path: ['paymentType']
 });
 
 export const createVisitorSchema = z.object({

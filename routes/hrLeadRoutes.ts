@@ -2,7 +2,14 @@ import express, { Router } from 'express';
 import multer from 'multer';
 import { authenticate } from '../middleware/authQuotation';
 import { Request, Response, NextFunction } from 'express';
-import { uploadCallingLeadsCsv, getHrDealersForAssignment, getHrDealerAssignmentStats } from '../controllers/callingLeadController';
+import {
+  uploadCallingLeadsCsv,
+  getHrDealersForAssignment,
+  getHrDealerAssignmentStats,
+  getHrCallingActions,
+  getHrLeadUploadBatches,
+  getHrLeadUploadBatchRows
+} from '../controllers/callingLeadController';
 import { validate } from '../middleware/validate';
 import { uploadCallingLeadsSchema } from '../validations/callingLeadValidations';
 
@@ -31,6 +38,9 @@ router.use(authorizeHrLeadAccess);
 
 router.get('/dealers', getHrDealersForAssignment);
 router.get('/dealers/assignment-stats', getHrDealerAssignmentStats);
+router.get('/calling-actions', getHrCallingActions);
+router.get('/leads/uploads', getHrLeadUploadBatches);
+router.get('/leads/uploads/:batchId', getHrLeadUploadBatchRows);
 router.post('/leads/upload-csv', upload.fields([{ name: 'file', maxCount: 1 }, { name: 'csvFile', maxCount: 1 }]), validate(uploadCallingLeadsSchema), uploadCallingLeadsCsv);
 
 export default router;

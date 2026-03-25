@@ -19,6 +19,28 @@ export const uploadCallingLeadsSchema = z.object({
 export const dealerLeadActionSchema = z.object({
   action: z.enum(['start', 'called', 'follow_up', 'not_interested', 'rescheduled']),
   callRemark: z.string().max(5000).optional(),
+  statusCategory: z.enum([
+    'call_connectivity',
+    'lead_validity',
+    'customer_intent',
+    'financial',
+    'competition',
+    'schedule',
+    'other'
+  ]).optional(),
+  statusCategoryKey: z.enum([
+    'call_connectivity',
+    'lead_validity',
+    'customer_intent',
+    'financial',
+    'competition',
+    'schedule',
+    'other'
+  ]).optional(),
+  statusLabel: z.string().max(128).optional(),
+  statusCategoryLabel: z.string().max(128).optional(),
+  statusReason: z.string().max(255).optional(),
+  isCustomReason: z.boolean().optional(),
   nextFollowUpAt: z.string().datetime().optional(),
   actionAt: z.string().datetime().optional()
 }).refine((value) => {
@@ -29,4 +51,32 @@ export const dealerLeadActionSchema = z.object({
 }, {
   message: 'nextFollowUpAt is required when action is rescheduled',
   path: ['nextFollowUpAt']
+}).refine((value) => {
+  if (value.action !== 'rescheduled' || !value.nextFollowUpAt) return true;
+  return new Date(value.nextFollowUpAt).getTime() > Date.now();
+}, {
+  message: 'nextFollowUpAt must be a future datetime when action is rescheduled',
+  path: ['nextFollowUpAt']
+}).refine((value) => {
+  const customMode = value.isCustomReason === true || value.statusReason === 'Others';
+  if (!customMode) return true;
+  return !!value.callRemark && value.callRemark.trim().length > 0;
+}, {
+  message: 'Manual reason is required when statusReason is Others or custom mode is used',
+  path: ['callRemark']
+}).refine((value) => {
+  const cat = value.statusCategory || value.statusCategoryKey;
+  if (!cat) return true;
+  return ([
+    'call_connectivity',
+    'lead_validity',
+    'customer_intent',
+    'financial',
+    'competition',
+    'schedule',
+    'other'
+  ] as const).includes(cat as any);
+}, {
+  message: 'Invalid status category value',
+  path: ['statusCategoryKey']
 });

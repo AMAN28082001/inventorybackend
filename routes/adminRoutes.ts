@@ -1,6 +1,7 @@
 import express, { Router } from 'express';
 import {
   getAllQuotations,
+  getAdminQuotationById,
   updateQuotationStatus,
   getAllDealers,
   updateDealer,
@@ -15,6 +16,7 @@ import {
   updateVisitorPassword,
   deleteVisitor
 } from '../controllers/adminVisitorController';
+import { getAdminCallingActions } from '../controllers/callingLeadController';
 import { authenticate, authorizeAdmin } from '../middleware/authQuotation';
 import { validate } from '../middleware/validate';
 import { updateStatusSchema, createVisitorSchema, updateVisitorSchema, updateVisitorPasswordSchema } from '../validations/adminValidations';
@@ -35,6 +37,7 @@ router.use(authenticate);
  *       - bearerAuth: []
  */
 router.get('/quotations', getAllQuotations);
+router.get('/quotations/:quotationId', getAdminQuotationById);
 
 // All routes below require admin authorization
 router.use(authorizeAdmin);
@@ -197,6 +200,7 @@ router.patch('/dealers/:dealerId/activate', activateDealer);
  *       - bearerAuth: []
  */
 router.get('/statistics', getSystemStatistics);
+router.get('/calling-actions', getAdminCallingActions);
 
 /**
  * @swagger
