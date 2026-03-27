@@ -1,8 +1,19 @@
 import { Request, Response } from 'express';
-import { Quotation, Dealer, Customer, Visitor } from '../models/index-quotation';
+import { Quotation, QuotationPaymentPhase, Dealer, Customer, Visitor } from '../models/index-quotation';
 import { Op } from 'sequelize';
 import { logError, logInfo } from '../utils/loggerHelper';
+import { normalizePaymentModeInput } from '../utils/paymentMode';
 import { emitRealtime, realtimeEvents } from '../utils/realtime';
+
+const sumPhasePaidAmounts = (phases: { paidAmount?: number }[]): number =>
+  phases.reduce((sum, p) => sum + Number((p as any).paidAmount || 0), 0);
+
+const remainingAgainstSubtotal = (subtotal: number | null | undefined, totalPaid: number): number => {
+  const base = Number(subtotal) || 0;
+  const paid = Number(totalPaid);
+  const safePaid = isNaN(paid) ? 0 : paid;
+  return Math.max(0, base - safePaid);
+};
 
 const resolveDealerIdForInventoryUser = async (userId: string, username?: string): Promise<string | null> => {
   const candidate = (username || '').trim();
@@ -101,12 +112,37 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
       offset,
       order: [['createdAt', 'DESC']]
     });
+    const phaseRows = await QuotationPaymentPhase.findAll({
+      where: { quotationId: { [Op.in]: quotations.rows.map((q: any) => q.id) } },
+      order: [['quotationId', 'ASC'], ['phaseNumber', 'ASC']]
+    });
+    const phaseMap = new Map<string, any[]>();
+    for (const phase of phaseRows as any[]) {
+      const qid = String(phase.quotationId);
+      if (!phaseMap.has(qid)) phaseMap.set(qid, []);
+      phaseMap.get(qid)!.push({
+        phaseNumber: Number(phase.phaseNumber),
+        phaseName: phase.phaseName,
+        amount: Number(phase.amount || 0),
+        paidAmount: Number(phase.paidAmount || 0),
+        status: phase.status,
+        dueDate: phase.dueDate ? new Date(phase.dueDate).toISOString() : null,
+        paymentDate: phase.paymentDate ? new Date(phase.paymentDate).toISOString() : null,
+        paymentMode: normalizePaymentModeInput(phase.paymentMode) ?? null,
+        transactionId: phase.transactionId || null
+      });
+    }
 
     res.json({
       success: true,
       data: {
         quotations: quotations.rows.map(q => {
           const qAny = q as any;
+          const phases = phaseMap.get(String(q.id)) || qAny.paymentPhases || [];
+          const subtotalNum = Number(q.subtotal || 0);
+          const totalPaidForRemaining =
+            phases.length > 0 ? sumPhasePaidAmounts(phases) : Number(q.paidAmount || 0);
+          const remainingAmount = remainingAgainstSubtotal(subtotalNum, totalPaidForRemaining);
           return {
             id: q.id,
             dealer: qAny.dealer ? {
@@ -122,7 +158,14 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
             systemType: q.systemType,
             paymentType: (q as any).paymentType || null,
             paymentMode: (q as any).paymentType || q.paymentMode || null,
-            finalAmount: Number(q.subtotal),
+            paymentStatus: (q as any).paymentStatus || null,
+            subtotal: subtotalNum,
+            paidAmount: q.paidAmount !== undefined && q.paidAmount !== null ? Number(q.paidAmount) : null,
+            remaining: remainingAmount,
+            remainingAmount,
+            installments: phases,
+            paymentPhases: phases,
+            finalAmount: subtotalNum,
             status: q.status,
             installationStatus: (q as any).installationStatus || 'pending_installer',
             approvedAt: (q as any).approvedAt || null,
@@ -275,6 +318,25 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
     }
 
     const quotationAny = quotation as any;
+    const phaseRows = await QuotationPaymentPhase.findAll({
+      where: { quotationId: quotation.id },
+      order: [['phaseNumber', 'ASC']]
+    });
+    const phases = (phaseRows as any[]).map((phase) => ({
+      phaseNumber: Number(phase.phaseNumber),
+      phaseName: phase.phaseName,
+      amount: Number(phase.amount || 0),
+      paidAmount: Number(phase.paidAmount || 0),
+      status: phase.status,
+      dueDate: phase.dueDate ? new Date(phase.dueDate).toISOString() : null,
+      paymentDate: phase.paymentDate ? new Date(phase.paymentDate).toISOString() : null,
+      paymentMode: normalizePaymentModeInput(phase.paymentMode) ?? null,
+      transactionId: phase.transactionId || null
+    }));
+    const subtotalNum = Number(quotation.subtotal || 0);
+    const totalPaidForRemaining =
+      phases.length > 0 ? sumPhasePaidAmounts(phases) : Number(quotation.paidAmount || 0);
+    const remainingAmount = remainingAgainstSubtotal(subtotalNum, totalPaidForRemaining);
     res.json({
       success: true,
       data: {
@@ -282,9 +344,16 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
         status: quotation.status,
         paymentType: quotationAny.paymentType || null,
         paymentMode: quotationAny.paymentType || quotation.paymentMode || null,
+        paymentStatus: quotationAny.paymentStatus || null,
+        subtotal: subtotalNum,
+        paidAmount: quotation.paidAmount !== undefined && quotation.paidAmount !== null ? Number(quotation.paidAmount) : null,
+        remaining: remainingAmount,
+        remainingAmount,
+        installments: phases,
+        paymentPhases: phases,
         dealer: quotationAny.dealer || null,
         customer: quotationAny.customer || null,
-        finalAmount: Number(quotation.subtotal),
+        finalAmount: subtotalNum,
         createdAt: quotation.createdAt,
         approvedAt: quotationAny.approvedAt || null,
         updatedAt: quotation.updatedAt

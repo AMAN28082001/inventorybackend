@@ -5,6 +5,7 @@ import Dealer from './Dealer';
 import Visitor from './Visitor';
 import Customer from './Customer';
 import Quotation from './Quotation';
+import QuotationPaymentPhase from './QuotationPaymentPhase';
 import QuotationProduct from './QuotationProduct';
 import CustomPanel from './CustomPanel';
 import QuotationDocument from './QuotationDocument';
@@ -48,6 +49,10 @@ Quotation.belongsTo(Customer, { foreignKey: 'customerId', as: 'customer' });
 // Quotations have one product configuration (1:1)
 Quotation.hasOne(QuotationProduct, { foreignKey: 'quotationId', as: 'products', onDelete: 'CASCADE' });
 QuotationProduct.belongsTo(Quotation, { foreignKey: 'quotationId', as: 'quotation' });
+
+// Quotations have multiple payment phases (1:N)
+Quotation.hasMany(QuotationPaymentPhase, { foreignKey: 'quotationId', as: 'paymentPhaseRows', onDelete: 'CASCADE' });
+QuotationPaymentPhase.belongsTo(Quotation, { foreignKey: 'quotationId', as: 'quotation' });
 
 // Quotations have one documents record (1:1)
 Quotation.hasOne(QuotationDocument, { foreignKey: 'quotationId', as: 'documents', onDelete: 'CASCADE' });
@@ -99,6 +104,7 @@ export {
   Visitor,
   Customer,
   Quotation,
+  QuotationPaymentPhase,
   QuotationProduct,
   CustomPanel,
   QuotationDocument,

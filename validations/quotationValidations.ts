@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ALLOWED_PAYMENT_MODES, normalizePaymentModeInput } from '../utils/paymentMode';
 
 const addressSchema = z.object({
   street: z.string().min(1),
@@ -179,40 +180,137 @@ export const updatePricingSchema = z.object({
   message: 'At least one pricing field must be provided'
 });
 
-const paymentPhaseSchema = z.object({
+const rawPaymentPhaseSchema = z.object({
   phaseNumber: z.coerce.number().int().positive(),
   phaseName: z.string().min(1),
   amount: z.coerce.number().min(0),
-  paidAmount: z.coerce.number().min(0),
+  paidAmount: z.coerce.number().min(0).optional(),
+  paid_amount: z.coerce.number().min(0).optional(),
+  paidAmt: z.coerce.number().min(0).optional(),
+  paid: z.coerce.number().min(0).optional(),
   status: paymentStatusEnum.optional(),
-  dueDate: z.string().datetime().or(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).optional(),
-  paymentDate: z.string().datetime().or(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).optional(),
-  paymentMode: paymentModeEnum.optional(),
-  transactionId: z.string().max(255).optional()
+  dueDate: z.union([z.string(), z.null()]).optional(),
+  paymentDate: z.union([z.string(), z.null()]).optional(),
+  paymentMode: z.union([z.string(), z.null()]).optional(),
+  transactionId: z.union([z.string(), z.null()]).optional(),
+  transaction_id: z.union([z.string(), z.null()]).optional()
 });
 
-export const updatePaymentDetailsSchema = z.object({
-  paymentType: z.enum(['loan', 'cash', 'mix']).optional(),
-  paymentMode: paymentModeEnum.optional(),
-  paymentStatus: paymentStatusEnum.optional(),
-  phases: z.array(paymentPhaseSchema).optional(),
-  installments: z.array(paymentPhaseSchema).optional(),
-  paymentPhases: z.array(paymentPhaseSchema).optional()
-}).refine((data) => {
-  return Array.isArray(data.phases) || Array.isArray(data.installments) || Array.isArray(data.paymentPhases);
-}, {
-  message: 'phases (or installments/paymentPhases) is required'
-}).refine((data) => {
-  const selected = data.phases || data.installments || data.paymentPhases || [];
-  const phaseNumbers = selected.map((phase) => phase.phaseNumber);
-  return new Set(phaseNumbers).size === phaseNumbers.length;
-}, {
-  message: 'phaseNumber must be unique per quotation',
-  path: ['phases']
-});
+const resolvePhasePaid = (p: z.infer<typeof rawPaymentPhaseSchema>): number =>
+  Number(p.paidAmount ?? p.paid_amount ?? p.paidAmt ?? p.paid ?? 0);
+
+export const updatePaymentDetailsSchema = z
+  .object({
+    paymentType: z.enum(['loan', 'cash', 'mix']).optional(),
+    paymentMode: z.union([z.string(), z.null()]).optional(),
+    paymentStatus: paymentStatusEnum.optional(),
+    phases: z.array(rawPaymentPhaseSchema).optional(),
+    installments: z.array(rawPaymentPhaseSchema).optional(),
+    paymentPhases: z.array(rawPaymentPhaseSchema).optional()
+  })
+  .refine(
+    (data) =>
+      Array.isArray(data.phases) ||
+      Array.isArray(data.installments) ||
+      Array.isArray(data.paymentPhases),
+    {
+      message: 'phases (or installments/paymentPhases) is required',
+      path: ['phases']
+    }
+  )
+  .transform((data) => {
+    const rawList =
+      data.phases ?? data.installments ?? data.paymentPhases ?? [];
+    const topMode = normalizePaymentModeInput(data.paymentMode);
+    let carry = topMode;
+    const phases = rawList.map((p) => {
+      const paidAmount = resolvePhasePaid(p);
+      const amount = Number(p.amount ?? 0);
+      let status = p.status;
+      if (!status) {
+        if (paidAmount <= 0) status = 'pending';
+        else if (amount > 0 && paidAmount >= amount) status = 'completed';
+        else status = 'partial';
+      }
+      let paymentMode = normalizePaymentModeInput(p.paymentMode);
+      const needsMode =
+        paidAmount > 0 ||
+        status === 'partial' ||
+        status === 'completed';
+      if (needsMode && !paymentMode) {
+        paymentMode = carry ?? topMode;
+      }
+      if (paymentMode) carry = paymentMode;
+      const rawTid = p.transactionId ?? p.transaction_id;
+      return {
+        phaseNumber: p.phaseNumber,
+        phaseName: p.phaseName,
+        amount,
+        paidAmount,
+        status,
+        dueDate: p.dueDate === null ? undefined : p.dueDate,
+        paymentDate: p.paymentDate === null ? undefined : p.paymentDate,
+        paymentMode,
+        transactionId:
+          rawTid === undefined || rawTid === null || rawTid === ''
+            ? undefined
+            : String(rawTid)
+      };
+    });
+    return {
+      paymentType: data.paymentType,
+      paymentMode: topMode,
+      paymentStatus: data.paymentStatus,
+      phases
+    };
+  })
+  .superRefine((data, ctx) => {
+    const nums = data.phases.map((p) => p.phaseNumber);
+    if (new Set(nums).size !== nums.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'phaseNumber must be unique per quotation',
+        path: ['phases']
+      });
+    }
+    data.phases.forEach((p, i) => {
+      if (p.paidAmount > p.amount) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'paidAmount cannot be greater than amount',
+          path: ['phases', i, 'paidAmount']
+        });
+      }
+      const needsMode =
+        p.paidAmount > 0 ||
+        p.status === 'partial' ||
+        p.status === 'completed';
+      if (needsMode && !p.paymentMode) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            'paymentMode is required when paidAmount > 0 or status is partial/completed (use a valid mode per phase, or set top-level paymentMode, or inherit from an earlier phase)',
+          path: ['phases', i, 'paymentMode']
+        });
+      }
+      if (
+        p.paymentMode &&
+        !(ALLOWED_PAYMENT_MODES as readonly string[]).includes(p.paymentMode)
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Invalid paymentMode. Allowed: ${ALLOWED_PAYMENT_MODES.join(', ')}`,
+          path: ['phases', i, 'paymentMode']
+        });
+      }
+    });
+  });
 
 export const updatePaymentModeSchema = z.object({
-  paymentMode: paymentModeEnum
+  paymentMode: z
+    .union([z.string(), z.null()])
+    .transform((v) => normalizePaymentModeInput(v))
+    .refine((v) => v !== undefined, { message: 'Invalid or missing payment mode' })
 });
 
 const aadharRegex = /^\d{12}$/;

@@ -19,6 +19,7 @@ import DealerLeadAssignment from './DealerLeadAssignment';
 import CallingActionHistory from './CallingActionHistory';
 import CallingLeadUploadBatch from './CallingLeadUploadBatch';
 import CallingLeadUploadRow from './CallingLeadUploadRow';
+import QuotationPaymentPhase from './QuotationPaymentPhase';
 
 // Define all associations
 // User associations
@@ -123,7 +124,8 @@ export {
   DealerLeadAssignment,
   CallingActionHistory,
   CallingLeadUploadBatch,
-  CallingLeadUploadRow
+  CallingLeadUploadRow,
+  QuotationPaymentPhase
 };
 
 

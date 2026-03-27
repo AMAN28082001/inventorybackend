@@ -3,12 +3,13 @@ import AWS from 'aws-sdk';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import XLSX from 'xlsx';
-import { Quotation, QuotationProduct, CustomPanel, Customer, Visit, VisitAssignment, SystemConfig, Dealer, QuotationDocument, QuotationInstallationDoc } from '../models/index-quotation';
+import { Quotation, QuotationProduct, QuotationPaymentPhase, CustomPanel, Customer, Visit, VisitAssignment, SystemConfig, Dealer, QuotationDocument, QuotationInstallationDoc } from '../models/index-quotation';
 import { Product } from '../models';
 import { Op, Sequelize } from 'sequelize';
 import { logError, logInfo } from '../utils/loggerHelper';
 import { deleteFileFromS3IfExists } from '../middleware/upload';
 import { generatePublicUrl } from '../utils/s3Service';
+import { normalizePaymentModeInput } from '../utils/paymentMode';
 
 // Helper function to normalize catalog data - ensures all arrays are arrays (never null/undefined)
 const normalizeCatalog = (catalog: any): any => {
@@ -267,6 +268,24 @@ const calculatePaymentStatus = (paidAmount: number | null | undefined, totalAmou
   return 'partial';
 };
 
+/** Total paid across installment phases (normalized rows). */
+const sumPhasePaidAmounts = (phases: PaymentPhaseRecord[]): number =>
+  phases.reduce((sum, p) => sum + Number(p.paidAmount || 0), 0);
+
+/**
+ * Remaining balance for Account Management: package subtotal minus total paid (all phases).
+ * Not tied to sum(phase.amount) — phases are partial allocations; the cap is quotation.subtotal.
+ */
+const remainingPaymentAgainstSubtotal = (
+  subtotal: number | null | undefined,
+  totalPaid: number
+): number => {
+  const base = Number(subtotal) || 0;
+  const paid = Number(totalPaid);
+  const safePaid = isNaN(paid) ? 0 : paid;
+  return Math.max(0, base - safePaid);
+};
+
 type PaymentPhaseRecord = {
   phaseNumber: number;
   phaseName: string;
@@ -298,29 +317,71 @@ const normalizePaymentPhases = (phases: any[], updatedBy: string | null): Paymen
   return phases
     .map((phase) => {
       const amount = Number(phase.amount ?? 0);
-      const paidAmount = Number(phase.paidAmount ?? 0);
-      const paymentModeRaw = phase.paymentMode ? String(phase.paymentMode) : null;
-      const paymentMode = paymentModeRaw && ['cash', 'upi', 'loan', 'netbanking', 'bank_transfer', 'cheque', 'card', 'mix'].includes(paymentModeRaw)
-        ? (paymentModeRaw as PaymentPhaseRecord['paymentMode'])
-        : null;
+      const paidAmountRaw =
+        phase.paidAmount ??
+        phase.paid_amount ??
+        phase.paidAmt ??
+        phase.paid;
+      const paidAmount = Number(paidAmountRaw ?? 0);
+      const paymentMode = normalizePaymentModeInput(phase.paymentMode) ?? null;
+      const computedStatus = calculatePhaseStatus(
+        Number.isFinite(paidAmount) ? paidAmount : 0,
+        Number.isFinite(amount) ? amount : 0
+      );
+      const inputStatus = phase.status ? String(phase.status) : undefined;
+      const status: PaymentPhaseRecord['status'] =
+        inputStatus && ['pending', 'partial', 'completed'].includes(inputStatus)
+          ? (inputStatus as PaymentPhaseRecord['status'] === computedStatus ? (inputStatus as PaymentPhaseRecord['status']) : computedStatus)
+          : computedStatus;
+
+      const transactionIdRaw = phase.transactionId ?? phase.transaction_id;
       return {
         phaseNumber: Number(phase.phaseNumber),
         phaseName: String(phase.phaseName || '').trim(),
         amount: Number.isFinite(amount) ? amount : 0,
         paidAmount: Number.isFinite(paidAmount) ? paidAmount : 0,
-        status: calculatePhaseStatus(
-          Number.isFinite(paidAmount) ? paidAmount : 0,
-          Number.isFinite(amount) ? amount : 0
-        ),
+        status,
         dueDate: normalizeDateString(phase.dueDate),
         paymentDate: normalizeDateString(phase.paymentDate),
         paymentMode,
-        transactionId: phase.transactionId ? String(phase.transactionId) : null,
+        transactionId: transactionIdRaw ? String(transactionIdRaw) : null,
         updatedBy,
         updatedAt: new Date().toISOString()
       } as PaymentPhaseRecord;
     })
     .sort((a, b) => a.phaseNumber - b.phaseNumber);
+};
+
+const serializePaymentPhaseRow = (row: any): PaymentPhaseRecord => ({
+  phaseNumber: Number(row.phaseNumber),
+  phaseName: String(row.phaseName || ''),
+  amount: Number(row.amount || 0),
+  paidAmount: Number(row.paidAmount || 0),
+  status: (['pending', 'partial', 'completed'].includes(String(row.status)) ? row.status : 'pending') as PaymentPhaseRecord['status'],
+  dueDate: row.dueDate ? new Date(row.dueDate).toISOString() : null,
+  paymentDate: row.paymentDate ? new Date(row.paymentDate).toISOString() : null,
+  paymentMode: normalizePaymentModeInput(row.paymentMode) ?? null,
+  transactionId: row.transactionId || null,
+  updatedBy: row.updatedBy || null,
+  updatedAt: row.updatedAtPhase ? new Date(row.updatedAtPhase).toISOString() : null
+});
+
+const fetchPaymentPhasesByQuotationIds = async (quotationIds: string[]): Promise<Map<string, PaymentPhaseRecord[]>> => {
+  const map = new Map<string, PaymentPhaseRecord[]>();
+  if (!quotationIds.length) return map;
+
+  const rows = await QuotationPaymentPhase.findAll({
+    where: { quotationId: { [Op.in]: quotationIds } },
+    order: [['quotationId', 'ASC'], ['phaseNumber', 'ASC']]
+  });
+
+  for (const row of rows as any[]) {
+    const qId = String(row.quotationId);
+    if (!map.has(qId)) map.set(qId, []);
+    map.get(qId)!.push(serializePaymentPhaseRow(row));
+  }
+
+  return map;
 };
 
 const resolveActorForAudit = (req: Request): { actorId: string | null; actorRole: string | null } => {
@@ -1152,18 +1213,29 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
       });
     }
 
+    const phaseMap = await fetchPaymentPhasesByQuotationIds(quotations.rows.map((q: any) => String(q.id)));
     const formattedQuotations = await Promise.all(quotations.rows.map(async q => {
       const customer = (q as any).customer;
       const products = (q as any).products;
       const dealer = (q as any).dealer;
       const documents = (q as any).documents;
       const installationDocs = (q as any).installationDocs || [];
+      const phaseRows = phaseMap.get(String(q.id)) || ((q as any).paymentPhases || []);
       const resolvedDocuments = await resolveQuotationDocumentUrls(documents);
       
       // Calculate pricing if products exist
       const pricing = products 
         ? calculatePricing(products, q.discount, (q as any).discountAmount)
         : null;
+
+      const subtotalNum = (q as any).subtotal !== undefined && (q as any).subtotal !== null
+        ? Number((q as any).subtotal)
+        : (pricing ? Number(pricing.subtotal) : 0);
+      const totalPaidForRemaining =
+        phaseRows.length > 0
+          ? sumPhasePaidAmounts(phaseRows as PaymentPhaseRecord[])
+          : Number(q.paidAmount || 0);
+      const remainingAmount = remainingPaymentAgainstSubtotal(subtotalNum, totalPaidForRemaining);
       
       return {
         id: q.id,
@@ -1189,12 +1261,15 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         systemType: q.systemType,
         paymentType: (q as any).paymentType || null,
         paymentMode: (q as any).paymentType || q.paymentMode,
+        subtotal: subtotalNum,
         paidAmount: q.paidAmount !== undefined && q.paidAmount !== null ? Number(q.paidAmount) : null,
+        remaining: remainingAmount,
+        remainingAmount,
         paymentDate: q.paymentDate,
         paymentStatus: q.paymentStatus,
-        installments: (q as any).paymentPhases || [],
-        paymentPhases: (q as any).paymentPhases || [],
-        finalAmount: Number(q.subtotal),
+        installments: phaseRows,
+        paymentPhases: phaseRows,
+        finalAmount: subtotalNum,
         installationStatus: (q as any).installationStatus || 'pending_installer',
         approvedAt: (q as any).approvedAt || null,
         installerApprovedAt: (q as any).installerApprovedAt || null,
@@ -1343,7 +1418,7 @@ export const downloadQuotationsExcel = async (req: Request, res: Response): Prom
         : '',
       'Subtotal': Number(q.subtotal || 0),
       'Paid': q.paidAmount !== null && q.paidAmount !== undefined ? Number(q.paidAmount) : 0,
-      'Remaining': Math.max(0, Number(q.totalAmount || 0) - Number(q.paidAmount || 0))
+      'Remaining': Math.max(0, Number(q.subtotal || 0) - Number(q.paidAmount || 0))
     }));
 
     const workbook = XLSX.utils.book_new();
@@ -1464,6 +1539,8 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
     }
 
     const quotationAny = quotation as any;
+    const phaseMap = await fetchPaymentPhasesByQuotationIds([String(quotation.id)]);
+    const phaseRows = phaseMap.get(String(quotation.id)) || (quotationAny.paymentPhases || []);
     const products = quotationAny.products;
     const customer = quotationAny.customer;
     const dealer = quotationAny.dealer;
@@ -1481,6 +1558,13 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
       totalAmount: Number(quotation.totalAmount || pricing.totalAmount),
       finalAmount: Number(quotation.finalAmount || pricing.finalAmount)
     };
+
+    const subtotalNum = Number(quotation.subtotal || finalPricing.subtotal);
+    const totalPaidForRemaining =
+      phaseRows.length > 0
+        ? sumPhasePaidAmounts(phaseRows as PaymentPhaseRecord[])
+        : Number(quotation.paidAmount || 0);
+    const remainingAmount = remainingPaymentAgainstSubtotal(subtotalNum, totalPaidForRemaining);
 
     res.json({
       success: true,
@@ -1550,11 +1634,14 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
         documents: resolvedDocuments,
         paymentType: quotationAny.paymentType || null,
         paymentMode: quotationAny.paymentType || quotation.paymentMode,
+        subtotal: subtotalNum,
         paidAmount: quotation.paidAmount ? Number(quotation.paidAmount) : null,
+        remaining: remainingAmount,
+        remainingAmount,
         paymentDate: quotation.paymentDate,
         paymentStatus: quotation.paymentStatus,
-        installments: quotationAny.paymentPhases || [],
-        paymentPhases: quotationAny.paymentPhases || [],
+        installments: phaseRows,
+        paymentPhases: phaseRows,
         createdAt: quotation.createdAt,
         validUntil: quotation.validUntil
       }
@@ -2106,10 +2193,48 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
     const { actorId } = resolveActorForAudit(req);
     if (phasePayload && Array.isArray(phasePayload)) {
       const normalizedPhases = normalizePaymentPhases(phasePayload, actorId);
-      const totalAmount = normalizedPhases.reduce((sum, phase) => sum + Number(phase.amount || 0), 0);
-      const totalPaidAmount = normalizedPhases.reduce((sum, phase) => sum + Number(phase.paidAmount || 0), 0);
-      const effectivePaymentStatus = calculatePaymentStatus(totalPaidAmount, totalAmount);
-      const latestPaymentDate = normalizedPhases
+      for (const phase of normalizedPhases) {
+        const existing = await QuotationPaymentPhase.findOne({
+          where: {
+            quotationId: quotation.id,
+            phaseNumber: phase.phaseNumber
+          }
+        });
+
+        const payload = {
+          quotationId: quotation.id,
+          phaseNumber: phase.phaseNumber,
+          phaseName: phase.phaseName,
+          amount: phase.amount,
+          paidAmount: phase.paidAmount,
+          status: phase.status,
+          dueDate: phase.dueDate ? new Date(phase.dueDate) : null,
+          paymentDate: phase.paymentDate ? new Date(phase.paymentDate) : null,
+          paymentMode: phase.paymentMode || null,
+          transactionId: phase.transactionId || null,
+          updatedBy: actorId,
+          updatedAtPhase: new Date()
+        };
+
+        if (existing) {
+          await existing.update(payload);
+        } else {
+          await QuotationPaymentPhase.create({
+            id: uuidv4(),
+            ...payload
+          });
+        }
+      }
+
+      const phaseRows = await QuotationPaymentPhase.findAll({
+        where: { quotationId: quotation.id },
+        order: [['phaseNumber', 'ASC']]
+      });
+      const mergedPhases = (phaseRows as any[]).map(serializePaymentPhaseRow);
+      const totalPaidAmount = sumPhasePaidAmounts(mergedPhases);
+      const paymentCapSubtotal = Number(quotation.subtotal || 0);
+      const effectivePaymentStatus = calculatePaymentStatus(totalPaidAmount, paymentCapSubtotal);
+      const latestPaymentDate = mergedPhases
         .map((phase) => phase.paymentDate)
         .filter((value): value is string => !!value)
         .sort()
@@ -2121,7 +2246,7 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
         paymentStatus: effectivePaymentStatus,
         paidAmount: totalPaidAmount,
         paymentDate: latestPaymentDate ? new Date(latestPaymentDate) : quotation.paymentDate,
-        paymentPhases: normalizedPhases,
+        paymentPhases: mergedPhases,
         paymentPlanUpdatedBy: actorId,
         paymentPlanUpdatedAt: new Date()
       });
@@ -2134,16 +2259,30 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
       });
     }
 
+    await quotation.reload();
+    const latestPhaseRows = await QuotationPaymentPhase.findAll({
+      where: { quotationId: quotation.id },
+      order: [['phaseNumber', 'ASC']]
+    });
+    const responsePhases = (latestPhaseRows as any[]).map(serializePaymentPhaseRow);
+    const totalPaidSaved = quotation.paidAmount != null ? Number(quotation.paidAmount) : sumPhasePaidAmounts(responsePhases);
+    const subtotalNum = Number(quotation.subtotal || 0);
+    const remainingAmount = remainingPaymentAgainstSubtotal(subtotalNum, totalPaidSaved);
+
     res.json({
       success: true,
       data: {
         id: quotation.id,
         quotationId: quotation.id,
         paymentType: (quotation as any).paymentType || null,
-        paymentMode: (quotation as any).paymentType || quotation.paymentMode,
+        paymentMode: quotation.paymentMode,
         paymentStatus: quotation.paymentStatus,
-        installments: quotation.paymentPhases || [],
-        paymentPhases: quotation.paymentPhases || [],
+        subtotal: subtotalNum,
+        paidAmount: totalPaidSaved,
+        remaining: remainingAmount,
+        remainingAmount,
+        installments: responsePhases,
+        paymentPhases: responsePhases,
         paymentPlanUpdatedBy: (quotation as any).paymentPlanUpdatedBy || null,
         paymentPlanUpdatedAt: (quotation as any).paymentPlanUpdatedAt || null,
         updatedAt: quotation.updatedAt
