@@ -3,6 +3,7 @@ import { Quotation, QuotationPaymentPhase, Dealer, Customer, Visitor } from '../
 import { Op } from 'sequelize';
 import { logError, logInfo } from '../utils/loggerHelper';
 import { normalizePaymentModeInput } from '../utils/paymentMode';
+import { quotationPaymentApiFields } from '../utils/quotationApiJson';
 import { emitRealtime, realtimeEvents } from '../utils/realtime';
 
 const sumPhasePaidAmounts = (phases: { paidAmount?: number }[]): number =>
@@ -35,6 +36,21 @@ const resolveDealerIdForInventoryUser = async (userId: string, username?: string
   });
   return dealer ? dealer.id : null;
 };
+
+const APPROVAL_PAYMENT_TYPES = ['loan', 'cash', 'mix'] as const;
+const IFSC_REGEX = /^[A-Z]{4}0[A-Z0-9]{6}$/;
+
+function normalizeApprovalPaymentType(raw: unknown): 'loan' | 'cash' | 'mix' | null {
+  if (typeof raw !== 'string') return null;
+  const v = raw.trim().toLowerCase();
+  return (APPROVAL_PAYMENT_TYPES as readonly string[]).includes(v) ? (v as 'loan' | 'cash' | 'mix') : null;
+}
+
+function normalizeIfscValue(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const v = raw.trim().toUpperCase().replace(/\s/g, '');
+  return IFSC_REGEX.test(v) ? v : null;
+}
 
 // Get all quotations (admin)
 export const getAllQuotations = async (req: Request, res: Response): Promise<void> => {
@@ -143,6 +159,10 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
           const totalPaidForRemaining =
             phases.length > 0 ? sumPhasePaidAmounts(phases) : Number(q.paidAmount || 0);
           const remainingAmount = remainingAgainstSubtotal(subtotalNum, totalPaidForRemaining);
+          const row =
+            typeof qAny.get === 'function'
+              ? (qAny.get({ plain: true }) as Record<string, unknown>)
+              : (q as unknown as Record<string, unknown>);
           return {
             id: q.id,
             dealer: qAny.dealer ? {
@@ -156,8 +176,7 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
               mobile: qAny.customer.mobile
             } : null,
             systemType: q.systemType,
-            paymentType: (q as any).paymentType || null,
-            paymentMode: (q as any).paymentType || q.paymentMode || null,
+            ...quotationPaymentApiFields(row),
             paymentStatus: (q as any).paymentStatus || null,
             subtotal: subtotalNum,
             paidAmount: q.paidAmount !== undefined && q.paidAmount !== null ? Number(q.paidAmount) : null,
@@ -190,33 +209,40 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
   }
 };
 
-// Update quotation status (admin)
+// Update quotation status (admin) — see BACKEND_ADMIN_QUOTATION_STATUS.ts
 export const updateQuotationStatus = async (req: Request, res: Response): Promise<void> => {
   try {
     if (!req.dealer || req.dealer.role !== 'admin') {
-      res.status(403).json({
+      res.status(401).json({
         success: false,
-        error: { code: 'AUTH_004', message: 'Insufficient permissions' }
+        error: { code: 'AUTH_003', message: 'Admin required' }
       });
       return;
     }
 
     const { quotationId } = req.params;
-    const { status, paymentType: incomingPaymentType, paymentMode } = req.body as {
+    if (!quotationId) {
+      res.status(400).json({
+        success: false,
+        error: { code: 'VAL_001', message: 'Quotation ID required' }
+      });
+      return;
+    }
+
+    const body = req.body as {
       status: 'pending' | 'approved' | 'rejected' | 'completed';
       paymentType?: 'loan' | 'cash' | 'mix';
       paymentMode?: 'loan' | 'cash' | 'mix';
+      bankName?: string;
+      bankIfsc?: string;
+      bank_ifsc?: string;
     };
-    const paymentType = incomingPaymentType || paymentMode;
-
-    if (!['pending', 'approved', 'rejected', 'completed'].includes(status)) {
+    const statusRaw = body.status;
+    const allowed = ['pending', 'approved', 'rejected', 'completed'] as const;
+    if (!allowed.includes(statusRaw as (typeof allowed)[number])) {
       res.status(400).json({
         success: false,
-        error: {
-          code: 'VAL_001',
-          message: 'Invalid status',
-          details: [{ field: 'status', message: 'Status must be one of: pending, approved, rejected, completed' }]
-        }
+        error: { code: 'VAL_002', message: `status must be one of: ${allowed.join(', ')}` }
       });
       return;
     }
@@ -230,40 +256,68 @@ export const updateQuotationStatus = async (req: Request, res: Response): Promis
       return;
     }
 
-    const updateData: any = { status };
-    if (status === 'approved' && !paymentType) {
-      res.status(400).json({
-        success: false,
-        error: {
-          code: 'VAL_001',
-          message: 'paymentType is required when approving quotation',
-          details: [{ field: 'paymentType', message: 'paymentType is required when approving quotation' }]
-        }
-      });
-      return;
-    }
+    const updateData: Record<string, unknown> = { status: statusRaw };
 
-    if (paymentType !== undefined) {
-      updateData.paymentType = paymentType;
-      // backward-compatible mirror for existing consumers
-      updateData.paymentMode = paymentType;
-    }
-    if (status === 'approved') {
+    if (statusRaw === 'approved') {
+      const paymentTypeResolved =
+        normalizeApprovalPaymentType(body.paymentType) ?? normalizeApprovalPaymentType(body.paymentMode);
+      if (!paymentTypeResolved) {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'VAL_003',
+            message: 'paymentType or paymentMode required (loan, cash, mix)'
+          }
+        });
+        return;
+      }
+
+      updateData.paymentMode = paymentTypeResolved;
+      updateData.paymentType = paymentTypeResolved;
+
+      if (paymentTypeResolved === 'loan' || paymentTypeResolved === 'mix') {
+        const bankName = typeof body.bankName === 'string' ? body.bankName.trim() : '';
+        const ifsc = normalizeIfscValue(body.bankIfsc ?? body.bank_ifsc);
+        if (!bankName) {
+          res.status(400).json({
+            success: false,
+            error: { code: 'VAL_004', message: 'bankName required for loan/mix' }
+          });
+          return;
+        }
+        if (!ifsc) {
+          res.status(400).json({
+            success: false,
+            error: { code: 'VAL_005', message: 'Valid 11-char bankIfsc required for loan/mix' }
+          });
+          return;
+        }
+        updateData.bankName = bankName;
+        updateData.bankIfsc = ifsc;
+      } else {
+        updateData.bankName = null;
+        updateData.bankIfsc = null;
+      }
+
       updateData.installationStatus = 'pending_installer';
       updateData.approvedAt = new Date();
+    } else if (statusRaw === 'rejected') {
+      updateData.bankName = null;
+      updateData.bankIfsc = null;
+      updateData.paymentMode = null;
     }
+
     await quotation.update(updateData);
+    await quotation.reload();
 
     res.json({
       success: true,
       data: {
-        id: quotation.id,
+        id: quotationId,
         status: quotation.status,
-        paymentType: (quotation as any).paymentType || null,
-        paymentMode: (quotation as any).paymentType || (quotation as any).paymentMode || null,
-        installationStatus: (quotation as any).installationStatus,
-        approvedAt: (quotation as any).approvedAt || null,
-        updatedAt: quotation.updatedAt
+        paymentMode: quotation.paymentMode,
+        bankName: quotation.bankName ?? null,
+        bankIfsc: quotation.bankIfsc ?? null
       }
     });
 
@@ -271,14 +325,16 @@ export const updateQuotationStatus = async (req: Request, res: Response): Promis
       quotationId: quotation.id,
       adminId: req.dealer.id,
       status: quotation.status,
-      paymentType: (quotation as any).paymentType || null,
+      paymentMode: quotation.paymentMode,
+      bankName: quotation.bankName ?? null,
+      bankIfsc: quotation.bankIfsc ?? null,
       timestamp: new Date().toISOString()
     });
   } catch (error) {
     logError('Update quotation status error', error);
     res.status(500).json({
       success: false,
-      error: { code: 'SYS_001', message: 'Internal server error' }
+      error: { code: 'SYS_001', message: 'Internal error' }
     });
   }
 };
@@ -337,13 +393,13 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
     const totalPaidForRemaining =
       phases.length > 0 ? sumPhasePaidAmounts(phases) : Number(quotation.paidAmount || 0);
     const remainingAmount = remainingAgainstSubtotal(subtotalNum, totalPaidForRemaining);
+    const row = quotation.get({ plain: true }) as unknown as Record<string, unknown>;
     res.json({
       success: true,
       data: {
         id: quotation.id,
         status: quotation.status,
-        paymentType: quotationAny.paymentType || null,
-        paymentMode: quotationAny.paymentType || quotation.paymentMode || null,
+        ...quotationPaymentApiFields(row),
         paymentStatus: quotationAny.paymentStatus || null,
         subtotal: subtotalNum,
         paidAmount: quotation.paidAmount !== undefined && quotation.paidAmount !== null ? Number(quotation.paidAmount) : null,

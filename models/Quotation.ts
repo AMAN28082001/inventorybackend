@@ -18,6 +18,8 @@ interface QuotationAttributes {
   discountAmount: number;  // Discount amount
   paymentMode?: 'cash' | 'upi' | 'loan' | 'netbanking' | 'bank_transfer' | 'cheque' | 'card' | 'mix' | null;
   paymentType?: 'loan' | 'cash' | 'mix' | null;
+  bankName?: string | null;
+  bankIfsc?: string | null;
   paidAmount?: number | null;
   paymentDate?: Date | null;
   paymentStatus?: 'pending' | 'partial' | 'completed' | null;
@@ -54,7 +56,7 @@ interface QuotationAttributes {
 
 interface QuotationCreationAttributes extends Optional<
   QuotationAttributes,
-  'id' | 'status' | 'discount' | 'createdAt' | 'updatedAt' | 'centralSubsidy' | 'stateSubsidy' | 'totalSubsidy' | 'amountAfterSubsidy' | 'discountAmount' | 'paymentMode' | 'paymentType' | 'paidAmount' | 'paymentDate' | 'paymentStatus' | 'paymentPhases' | 'paymentPlanUpdatedBy' | 'paymentPlanUpdatedAt' | 'approvedAt' | 'installationStatus' | 'installerId' | 'installerActionAt' | 'installerInProgressAt' | 'installerApprovedAt' | 'installerRemarks' | 'baldevId' | 'baldevActionAt' | 'baldevRemarks' | 'completionAt'
+  'id' | 'status' | 'discount' | 'createdAt' | 'updatedAt' | 'centralSubsidy' | 'stateSubsidy' | 'totalSubsidy' | 'amountAfterSubsidy' | 'discountAmount' |   'paymentMode' | 'paymentType' | 'bankName' | 'bankIfsc' | 'paidAmount' | 'paymentDate' | 'paymentStatus' | 'paymentPhases' | 'paymentPlanUpdatedBy' | 'paymentPlanUpdatedAt' | 'approvedAt' | 'installationStatus' | 'installerId' | 'installerActionAt' | 'installerInProgressAt' | 'installerApprovedAt' | 'installerRemarks' | 'baldevId' | 'baldevActionAt' | 'baldevRemarks' | 'completionAt'
 > {}
 
 class Quotation extends Model<QuotationAttributes, QuotationCreationAttributes> implements QuotationAttributes {
@@ -74,6 +76,8 @@ class Quotation extends Model<QuotationAttributes, QuotationCreationAttributes> 
   public discountAmount!: number;  // Discount amount
   public paymentMode!: 'cash' | 'upi' | 'loan' | 'netbanking' | 'bank_transfer' | 'cheque' | 'card' | 'mix' | null;
   public paymentType!: 'loan' | 'cash' | 'mix' | null;
+  public bankName!: string | null;
+  public bankIfsc!: string | null;
   public paidAmount!: number | null;
   public paymentDate!: Date | null;
   public paymentStatus!: 'pending' | 'partial' | 'completed' | null;
@@ -179,6 +183,14 @@ Quotation.init(
     },
     paymentType: {
       type: DataTypes.STRING(10),
+      allowNull: true
+    },
+    bankName: {
+      type: DataTypes.STRING(255),
+      allowNull: true
+    },
+    bankIfsc: {
+      type: DataTypes.STRING(11),
       allowNull: true
     },
     paidAmount: {

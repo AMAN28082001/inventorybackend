@@ -10,6 +10,7 @@ import { logError, logInfo } from '../utils/loggerHelper';
 import { deleteFileFromS3IfExists } from '../middleware/upload';
 import { generatePublicUrl } from '../utils/s3Service';
 import { normalizePaymentModeInput } from '../utils/paymentMode';
+import { quotationPaymentApiFields } from '../utils/quotationApiJson';
 
 // Helper function to normalize catalog data - ensures all arrays are arrays (never null/undefined)
 const normalizeCatalog = (catalog: any): any => {
@@ -1236,7 +1237,12 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
           ? sumPhasePaidAmounts(phaseRows as PaymentPhaseRecord[])
           : Number(q.paidAmount || 0);
       const remainingAmount = remainingPaymentAgainstSubtotal(subtotalNum, totalPaidForRemaining);
-      
+      const qAny = q as any;
+      const row =
+        typeof qAny.get === 'function'
+          ? (qAny.get({ plain: true }) as Record<string, unknown>)
+          : (q as unknown as Record<string, unknown>);
+
       return {
         id: q.id,
         dealerId: q.dealerId,
@@ -1259,8 +1265,7 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
           phase: products.phase
         } : null,
         systemType: q.systemType,
-        paymentType: (q as any).paymentType || null,
-        paymentMode: (q as any).paymentType || q.paymentMode,
+        ...quotationPaymentApiFields(row),
         subtotal: subtotalNum,
         paidAmount: q.paidAmount !== undefined && q.paidAmount !== null ? Number(q.paidAmount) : null,
         remaining: remainingAmount,
@@ -1412,6 +1417,12 @@ export const downloadQuotationsExcel = async (req: Request, res: Response): Prom
       'Customer Name': `${q.customer?.firstName || ''} ${q.customer?.lastName || ''}`.trim(),
       'Mobile': q.customer?.mobile || '',
       'Payment Type': q.paymentType || q.paymentMode || '',
+      'Bank & IFSC': (() => {
+        const b = (q.bankName || '').trim();
+        const i = (q.bankIfsc || '').trim();
+        if (b && i) return `${b} · ${i}`;
+        return b || i || '';
+      })(),
       'Payment Status': q.paymentStatus || '',
       'Installments': Array.isArray(q.paymentPhases)
         ? q.paymentPhases.map((phase: any) => `${phase.phaseName || `Phase ${phase.phaseNumber}`}: ${Number(phase.paidAmount || 0)}/${Number(phase.amount || 0)} (${phase.status || ''})`).join(' | ')
@@ -1565,6 +1576,7 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
         ? sumPhasePaidAmounts(phaseRows as PaymentPhaseRecord[])
         : Number(quotation.paidAmount || 0);
     const remainingAmount = remainingPaymentAgainstSubtotal(subtotalNum, totalPaidForRemaining);
+    const rowById = quotation.get({ plain: true }) as unknown as Record<string, unknown>;
 
     res.json({
       success: true,
@@ -1632,8 +1644,7 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
           installationDocs.map((doc: any) => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc))
         ),
         documents: resolvedDocuments,
-        paymentType: quotationAny.paymentType || null,
-        paymentMode: quotationAny.paymentType || quotation.paymentMode,
+        ...quotationPaymentApiFields(rowById),
         subtotal: subtotalNum,
         paidAmount: quotation.paidAmount ? Number(quotation.paidAmount) : null,
         remaining: remainingAmount,
