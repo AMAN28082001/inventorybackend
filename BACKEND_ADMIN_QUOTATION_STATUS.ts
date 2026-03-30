@@ -446,6 +446,42 @@ export function parseTaggedCallRemark(rawRemark) {
 }
 
 /**
+ * Allowed backend statusCategory enum values.
+ */
+export const ALLOWED_STATUS_CATEGORIES = [
+  "call_connectivity",
+  "lead_validity",
+  "customer_intent",
+  "financial",
+  "competition",
+  "schedule",
+  "other",
+]
+
+const STATUS_CATEGORY_ALIASES = {
+  // UI labels (legacy/frontend display labels) -> backend enum keys
+  "Part 1 — Call & lead quality": "call_connectivity",
+  "Part 2 — Interest & qualification": "customer_intent",
+  "Part 3 — Follow-up & sales": "schedule",
+  "Part 4 — Rejection / lost": "competition",
+  // keep raw keys idempotent
+  call_connectivity: "call_connectivity",
+  lead_validity: "lead_validity",
+  customer_intent: "customer_intent",
+  financial: "financial",
+  competition: "competition",
+  schedule: "schedule",
+  other: "other",
+}
+
+export function normalizeStatusCategory(rawCategory) {
+  const clean = String(rawCategory || "").trim()
+  if (!clean) return null
+  const mapped = STATUS_CATEGORY_ALIASES[clean] || clean
+  return ALLOWED_STATUS_CATEGORIES.includes(mapped) ? mapped : null
+}
+
+/**
  * Action serializer (use this in /dealers/me/calling-queue/next and related APIs)
  */
 export function callingActionToApiJson(row) {
@@ -481,4 +517,129 @@ export function callingActionToApiJson(row) {
  *   recentActions: actionRows.map(callingActionToApiJson),  // no fixed 10-row slice
  *   counts: { pending, queued, scheduled, completed }
  * }
+ */
+
+/**
+ * PATCH /dealers/me/calling-queue/:leadId/action
+ *
+ * Frontend behavior (Calling Data page):
+ * - "Submit Status" sends:
+ *     {
+ *       action: "called" | "follow_up" | "not_interested" | "rescheduled",
+ *       callRemark: "[Status Category] Status | optional free remark",
+ *       nextFollowUpAt?: ISO string,
+ *       actionAt?: ISO string
+ *     }
+ *
+ * Backend MUST:
+ * - Parse payload.callRemark using parseTaggedCallRemark()
+ * - Persist values separately:
+ *     status_category   (or statusCategory)
+ *     status_text       (or statusLabel / status)
+ *     remark            (free text only, without tags)
+ * - Keep legacy call_remark column updated (optional but recommended):
+ *     call_remark = `[${status_category}] ${status_text}${remark ? " | "+remark : ""}`
+ *
+ * If you currently store only call_remark text, you can still pass these
+ * values through by parsing during GET responses (parse on the fly).
+ */
+export async function patchDealerCallingQueueAction(req, res, db) {
+  try {
+    const dealer = req.dealer ?? req.user
+    if (!dealer) {
+      res.status(401).json({ success: false, error: { code: "AUTH_003", message: "Dealer required" } })
+      return
+    }
+
+    const leadId = req.params.leadId || req.params.id
+    if (!leadId) {
+      res.status(400).json({ success: false, error: { code: "VAL_001", message: "Lead id required" } })
+      return
+    }
+
+    const body = req.body || {}
+    const action = body.action
+
+    // For "start" actions, callRemark may be missing.
+    const parsed = parseTaggedCallRemark(body.callRemark ?? body.call_remark)
+    const normalizedCategory = normalizeStatusCategory(parsed.statusCategory)
+
+    const statusCategory = normalizedCategory
+    const statusText = parsed.status
+    const remark = parsed.remark
+
+    const updates: any = {
+      action,
+      nextFollowUpAt: body.nextFollowUpAt ?? null,
+      actionAt: body.actionAt ?? new Date(),
+    }
+
+    if (body.callRemark || body.call_remark) {
+      if (!normalizedCategory) {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: "VAL_001",
+            message: `Invalid statusCategory. Allowed values: ${ALLOWED_STATUS_CATEGORIES.join(",")}`,
+          },
+        })
+        return
+      }
+
+      updates.status_category = statusCategory
+      updates.status_text = statusText
+      updates.remark = remark
+      updates.call_remark = `[${statusCategory}] ${statusText}${remark ? ` | ${remark}` : ''}`
+    }
+
+    // MUST update the latest state for this leadId (so GET de-duplicates).
+    await db.dealerCallingLeads.updateById(leadId, updates)
+
+    const updatedRow = await db.dealerCallingLeads.findById(leadId)
+    res.json({
+      success: true,
+      lead: callingActionToApiJson(updatedRow),
+    })
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ success: false, error: { code: "SYS_001", message: "Internal error" } })
+  }
+}
+
+/**
+ * -----------------------------------------------------------------------------
+ * TRANSITION RULE UPDATE (fix "Invalid lead action transition" in Recent Actions)
+ * -----------------------------------------------------------------------------
+ *
+ * Problem:
+ * - Existing transition validator often allows only queue flow:
+ *     assigned/in_progress -> called/follow_up/not_interested/rescheduled
+ * - But Recent Actions cards are already completed/history rows, so editing status there
+ *   can trigger LEAD_005 "Invalid lead action transition".
+ *
+ * Required backend behavior:
+ * - Support an EDIT path for already-acted leads from Recent Actions.
+ * - If lead belongs to current dealer and exists, allow updating:
+ *     status_category, status_text, remark, call_remark, next_follow_up_at, action, action_at
+ *   even when current status is completed/rescheduled.
+ *
+ * Recommended validation:
+ * 1) Keep strict transition for current queue actions (`start` / first completion).
+ * 2) Add "edit mode" for recent action updates:
+ *    - Trigger when payload contains callRemark or status fields for an already-acted lead
+ *    - Validate dealer ownership
+ *    - Perform UPDATE (not INSERT) on latest row for that lead
+ *    - Return updated row via callingActionToApiJson
+ *
+ * Pseudo-code:
+ *   const lead = findLeadById(leadId)
+ *   if (!lead || lead.dealerId !== dealer.id) -> LEAD_004
+ *   const isEditMode = lead.status in ["completed","rescheduled"] || body.editMode === true
+ *   if (isEditMode) {
+ *     update latest action fields and return success
+ *   } else {
+ *     apply existing strict transition matrix
+ *   }
+ *
+ * This removes false LEAD_005 failures from Recent Actions status edits.
  */

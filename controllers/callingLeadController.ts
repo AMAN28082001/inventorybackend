@@ -37,6 +37,19 @@ const ALLOWED_STATUS_CATEGORIES = [
   'schedule',
   'other'
 ] as const;
+const STATUS_CATEGORY_ALIASES: Record<string, (typeof ALLOWED_STATUS_CATEGORIES)[number]> = {
+  'Part 1 — Call & lead quality': 'call_connectivity',
+  'Part 2 — Interest & qualification': 'customer_intent',
+  'Part 3 — Follow-up & sales': 'schedule',
+  'Part 4 — Rejection / lost': 'competition',
+  call_connectivity: 'call_connectivity',
+  lead_validity: 'lead_validity',
+  customer_intent: 'customer_intent',
+  financial: 'financial',
+  competition: 'competition',
+  schedule: 'schedule',
+  other: 'other'
+};
 const DATE_RANGE_ALIASES = ['today', 'week', 'month', 'custom'] as const;
 
 type CallingActionType = 'called' | 'follow_up' | 'not_interested' | 'rescheduled';
@@ -94,9 +107,19 @@ const parseTaggedCallRemark = (rawRemark: unknown): { statusCategory: string | n
   return { statusCategory, status, remark };
 };
 
+const normalizeStatusCategory = (rawCategory: unknown): (typeof ALLOWED_STATUS_CATEGORIES)[number] | null => {
+  const clean = String(rawCategory || '').trim();
+  if (!clean) return null;
+  const mapped = STATUS_CATEGORY_ALIASES[clean] || clean;
+  return (ALLOWED_STATUS_CATEGORIES as readonly string[]).includes(mapped) ? (mapped as (typeof ALLOWED_STATUS_CATEGORIES)[number]) : null;
+};
+
 const callingActionToApiJson = (row: any) => {
-  const parsed = parseTaggedCallRemark(row.callRemark);
+  const parsed = parseTaggedCallRemark(row.callRemark ?? row.call_remark);
+  const normalizedCategory = normalizeStatusCategory(row.statusCategory ?? row.status_category ?? parsed.statusCategory);
   return {
+    // Stable identifier: UI should update the same card for the same leadId.
+    id: row.leadId,
     leadId: row.leadId,
     name: row.lead?.name || '',
     mobile: row.lead?.mobile || '',
@@ -110,9 +133,12 @@ const callingActionToApiJson = (row: any) => {
     statusCategoryKey: row.statusCategory,
     statusCategoryLabel: row.statusLabel,
     // explicit fields required by frontend
-    statusCategory: row.statusCategory || parsed.statusCategory || null,
+    statusCategory: normalizedCategory,
     status: row.statusLabel || parsed.status || row.status || null,
     remark: row.statusReason || parsed.remark || null,
+    // Required by Calling Data > Recent Actions card
+    kNumber: row.kNumber ?? row.k_number ?? row.lead?.kNumber ?? row.lead?.k_number ?? null,
+    address: row.address ?? row.leadAddress ?? row.lead_address ?? row.lead?.address ?? null,
     nextFollowUpAt: row.nextFollowUpAt,
     assignmentStatus: row.status
   };
@@ -978,7 +1004,18 @@ const buildRecentActions = async (dealerId: string, limit = 1000) => {
     limit
   });
 
-  return rows.map((row: any) => callingActionToApiJson(row));
+  // UI requirement: at most ONE recent item per leadId.
+  // We return the latest history row per leadId (rows are already sorted DESC).
+  const seen = new Set<string>();
+  const out: any[] = [];
+  for (const row of rows as any[]) {
+    const leadId = String(row.leadId);
+    if (seen.has(leadId)) continue;
+    seen.add(leadId);
+    out.push(callingActionToApiJson(row));
+    if (out.length >= limit) break;
+  }
+  return out;
 };
 
 const buildDealerQueueSnapshot = async (dealerId: string, recentActionsLimit = 1000) => {
@@ -1052,7 +1089,8 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
       statusReason,
       isCustomReason,
       statusCategoryKey,
-      statusCategoryLabel
+      statusCategoryLabel,
+      editMode
     } = req.body as {
       action: 'start' | 'called' | 'follow_up' | 'not_interested' | 'rescheduled';
       callRemark?: string;
@@ -1064,10 +1102,24 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
       isCustomReason?: boolean;
       statusCategoryKey?: string;
       statusCategoryLabel?: string;
+      editMode?: boolean;
     };
 
-    const effectiveStatusCategory = statusCategoryKey || statusCategory || inferStatusCategoryFromRemark(callRemark) || null;
-    const effectiveStatusLabel = statusCategoryLabel || statusLabel || null;
+    const parsed = parseTaggedCallRemark(callRemark ?? null);
+    const hasParsedTags = Boolean(parsed.statusCategory || parsed.status);
+
+    const effectiveStatusCategory =
+      normalizeStatusCategory(statusCategoryKey) ||
+      normalizeStatusCategory(statusCategory) ||
+      normalizeStatusCategory(parsed.statusCategory) ||
+      inferStatusCategoryFromRemark(callRemark) ||
+      null;
+    const effectiveStatusLabel = statusCategoryLabel || statusLabel || parsed.status || null;
+    const effectiveStatusReason = (hasParsedTags ? parsed.remark : null) || statusReason || null;
+    const legacyCallRemark =
+      effectiveStatusCategory && effectiveStatusLabel
+        ? `[${effectiveStatusCategory}] ${effectiveStatusLabel}${effectiveStatusReason ? ` | ${effectiveStatusReason}` : ''}`
+        : null;
 
     if (effectiveStatusCategory && !(ALLOWED_STATUS_CATEGORIES as readonly string[]).includes(effectiveStatusCategory)) {
       res.status(400).json({
@@ -1122,7 +1174,7 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
       }
     }
 
-    const requiresManualReason = statusReason === 'Others' || isCustomReason === true;
+    const requiresManualReason = effectiveStatusReason === 'Others' || isCustomReason === true;
     if (requiresManualReason && (!callRemark || !callRemark.trim())) {
       res.status(400).json({
         success: false,
@@ -1152,7 +1204,13 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
         throw error;
       }
 
-      if (!ACTIONABLE_STATUSES.includes(assignment.status)) {
+      const hasStatusUpdatePayload = Boolean(
+        callRemark || statusCategory || statusCategoryKey || statusLabel || statusCategoryLabel || statusReason || isCustomReason
+      );
+      const isEditMode = Boolean(editMode) || hasStatusUpdatePayload;
+      const canEditCompleted = isEditMode && assignment.status === 'completed' && action !== 'start';
+
+      if (!ACTIONABLE_STATUSES.includes(assignment.status) && !canEditCompleted) {
         const error: any = new Error('INVALID_TRANSITION');
         error.code = 'LEAD_005';
         throw error;
@@ -1160,8 +1218,8 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
 
       const effectiveActionAt = actionDate || new Date();
       const effectiveCallRemark = action === 'start'
-        ? (callRemark ?? assignment.callRemark ?? null)
-        : (callRemark ?? null);
+        ? (callRemark ?? assignment.callRemark ?? legacyCallRemark ?? null)
+        : (callRemark ?? legacyCallRemark ?? null);
       const effectiveNextFollowUpAt = action === 'rescheduled' ? followUpDate : null;
       if (action === 'start') {
         if (assignment.status !== 'assigned') {
@@ -1216,29 +1274,74 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
           })
           : null;
 
-        await CallingActionHistory.create({
-          id: uuidv4(),
-          leadId: assignment.leadId,
-          dealerId: assignment.dealerId,
-          dealerName,
-          action,
-          reasonCategory: getReasonCategoryFromAction(action),
-          callRemark: effectiveCallRemark,
-          statusCategory: effectiveStatusCategory,
-          statusLabel: effectiveStatusLabel,
-          statusReason: statusReason || null,
-          isCustomReason: Boolean(isCustomReason),
-          actionAt: effectiveActionAt,
-          nextFollowUpAt: effectiveNextFollowUpAt,
-          customerName,
-          customerMobile,
-          customerAddress
-        }, { transaction });
+        if (canEditCompleted) {
+          // Recent Actions edit path: update latest history row for this lead/dealer.
+          const latest = await CallingActionHistory.findOne({
+            where: { leadId: assignment.leadId, dealerId: assignment.dealerId },
+            order: [['actionAt', 'DESC'], ['createdAt', 'DESC']],
+            transaction,
+            lock: transaction.LOCK.UPDATE
+          });
+          if (latest) {
+            await latest.update({
+              action,
+              reasonCategory: getReasonCategoryFromAction(action),
+              callRemark: effectiveCallRemark,
+              statusCategory: effectiveStatusCategory,
+              statusLabel: effectiveStatusLabel,
+              statusReason: effectiveStatusReason || null,
+              isCustomReason: Boolean(isCustomReason),
+              actionAt: effectiveActionAt,
+              nextFollowUpAt: effectiveNextFollowUpAt,
+              customerName,
+              customerMobile,
+              customerAddress
+            }, { transaction });
+          } else {
+            await CallingActionHistory.create({
+              id: uuidv4(),
+              leadId: assignment.leadId,
+              dealerId: assignment.dealerId,
+              dealerName,
+              action,
+              reasonCategory: getReasonCategoryFromAction(action),
+              callRemark: effectiveCallRemark,
+              statusCategory: effectiveStatusCategory,
+              statusLabel: effectiveStatusLabel,
+              statusReason: effectiveStatusReason || null,
+              isCustomReason: Boolean(isCustomReason),
+              actionAt: effectiveActionAt,
+              nextFollowUpAt: effectiveNextFollowUpAt,
+              customerName,
+              customerMobile,
+              customerAddress
+            }, { transaction });
+          }
+        } else {
+          await CallingActionHistory.create({
+            id: uuidv4(),
+            leadId: assignment.leadId,
+            dealerId: assignment.dealerId,
+            dealerName,
+            action,
+            reasonCategory: getReasonCategoryFromAction(action),
+            callRemark: effectiveCallRemark,
+            statusCategory: effectiveStatusCategory,
+            statusLabel: effectiveStatusLabel,
+            statusReason: effectiveStatusReason || null,
+            isCustomReason: Boolean(isCustomReason),
+            actionAt: effectiveActionAt,
+            nextFollowUpAt: effectiveNextFollowUpAt,
+            customerName,
+            customerMobile,
+            customerAddress
+          }, { transaction });
+        }
       }
         
       // Refill active slot only when work is completed.
       // Rescheduled leads stay with the same dealer and keep occupying an active slot.
-      if (action === 'called' || action === 'not_interested' || action === 'follow_up') {
+      if (!canEditCompleted && (action === 'called' || action === 'not_interested' || action === 'follow_up')) {
         await promoteQueuedLeadIfSlotAvailable(req.dealer!.id, DEFAULT_ACTIVE_LIMIT_PER_DEALER, transaction);
       }
 
