@@ -1,7 +1,7 @@
 import { DataTypes, Model, Optional } from 'sequelize';
 import sequelize from '../config/database';
 
-type DealerLeadAssignmentStatus = 'queued' | 'assigned' | 'in_progress' | 'rescheduled' | 'completed';
+type DealerLeadAssignmentStatus = 'queued' | 'active' | 'assigned' | 'in_progress' | 'rescheduled' | 'completed';
 type DealerLeadAction = 'called' | 'follow_up' | 'not_interested' | 'rescheduled';
 
 interface DealerLeadAssignmentAttributes {
@@ -61,9 +61,9 @@ DealerLeadAssignment.init(
       defaultValue: DataTypes.NOW
     },
     status: {
-      type: DataTypes.ENUM('queued', 'assigned', 'in_progress', 'rescheduled', 'completed'),
+      type: DataTypes.ENUM('queued', 'active', 'assigned', 'in_progress', 'rescheduled', 'completed'),
       allowNull: false,
-      defaultValue: 'assigned'
+      defaultValue: 'active'
     },
     action: {
       type: DataTypes.ENUM('called', 'follow_up', 'not_interested', 'rescheduled'),

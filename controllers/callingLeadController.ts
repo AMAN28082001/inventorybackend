@@ -23,8 +23,8 @@ const ADDRESS_KEYS = ['address'];
 const CITY_KEYS = ['city'];
 const STATE_KEYS = ['state', 'data ref. / state', 'data ref/state', 'data ref state'];
 const NOTE_KEYS = ['customernote', 'customer note', 'note', 'notes', 'remark', 'remarks'];
-const ACTIVE_STATUSES = ['assigned', 'in_progress', 'rescheduled'];
-const ACTIONABLE_STATUSES = ['assigned', 'in_progress', 'rescheduled'];
+const ACTIVE_STATUSES = ['active', 'assigned', 'in_progress'];
+const ACTIONABLE_STATUSES = ['active', 'assigned', 'in_progress', 'rescheduled'];
 const DEFAULT_ACTIVE_LIMIT_PER_DEALER = Number(process.env.ACTIVE_LIMIT_PER_DEALER || 1);
 const CALLING_ACTION_FILTER_RANGES = ['daily', 'weekly', 'monthly', 'last_month', 'all'] as const;
 const REPORT_ACTIONS = ['called', 'follow_up', 'not_interested', 'rescheduled'] as const;
@@ -484,10 +484,14 @@ const promoteQueuedLeadIfSlotAvailable = async (
   activeLimitPerDealer: number,
   transaction: any
 ): Promise<void> => {
+  const now = new Date();
   const activeCount = await DealerLeadAssignment.count({
     where: {
       dealerId,
-      status: { [Op.in]: ACTIVE_STATUSES }
+      [Op.or]: [
+        { status: { [Op.in]: ACTIVE_STATUSES } },
+        { status: 'rescheduled', nextFollowUpAt: { [Op.lte]: now } }
+      ]
     },
     transaction
   });
@@ -496,6 +500,7 @@ const promoteQueuedLeadIfSlotAvailable = async (
 
   const queued = await DealerLeadAssignment.findOne({
     where: {
+      dealerId,
       status: 'queued'
     },
     order: [['assignedAt', 'ASC']],
@@ -508,7 +513,7 @@ const promoteQueuedLeadIfSlotAvailable = async (
   await queued.update(
     {
       dealerId,
-      status: 'assigned',
+      status: 'active',
       assignedAt: new Date(),
       action: null,
       callRemark: null,
@@ -756,7 +761,7 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
         // 1) Fill active slots dealer-by-dealer (non-interleaved),
         // 2) Then place overflow into queued pool.
         let dealerId = dealerIds[queuedDealerPointer % dealerIds.length];
-        let nextStatus: 'assigned' | 'queued' = 'queued';
+        let nextStatus: 'active' | 'queued' = 'queued';
 
         const dealerWithCapacityIdx = dealerIds.findIndex((id) => dealerActiveCount[id] < activeLimitPerDealer);
         if (dealerWithCapacityIdx !== -1) {
@@ -767,7 +772,7 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
             activeDealerPointer = dealerWithCapacityIdx;
           }
           dealerId = dealerIds[activeDealerPointer];
-          nextStatus = 'assigned';
+          nextStatus = 'active';
         } else {
           queuedDealerPointer += 1;
           nextStatus = 'queued';
@@ -784,7 +789,7 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
           },
           { transaction }
         );
-        if (nextStatus === 'assigned') {
+        if (nextStatus === 'active') {
           assigned += 1;
           dealerActiveCount[dealerId] += 1;
           if (dealerActiveCount[dealerId] >= activeLimitPerDealer && dealerIds[activeDealerPointer] === dealerId) {
@@ -875,9 +880,7 @@ const buildCurrentLeadResponse = async (dealerId: string) => {
   const now = new Date();
   const sharedInclude = [{ model: CallingLead, as: 'lead' }] as any;
 
-  // Priority order without raw SQL literals:
-  // 1) due rescheduled leads, 2) in-progress, 3) assigned.
-  const assignment =
+  const pickCurrentAssignment = async (transaction?: any) => (
     await DealerLeadAssignment.findOne({
       where: {
         dealerId,
@@ -885,7 +888,8 @@ const buildCurrentLeadResponse = async (dealerId: string) => {
         nextFollowUpAt: { [Op.lte]: now }
       },
       include: sharedInclude,
-      order: [['nextFollowUpAt', 'ASC'], ['assignedAt', 'ASC']]
+      order: [['nextFollowUpAt', 'ASC'], ['assignedAt', 'ASC']],
+      transaction
     }) ||
     await DealerLeadAssignment.findOne({
       where: {
@@ -893,7 +897,17 @@ const buildCurrentLeadResponse = async (dealerId: string) => {
         status: 'in_progress'
       },
       include: sharedInclude,
-      order: [['assignedAt', 'ASC']]
+      order: [['assignedAt', 'ASC']],
+      transaction
+    }) ||
+    await DealerLeadAssignment.findOne({
+      where: {
+        dealerId,
+        status: 'active'
+      },
+      include: sharedInclude,
+      order: [['assignedAt', 'ASC']],
+      transaction
     }) ||
     await DealerLeadAssignment.findOne({
       where: {
@@ -901,8 +915,24 @@ const buildCurrentLeadResponse = async (dealerId: string) => {
         status: 'assigned'
       },
       include: sharedInclude,
-      order: [['assignedAt', 'ASC']]
+      order: [['assignedAt', 'ASC']],
+      transaction
+    })
+  );
+
+  // Priority order:
+  // 1) due rescheduled leads, 2) in-progress, 3) active, 4) assigned (legacy).
+  let assignment = await pickCurrentAssignment();
+
+  // Safety fallback:
+  // If dealer has queued work but no active card, promote one queued lead
+  // immediately so newly uploaded batches become visible without manual refresh loops.
+  if (!assignment) {
+    await sequelize.transaction(async (transaction) => {
+      await promoteQueuedLeadIfSlotAvailable(dealerId, DEFAULT_ACTIVE_LIMIT_PER_DEALER, transaction);
+      assignment = await pickCurrentAssignment(transaction);
     });
+  }
 
   const lead = assignment ? (assignment as any).lead : null;
   if (!assignment || !lead) return null;
@@ -937,7 +967,7 @@ const buildDealerQueueCounts = async (dealerId: string) => {
     DealerLeadAssignment.count({
       where: {
         dealerId,
-        status: { [Op.in]: ['assigned', 'in_progress'] }
+        status: { [Op.in]: ['active', 'assigned', 'in_progress'] }
       }
     }),
     DealerLeadAssignment.count({
@@ -1222,7 +1252,7 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
         : (callRemark ?? legacyCallRemark ?? null);
       const effectiveNextFollowUpAt = action === 'rescheduled' ? followUpDate : null;
       if (action === 'start') {
-        if (assignment.status !== 'assigned') {
+        if (!(assignment.status === 'assigned' || assignment.status === 'active')) {
           const error: any = new Error('INVALID_TRANSITION');
           error.code = 'LEAD_005';
           throw error;
@@ -1341,7 +1371,8 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
         
       // Refill active slot only when work is completed.
       // Rescheduled leads stay with the same dealer and keep occupying an active slot.
-      if (!canEditCompleted && (action === 'called' || action === 'not_interested' || action === 'follow_up')) {
+      // Use persisted status check so behavior stays correct even if action labels evolve.
+      if (!canEditCompleted && assignment.status === 'completed') {
         await promoteQueuedLeadIfSlotAvailable(req.dealer!.id, DEFAULT_ACTIVE_LIMIT_PER_DEALER, transaction);
       }
 
