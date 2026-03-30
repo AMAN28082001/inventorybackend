@@ -25,7 +25,7 @@ const STATE_KEYS = ['state', 'data ref. / state', 'data ref/state', 'data ref st
 const NOTE_KEYS = ['customernote', 'customer note', 'note', 'notes', 'remark', 'remarks'];
 const ACTIVE_STATUSES = ['assigned', 'in_progress', 'rescheduled'];
 const ACTIONABLE_STATUSES = ['assigned', 'in_progress', 'rescheduled'];
-const DEFAULT_ACTIVE_LIMIT_PER_DEALER = Number(process.env.ACTIVE_LIMIT_PER_DEALER || 8);
+const DEFAULT_ACTIVE_LIMIT_PER_DEALER = Number(process.env.ACTIVE_LIMIT_PER_DEALER || 1);
 const CALLING_ACTION_FILTER_RANGES = ['daily', 'weekly', 'monthly', 'last_month', 'all'] as const;
 const REPORT_ACTIONS = ['called', 'follow_up', 'not_interested', 'rescheduled'] as const;
 const ALLOWED_STATUS_CATEGORIES = [
@@ -79,6 +79,43 @@ const parseDateSafe = (value: string | undefined): Date | null => {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return null;
   return parsed;
+};
+
+const parseTaggedCallRemark = (rawRemark: unknown): { statusCategory: string | null; status: string | null; remark: string | null } => {
+  const raw = String(rawRemark || '').trim();
+  if (!raw) return { statusCategory: null, status: null, remark: null };
+  const match = raw.match(/^\[([^\]]+)\]\s*([^|]*?)\s*(?:\|\s*(.*))?$/);
+  if (!match) {
+    return { statusCategory: null, status: null, remark: raw };
+  }
+  const statusCategory = (match[1] || '').trim() || null;
+  const status = (match[2] || '').trim() || null;
+  const remark = (match[3] || '').trim() || null;
+  return { statusCategory, status, remark };
+};
+
+const callingActionToApiJson = (row: any) => {
+  const parsed = parseTaggedCallRemark(row.callRemark);
+  return {
+    leadId: row.leadId,
+    name: row.lead?.name || '',
+    mobile: row.lead?.mobile || '',
+    action: row.action,
+    actionAt: row.actionAt,
+    // compatibility
+    callRemark: row.callRemark,
+    statusLabel: row.statusLabel,
+    statusReason: row.statusReason,
+    isCustomReason: row.isCustomReason,
+    statusCategoryKey: row.statusCategory,
+    statusCategoryLabel: row.statusLabel,
+    // explicit fields required by frontend
+    statusCategory: row.statusCategory || parsed.statusCategory || null,
+    status: row.statusLabel || parsed.status || row.status || null,
+    remark: row.statusReason || parsed.remark || null,
+    nextFollowUpAt: row.nextFollowUpAt,
+    assignmentStatus: row.status
+  };
 };
 
 const parsePositiveInt = (value: unknown, fallback: number): number => {
@@ -468,7 +505,9 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
       return;
     }
 
-    const dealerIds = parseDealerIds(req.body.dealerIds);
+    const dealerIds = parseDealerIds(req.body.dealerIds).length
+      ? parseDealerIds(req.body.dealerIds)
+      : parseDealerIds(req.body['dealerIds[]']);
     const activeLimitPerDealer = Number(
       req.body.activeLimitPerDealer ??
       req.body.activeLeadsLimit ??
@@ -929,40 +968,25 @@ const buildScheduledLeads = async (dealerId: string) => {
   }));
 };
 
-const buildRecentActions = async (dealerId: string) => {
+const buildRecentActions = async (dealerId: string, limit = 1000) => {
   const rows = await CallingActionHistory.findAll({
     where: {
       dealerId
     },
     include: [{ model: CallingLead, as: 'lead' }],
     order: [['actionAt', 'DESC'], ['createdAt', 'DESC']],
-    limit: 30
+    limit
   });
 
-  return rows.map((row: any) => ({
-    leadId: row.leadId,
-    name: row.lead?.name || '',
-    mobile: row.lead?.mobile || '',
-    action: row.action,
-    actionAt: row.actionAt,
-    callRemark: row.callRemark,
-    statusCategory: row.statusCategory,
-    statusLabel: row.statusLabel,
-    statusReason: row.statusReason,
-    isCustomReason: row.isCustomReason,
-    statusCategoryKey: row.statusCategory,
-    statusCategoryLabel: row.statusLabel,
-    nextFollowUpAt: row.nextFollowUpAt,
-    status: row.status
-  }));
+  return rows.map((row: any) => callingActionToApiJson(row));
 };
 
-const buildDealerQueueSnapshot = async (dealerId: string) => {
+const buildDealerQueueSnapshot = async (dealerId: string, recentActionsLimit = 1000) => {
   const [lead, counts, scheduledLeads, recentActions] = await Promise.all([
     buildCurrentLeadResponse(dealerId),
     buildDealerQueueCounts(dealerId),
     buildScheduledLeads(dealerId),
-    buildRecentActions(dealerId)
+    buildRecentActions(dealerId, recentActionsLimit)
   ]);
 
   return {
@@ -984,7 +1008,12 @@ export const getDealerCallingQueueCurrent = async (req: Request, res: Response):
       return;
     }
 
-    const snapshot = await buildDealerQueueSnapshot(req.dealer.id);
+    const requestedLimit = Number(req.query.limit);
+    const recentActionsLimit =
+      Number.isFinite(requestedLimit) && requestedLimit > 0
+        ? Math.min(5000, Math.floor(requestedLimit))
+        : 1000;
+    const snapshot = await buildDealerQueueSnapshot(req.dealer.id, recentActionsLimit);
 
     res.json({
       success: true,
@@ -1227,7 +1256,7 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
       success: true,
       data: {
         ...updatedData,
-        ...(await buildDealerQueueSnapshot(req.dealer.id))
+        ...(await buildDealerQueueSnapshot(req.dealer.id, 1000))
       }
     });
 
@@ -1353,7 +1382,7 @@ export const getHrDealerAssignmentStats = async (_req: Request, res: Response): 
 export const getHrLeadUploadBatches = async (req: Request, res: Response): Promise<void> => {
   try {
     const page = parsePositiveInt(req.query.page, 1);
-    const limit = Math.min(parsePositiveInt(req.query.limit, 20), 100);
+    const limit = Math.min(parsePositiveInt(req.query.limit, 50), 500);
     const offset = (page - 1) * limit;
 
     const batches = await CallingLeadUploadBatch.findAndCountAll({
@@ -1381,12 +1410,46 @@ export const getHrLeadUploadBatches = async (req: Request, res: Response): Promi
       dealerNameMap.set(dealer.id, `${dealer.firstName || ''} ${dealer.lastName || ''}`.trim());
     }
 
+    const batchIds = batches.rows.map((batch) => batch.id);
+    const uploadRows = batchIds.length
+      ? await CallingLeadUploadRow.findAll({
+        where: { batchId: { [Op.in]: batchIds } },
+        order: [['rowIndex', 'ASC']]
+      })
+      : [];
+    const rowsByBatch = new Map<string, CallingLeadUploadRow[]>();
+    for (const row of uploadRows) {
+      const list = rowsByBatch.get(row.batchId) || [];
+      list.push(row);
+      rowsByBatch.set(row.batchId, list);
+    }
+
     const total = batches.count;
     res.json({
       success: true,
       data: {
         batches: batches.rows.map((batch) => {
           const assignedDealers = Array.isArray(batch.assignedDealers) ? batch.assignedDealers : [];
+          const rows = (rowsByBatch.get(batch.id) || []).map((row) => {
+            const rawPayload = (row.rawPayload || {}) as Record<string, unknown>;
+            const kNumber = String(extractCell(rawPayload, K_NUMBER_KEYS) || '').trim() || null;
+            return {
+              id: row.id,
+              rowIndex: row.rowIndex,
+              // normalized keys for Uploaded Data table rendering
+              name: row.customerName || '',
+              mobile: row.customerMobile || '',
+              kNumber,
+              address: row.customerAddress || '',
+              // backward-compatible keys
+              customerName: row.customerName,
+              customerMobile: row.customerMobile,
+              customerAddress: row.customerAddress,
+              status: row.status,
+              leadId: row.leadId,
+              rawPayload: row.rawPayload
+            };
+          });
           return {
             id: batch.id,
             batchId: batch.id,
@@ -1398,7 +1461,34 @@ export const getHrLeadUploadBatches = async (req: Request, res: Response): Promi
             assignedDealerDetails: assignedDealers.map((dealerId) => ({
               dealerId,
               dealerName: dealerNameMap.get(String(dealerId)) || ''
-            }))
+            })),
+            rows
+          };
+        }),
+        uploads: batches.rows.map((batch) => {
+          const assignedDealers = Array.isArray(batch.assignedDealers) ? batch.assignedDealers : [];
+          return {
+            id: batch.id,
+            uploadedAt: batch.uploadedAt,
+            fileName: batch.fileName,
+            rowCount: batch.rowCount,
+            dealerIds: assignedDealers,
+            rows: (rowsByBatch.get(batch.id) || []).map((row) => {
+              const rawPayload = (row.rawPayload || {}) as Record<string, unknown>;
+              return {
+                id: row.id,
+                name: row.customerName || '',
+                mobile: row.customerMobile || '',
+                altMobile: String(extractCell(rawPayload, ALT_MOBILE_KEYS) || '').trim() || null,
+                kNumber: String(extractCell(rawPayload, K_NUMBER_KEYS) || '').trim() || null,
+                address: row.customerAddress || '',
+                city: String(extractCell(rawPayload, CITY_KEYS) || '').trim() || null,
+                state: String(extractCell(rawPayload, STATE_KEYS) || '').trim() || null,
+                customerNote: String(extractCell(rawPayload, NOTE_KEYS) || '').trim() || null,
+                assignedDealerId: null,
+                status: row.status
+              };
+            })
           };
         }),
         pagination: {
