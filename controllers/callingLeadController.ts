@@ -23,7 +23,8 @@ const ADDRESS_KEYS = ['address'];
 const CITY_KEYS = ['city'];
 const STATE_KEYS = ['state', 'data ref. / state', 'data ref/state', 'data ref state'];
 const NOTE_KEYS = ['customernote', 'customer note', 'note', 'notes', 'remark', 'remarks'];
-const ACTIVE_STATUSES = ['active', 'assigned', 'in_progress'];
+const ACTIVE_STATUSES = ['assigned', 'in_progress'];
+// Keep 'active' as backward-compatible read-only support for old rows.
 const ACTIONABLE_STATUSES = ['active', 'assigned', 'in_progress', 'rescheduled'];
 const DEFAULT_ACTIVE_LIMIT_PER_DEALER = Number(process.env.ACTIVE_LIMIT_PER_DEALER || 1);
 const CALLING_ACTION_FILTER_RANGES = ['daily', 'weekly', 'monthly', 'last_month', 'all'] as const;
@@ -142,6 +143,22 @@ const callingActionToApiJson = (row: any) => {
     nextFollowUpAt: row.nextFollowUpAt,
     assignmentStatus: row.status
   };
+};
+
+const NOT_CONNECTED_STATUS_TEXTS = new Set([
+  'call unanswered',
+  'switched off',
+  'not reachable',
+  'busy / line busy',
+  'call disconnected',
+  'wrong number',
+  'invalid number',
+  'number does not exist'
+]);
+
+const classifyActionStage = (action: any): 'connected' | 'not_connected' => {
+  const statusText = String(action.status || '').trim().toLowerCase();
+  return NOT_CONNECTED_STATUS_TEXTS.has(statusText) ? 'not_connected' : 'connected';
 };
 
 const parsePositiveInt = (value: unknown, fallback: number): number => {
@@ -513,7 +530,7 @@ const promoteQueuedLeadIfSlotAvailable = async (
   await queued.update(
     {
       dealerId,
-      status: 'active',
+      status: 'assigned',
       assignedAt: new Date(),
       action: null,
       callRemark: null,
@@ -761,7 +778,7 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
         // 1) Fill active slots dealer-by-dealer (non-interleaved),
         // 2) Then place overflow into queued pool.
         let dealerId = dealerIds[queuedDealerPointer % dealerIds.length];
-        let nextStatus: 'active' | 'queued' = 'queued';
+        let nextStatus: 'assigned' | 'queued' = 'queued';
 
         const dealerWithCapacityIdx = dealerIds.findIndex((id) => dealerActiveCount[id] < activeLimitPerDealer);
         if (dealerWithCapacityIdx !== -1) {
@@ -772,7 +789,7 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
             activeDealerPointer = dealerWithCapacityIdx;
           }
           dealerId = dealerIds[activeDealerPointer];
-          nextStatus = 'active';
+          nextStatus = 'assigned';
         } else {
           queuedDealerPointer += 1;
           nextStatus = 'queued';
@@ -789,7 +806,7 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
           },
           { transaction }
         );
-        if (nextStatus === 'active') {
+        if (nextStatus === 'assigned') {
           assigned += 1;
           dealerActiveCount[dealerId] += 1;
           if (dealerActiveCount[dealerId] >= activeLimitPerDealer && dealerIds[activeDealerPointer] === dealerId) {
@@ -903,15 +920,6 @@ const buildCurrentLeadResponse = async (dealerId: string) => {
     await DealerLeadAssignment.findOne({
       where: {
         dealerId,
-        status: 'active'
-      },
-      include: sharedInclude,
-      order: [['assignedAt', 'ASC']],
-      transaction
-    }) ||
-    await DealerLeadAssignment.findOne({
-      where: {
-        dealerId,
         status: 'assigned'
       },
       include: sharedInclude,
@@ -967,7 +975,7 @@ const buildDealerQueueCounts = async (dealerId: string) => {
     DealerLeadAssignment.count({
       where: {
         dealerId,
-        status: { [Op.in]: ['active', 'assigned', 'in_progress'] }
+        status: { [Op.in]: ['assigned', 'in_progress'] }
       }
     }),
     DealerLeadAssignment.count({
@@ -1056,12 +1064,24 @@ const buildDealerQueueSnapshot = async (dealerId: string, recentActionsLimit = 1
     buildRecentActions(dealerId, recentActionsLimit)
   ]);
 
+  const dialledActions = recentActions.filter((row: any) =>
+    ['called', 'follow_up', 'not_interested', 'rescheduled'].includes(String(row.action || ''))
+  );
+  const connectedActions = dialledActions.filter((row: any) => classifyActionStage(row) === 'connected');
+  const notConnectedActions = dialledActions.filter((row: any) => classifyActionStage(row) === 'not_connected');
+
   return {
     lead,
     nextLead: lead,
     ...counts,
     scheduledLeads,
-    recentActions
+    recentActions,
+    dialledActions,
+    connectedActions,
+    notConnectedActions,
+    // compatibility aliases expected by some frontend paths
+    actionHistory: recentActions,
+    completedActions: recentActions
   };
 };
 

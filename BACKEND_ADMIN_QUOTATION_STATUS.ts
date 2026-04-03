@@ -318,7 +318,8 @@ export async function postHrLeadsUploadCsv(req, res, db) {
     let assigned = 0
     const activeCountByDealer = new Map()
     for (const dealerId of dealerIds) {
-      const activeCount = await db.hrLeads.count({ assignedDealerId: dealerId, status: "active" })
+      // Count only leads visible in Current Lead (assigned).
+      const activeCount = await db.hrLeads.count({ assignedDealerId: dealerId, status: "assigned" })
       activeCountByDealer.set(dealerId, activeCount)
     }
 
@@ -330,7 +331,8 @@ export async function postHrLeadsUploadCsv(req, res, db) {
         const dealerId = dealerIds[idx]
         const currentActive = activeCountByDealer.get(dealerId) || 0
         if (currentActive < activeLimitPerDealer) {
-          await db.hrLeads.updateById(leadId, { assignedDealerId: dealerId, status: "active" })
+          // Important: Current Lead tab reads assigned/in_progress/rescheduled, not queued.
+          await db.hrLeads.updateById(leadId, { assignedDealerId: dealerId, status: "assigned" })
           activeCountByDealer.set(dealerId, currentActive + 1)
           dealerCursor = (idx + 1) % dealerIds.length
           assigned += 1
