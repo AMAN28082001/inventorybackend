@@ -25,6 +25,41 @@ const router: Router = express.Router();
 const documentsUpload = multer({
   storage: multer.memoryStorage(),
   fileFilter: (_req, file, cb) => {
+    const imageOnlyFields = new Set([
+      'aadharFront',
+      'aadharBack',
+      'panImage',
+      'electricityBillImage',
+      'bankPassbookImage',
+      'compliantAadharFront',
+      'compliantAadharBack',
+      'compliantPanImage',
+      'compliantBankPassbookImage',
+      'geotagRoofPhoto',
+      'customerWithHousePhoto'
+    ]);
+    const pdfOnlyFields = new Set(['propertyDocumentPdf']);
+
+    const imageMimes = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp']);
+
+    if (imageOnlyFields.has(file.fieldname)) {
+      if (imageMimes.has(file.mimetype)) {
+        cb(null, true);
+        return;
+      }
+      cb(new Error(`${file.fieldname} must be jpeg/jpg/png/webp`));
+      return;
+    }
+
+    if (pdfOnlyFields.has(file.fieldname)) {
+      if (file.mimetype === 'application/pdf') {
+        cb(null, true);
+        return;
+      }
+      cb(new Error(`${file.fieldname} must be a PDF`));
+      return;
+    }
+
     if (file.mimetype.startsWith('image/') || file.mimetype === 'application/pdf') {
       cb(null, true);
       return;
@@ -533,6 +568,9 @@ router.post(
     { name: 'panImage', maxCount: 1 },
     { name: 'electricityBillImage', maxCount: 1 },
     { name: 'bankPassbookImage', maxCount: 1 },
+    { name: 'geotagRoofPhoto', maxCount: 1 },
+    { name: 'customerWithHousePhoto', maxCount: 1 },
+    { name: 'propertyDocumentPdf', maxCount: 1 },
     { name: 'compliantAadharFront', maxCount: 1 },
     { name: 'compliantAadharBack', maxCount: 1 },
     { name: 'compliantPanImage', maxCount: 1 },
@@ -550,6 +588,9 @@ router.patch(
     { name: 'panImage', maxCount: 1 },
     { name: 'electricityBillImage', maxCount: 1 },
     { name: 'bankPassbookImage', maxCount: 1 },
+    { name: 'geotagRoofPhoto', maxCount: 1 },
+    { name: 'customerWithHousePhoto', maxCount: 1 },
+    { name: 'propertyDocumentPdf', maxCount: 1 },
     { name: 'compliantAadharFront', maxCount: 1 },
     { name: 'compliantAadharBack', maxCount: 1 },
     { name: 'compliantPanImage', maxCount: 1 },

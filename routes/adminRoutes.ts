@@ -3,6 +3,7 @@ import {
   getAllQuotations,
   getAdminQuotationById,
   updateQuotationStatus,
+  updateQuotationFileLogin,
   getAllDealers,
   updateDealer,
   activateDealer,
@@ -19,7 +20,13 @@ import {
 import { getAdminCallingActions } from '../controllers/callingLeadController';
 import { authenticate, authorizeAdmin } from '../middleware/authQuotation';
 import { validate } from '../middleware/validate';
-import { updateStatusSchema, createVisitorSchema, updateVisitorSchema, updateVisitorPasswordSchema } from '../validations/adminValidations';
+import {
+  updateStatusSchema,
+  fileLoginSchema,
+  createVisitorSchema,
+  updateVisitorSchema,
+  updateVisitorPasswordSchema
+} from '../validations/adminValidations';
 import { adminUpdateDealerSchema } from '../validations/dealerValidations';
 
 const router: Router = express.Router();
@@ -52,6 +59,7 @@ router.use(authorizeAdmin);
  *       - bearerAuth: []
  */
 router.patch('/quotations/:quotationId/status', validate(updateStatusSchema), updateQuotationStatus);
+router.patch('/quotations/:quotationId/file-login', validate(fileLoginSchema), updateQuotationFileLogin);
 
 /**
  * @swagger

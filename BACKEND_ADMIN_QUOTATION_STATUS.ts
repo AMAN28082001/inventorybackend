@@ -1,7 +1,16 @@
 // @ts-nocheck
 /* global Quotation */
 // In your server: import { Quotation } from './models/Quotation'
-
+//
+// Implemented in this repo:
+//   - PATCH /api/admin/quotations/:quotationId/status → controllers/adminController.ts `updateQuotationStatus`
+//   - PATCH /api/admin/quotations/:quotationId/file-login → `updateQuotationFileLogin`
+//   - JSON shape helpers → utils/quotationApiJson.ts (`quotationPaymentApiFields`, `quotationAdminMetadataFields`)
+//   - DB columns → database/migrations/20260411140000-add-quotation-status-history-file-login-subsidy.js
+//     + subsidyCheques JSONB, remainingAmount → 20260411150000-add-subsidy-cheques-remaining-amount.js
+//   - PATCH /api/quotations/:id/payment-details → controllers/quotationController.ts `updateQuotationPaymentDetails`
+//     (subsidyCheques in body, cap total paid vs subtotal, persist remainingAmount)
+//
 /**
  * =============================================================================
  * BACKEND REFERENCE

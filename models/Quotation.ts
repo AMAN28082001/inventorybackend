@@ -20,6 +20,23 @@ interface QuotationAttributes {
   paymentType?: 'loan' | 'cash' | 'mix' | null;
   bankName?: string | null;
   bankIfsc?: string | null;
+  subsidyChequeDetails?: string | null;
+  fileLoginStatus?: string | null;
+  filePaymentType?: string | null;
+  fileBankName?: string | null;
+  fileBankIfsc?: string | null;
+  fileSubsidyChequeDetails?: string | null;
+  fileLoginAt?: Date | null;
+  statusApprovedAt?: Date | null;
+  statusHistory?: Array<{ status: string; at: string }> | null;
+  subsidyCheques?: Array<{
+    id: string;
+    details: string;
+    amount: number;
+    status: 'pending' | 'cleared';
+    clearedAt?: string;
+  }> | null;
+  remainingAmount?: number | null;
   paidAmount?: number | null;
   paymentDate?: Date | null;
   paymentStatus?: 'pending' | 'partial' | 'completed' | null;
@@ -56,7 +73,7 @@ interface QuotationAttributes {
 
 interface QuotationCreationAttributes extends Optional<
   QuotationAttributes,
-  'id' | 'status' | 'discount' | 'createdAt' | 'updatedAt' | 'centralSubsidy' | 'stateSubsidy' | 'totalSubsidy' | 'amountAfterSubsidy' | 'discountAmount' |   'paymentMode' | 'paymentType' | 'bankName' | 'bankIfsc' | 'paidAmount' | 'paymentDate' | 'paymentStatus' | 'paymentPhases' | 'paymentPlanUpdatedBy' | 'paymentPlanUpdatedAt' | 'approvedAt' | 'installationStatus' | 'installerId' | 'installerActionAt' | 'installerInProgressAt' | 'installerApprovedAt' | 'installerRemarks' | 'baldevId' | 'baldevActionAt' | 'baldevRemarks' | 'completionAt'
+  'id' | 'status' | 'discount' | 'createdAt' | 'updatedAt' | 'centralSubsidy' | 'stateSubsidy' | 'totalSubsidy' | 'amountAfterSubsidy' | 'discountAmount' |   'paymentMode' | 'paymentType' | 'bankName' | 'bankIfsc' | 'subsidyChequeDetails' | 'fileLoginStatus' | 'filePaymentType' | 'fileBankName' | 'fileBankIfsc' | 'fileSubsidyChequeDetails' | 'fileLoginAt' | 'statusApprovedAt'   | 'statusHistory' | 'subsidyCheques' | 'remainingAmount' | 'paidAmount' | 'paymentDate' | 'paymentStatus' | 'paymentPhases' | 'paymentPlanUpdatedBy' | 'paymentPlanUpdatedAt' | 'approvedAt' | 'installationStatus' | 'installerId' | 'installerActionAt' | 'installerInProgressAt' | 'installerApprovedAt' | 'installerRemarks' | 'baldevId' | 'baldevActionAt' | 'baldevRemarks' | 'completionAt'
 > {}
 
 class Quotation extends Model<QuotationAttributes, QuotationCreationAttributes> implements QuotationAttributes {
@@ -78,6 +95,23 @@ class Quotation extends Model<QuotationAttributes, QuotationCreationAttributes> 
   public paymentType!: 'loan' | 'cash' | 'mix' | null;
   public bankName!: string | null;
   public bankIfsc!: string | null;
+  public subsidyChequeDetails!: string | null;
+  public fileLoginStatus!: string | null;
+  public filePaymentType!: string | null;
+  public fileBankName!: string | null;
+  public fileBankIfsc!: string | null;
+  public fileSubsidyChequeDetails!: string | null;
+  public fileLoginAt!: Date | null;
+  public statusApprovedAt!: Date | null;
+  public statusHistory!: Array<{ status: string; at: string }> | null;
+  public subsidyCheques!: Array<{
+    id: string;
+    details: string;
+    amount: number;
+    status: 'pending' | 'cleared';
+    clearedAt?: string;
+  }> | null;
+  public remainingAmount!: number | null;
   public paidAmount!: number | null;
   public paymentDate!: Date | null;
   public paymentStatus!: 'pending' | 'partial' | 'completed' | null;
@@ -191,6 +225,52 @@ Quotation.init(
     },
     bankIfsc: {
       type: DataTypes.STRING(11),
+      allowNull: true
+    },
+    subsidyChequeDetails: {
+      type: DataTypes.TEXT,
+      allowNull: true
+    },
+    fileLoginStatus: {
+      type: DataTypes.STRING(32),
+      allowNull: true
+    },
+    filePaymentType: {
+      type: DataTypes.STRING(16),
+      allowNull: true
+    },
+    fileBankName: {
+      type: DataTypes.STRING(255),
+      allowNull: true
+    },
+    fileBankIfsc: {
+      type: DataTypes.STRING(11),
+      allowNull: true
+    },
+    fileSubsidyChequeDetails: {
+      type: DataTypes.TEXT,
+      allowNull: true
+    },
+    fileLoginAt: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
+    statusApprovedAt: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
+    statusHistory: {
+      type: DataTypes.JSONB,
+      allowNull: true,
+      defaultValue: []
+    },
+    subsidyCheques: {
+      type: DataTypes.JSONB,
+      allowNull: true,
+      defaultValue: []
+    },
+    remainingAmount: {
+      type: DataTypes.DECIMAL(14, 2),
       allowNull: true
     },
     paidAmount: {

@@ -3,7 +3,7 @@ import { Quotation, QuotationPaymentPhase, Dealer, Customer, Visitor } from '../
 import { Op } from 'sequelize';
 import { logError, logInfo } from '../utils/loggerHelper';
 import { normalizePaymentModeInput } from '../utils/paymentMode';
-import { quotationPaymentApiFields } from '../utils/quotationApiJson';
+import { quotationPaymentApiFields, quotationAdminMetadataFields, readStatusHistoryFromRow } from '../utils/quotationApiJson';
 import { emitRealtime, realtimeEvents } from '../utils/realtime';
 
 const sumPhasePaidAmounts = (phases: { paidAmount?: number }[]): number =>
@@ -50,6 +50,14 @@ function normalizeIfscValue(raw: unknown): string | null {
   if (typeof raw !== 'string') return null;
   const v = raw.trim().toUpperCase().replace(/\s/g, '');
   return IFSC_REGEX.test(v) ? v : null;
+}
+
+function normalizeFileLoginStatus(raw: unknown): 'already_login' | 'login_now' | null {
+  if (typeof raw !== 'string') return null;
+  const v = raw.trim().toLowerCase().replace(/[-\s]+/g, '_');
+  if (v === 'already_login' || v === 'already_logged_in' || v === 'alreadylogin') return 'already_login';
+  if (v === 'login_now' || v === 'loginnow') return 'login_now';
+  return null;
 }
 
 // Get all quotations (admin)
@@ -177,6 +185,7 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
             } : null,
             systemType: q.systemType,
             ...quotationPaymentApiFields(row),
+            ...quotationAdminMetadataFields(row),
             paymentStatus: (q as any).paymentStatus || null,
             subtotal: subtotalNum,
             paidAmount: q.paidAmount !== undefined && q.paidAmount !== null ? Number(q.paidAmount) : null,
@@ -184,6 +193,7 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
             remainingAmount,
             installments: phases,
             paymentPhases: phases,
+            payment_phases: phases,
             finalAmount: subtotalNum,
             status: q.status,
             installationStatus: (q as any).installationStatus || 'pending_installer',
@@ -236,6 +246,8 @@ export const updateQuotationStatus = async (req: Request, res: Response): Promis
       bankName?: string;
       bankIfsc?: string;
       bank_ifsc?: string;
+      subsidyChequeDetails?: string;
+      subsidy_cheque_details?: string;
     };
     const statusRaw = body.status;
     const allowed = ['pending', 'approved', 'rejected', 'completed'] as const;
@@ -256,7 +268,13 @@ export const updateQuotationStatus = async (req: Request, res: Response): Promis
       return;
     }
 
-    const updateData: Record<string, unknown> = { status: statusRaw };
+    const plainBefore = quotation.get({ plain: true }) as unknown as Record<string, unknown>;
+    const prevHistory = readStatusHistoryFromRow(plainBefore);
+    const at = new Date().toISOString();
+    const updateData: Record<string, unknown> = {
+      status: statusRaw,
+      statusHistory: [...prevHistory, { status: statusRaw, at }]
+    };
 
     if (statusRaw === 'approved') {
       const paymentTypeResolved =
@@ -274,6 +292,7 @@ export const updateQuotationStatus = async (req: Request, res: Response): Promis
 
       updateData.paymentMode = paymentTypeResolved;
       updateData.paymentType = paymentTypeResolved;
+      updateData.statusApprovedAt = new Date();
 
       if (paymentTypeResolved === 'loan' || paymentTypeResolved === 'mix') {
         const bankName = typeof body.bankName === 'string' ? body.bankName.trim() : '';
@@ -299,25 +318,41 @@ export const updateQuotationStatus = async (req: Request, res: Response): Promis
         updateData.bankIfsc = null;
       }
 
+      const subsidyRaw =
+        typeof body.subsidyChequeDetails === 'string'
+          ? body.subsidyChequeDetails.trim()
+          : typeof body.subsidy_cheque_details === 'string'
+            ? body.subsidy_cheque_details.trim()
+            : '';
+      if (paymentTypeResolved === 'loan') {
+        updateData.subsidyChequeDetails = null;
+      } else if (paymentTypeResolved === 'cash' || paymentTypeResolved === 'mix') {
+        updateData.subsidyChequeDetails = subsidyRaw || null;
+      }
+
       updateData.installationStatus = 'pending_installer';
       updateData.approvedAt = new Date();
     } else if (statusRaw === 'rejected') {
       updateData.bankName = null;
       updateData.bankIfsc = null;
       updateData.paymentMode = null;
+      updateData.paymentType = null;
+      updateData.subsidyChequeDetails = null;
+      updateData.subsidyCheques = [];
+      updateData.remainingAmount = null;
     }
 
     await quotation.update(updateData);
     await quotation.reload();
 
+    const rowAfter = quotation.get({ plain: true }) as unknown as Record<string, unknown>;
     res.json({
       success: true,
       data: {
         id: quotationId,
         status: quotation.status,
-        paymentMode: quotation.paymentMode,
-        bankName: quotation.bankName ?? null,
-        bankIfsc: quotation.bankIfsc ?? null
+        ...quotationPaymentApiFields(rowAfter),
+        ...quotationAdminMetadataFields(rowAfter)
       }
     });
 
@@ -328,10 +363,169 @@ export const updateQuotationStatus = async (req: Request, res: Response): Promis
       paymentMode: quotation.paymentMode,
       bankName: quotation.bankName ?? null,
       bankIfsc: quotation.bankIfsc ?? null,
+      statusApprovedAt: quotation.statusApprovedAt,
       timestamp: new Date().toISOString()
     });
   } catch (error) {
     logError('Update quotation status error', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal error' }
+    });
+  }
+};
+
+// PATCH /admin/quotations/:quotationId/file-login — see BACKEND_ADMIN_QUOTATION_STATUS.ts
+export const updateQuotationFileLogin = async (req: Request, res: Response): Promise<void> => {
+  try {
+    if (!req.dealer || req.dealer.role !== 'admin') {
+      res.status(401).json({
+        success: false,
+        error: { code: 'AUTH_003', message: 'Admin required' }
+      });
+      return;
+    }
+
+    const { quotationId } = req.params;
+    if (!quotationId) {
+      res.status(400).json({
+        success: false,
+        error: { code: 'VAL_001', message: 'Quotation ID required' }
+      });
+      return;
+    }
+
+    const quotation = await Quotation.findByPk(quotationId);
+    if (!quotation) {
+      res.status(404).json({
+        success: false,
+        error: { code: 'RES_001', message: 'Quotation not found' }
+      });
+      return;
+    }
+
+    const body = req.body as Record<string, unknown>;
+
+    if (body.resetFileLogin === true) {
+      await quotation.update({
+        fileLoginStatus: null,
+        filePaymentType: null,
+        fileBankName: null,
+        fileBankIfsc: null,
+        fileSubsidyChequeDetails: null,
+        fileLoginAt: null
+      });
+      await quotation.reload();
+      res.json({
+        success: true,
+        data: {
+          id: quotationId,
+          reset: true,
+          fileLoginStatus: null,
+          fileLoginAt: null
+        }
+      });
+      return;
+    }
+
+    const fls = normalizeFileLoginStatus(body.fileLoginStatus ?? body.file_login_status);
+    if (!fls) {
+      res.status(400).json({
+        success: false,
+        error: { code: 'VAL_006', message: 'fileLoginStatus must be already_login or login_now' }
+      });
+      return;
+    }
+
+    const paymentType =
+      normalizeApprovalPaymentType(body.filePaymentType) ??
+      normalizeApprovalPaymentType(body.paymentMode) ??
+      normalizeApprovalPaymentType(body.file_payment_type);
+    if (!paymentType) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VAL_007',
+          message: 'filePaymentType or paymentMode required (loan, cash, mix)'
+        }
+      });
+      return;
+    }
+
+    const updatePayload: Record<string, unknown> = {
+      fileLoginStatus: fls,
+      filePaymentType: paymentType,
+      fileLoginAt: new Date()
+    };
+
+    if (paymentType === 'loan' || paymentType === 'mix') {
+      const bankNameRaw = body.fileBankName ?? body.file_bank_name ?? body.bankName;
+      const bankName = typeof bankNameRaw === 'string' ? bankNameRaw.trim() : '';
+      const ifsc = normalizeIfscValue(
+        body.fileBankIfsc ?? body.file_bank_ifsc ?? body.bankIfsc ?? body.bank_ifsc
+      );
+      if (!bankName) {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'VAL_008',
+            message: 'Bank name required for loan / cash + loan file login'
+          }
+        });
+        return;
+      }
+      if (!ifsc) {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'VAL_009',
+            message: 'Valid 11-char IFSC required for loan / cash + loan file login'
+          }
+        });
+        return;
+      }
+      updatePayload.fileBankName = bankName;
+      updatePayload.fileBankIfsc = ifsc;
+    } else {
+      updatePayload.fileBankName = null;
+      updatePayload.fileBankIfsc = null;
+    }
+
+    const chequeRaw =
+      typeof body.fileSubsidyChequeDetails === 'string'
+        ? body.fileSubsidyChequeDetails.trim()
+        : typeof body.file_subsidy_cheque_details === 'string'
+          ? String(body.file_subsidy_cheque_details).trim()
+          : '';
+    updatePayload.fileSubsidyChequeDetails =
+      chequeRaw && (paymentType === 'cash' || paymentType === 'mix') ? chequeRaw : null;
+
+    await quotation.update(updatePayload);
+    await quotation.reload();
+    const plain = quotation.get({ plain: true }) as unknown as Record<string, unknown>;
+
+    res.json({
+      success: true,
+      data: {
+        id: quotationId,
+        fileLoginStatus: plain.fileLoginStatus ?? null,
+        filePaymentType: plain.filePaymentType ?? null,
+        fileBankName: plain.fileBankName ?? null,
+        fileBankIfsc: plain.fileBankIfsc ?? null,
+        fileSubsidyChequeDetails: plain.fileSubsidyChequeDetails ?? null,
+        fileLoginAt: plain.fileLoginAt
+          ? new Date(plain.fileLoginAt as Date).toISOString()
+          : null
+      }
+    });
+
+    logInfo('Quotation file-login updated by admin', {
+      quotationId: quotation.id,
+      adminId: req.dealer.id,
+      fileLoginStatus: plain.fileLoginStatus
+    });
+  } catch (error) {
+    logError('Update quotation file-login error', error);
     res.status(500).json({
       success: false,
       error: { code: 'SYS_001', message: 'Internal error' }
@@ -400,6 +594,7 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
         id: quotation.id,
         status: quotation.status,
         ...quotationPaymentApiFields(row),
+        ...quotationAdminMetadataFields(row),
         paymentStatus: quotationAny.paymentStatus || null,
         subtotal: subtotalNum,
         paidAmount: quotation.paidAmount !== undefined && quotation.paidAmount !== null ? Number(quotation.paidAmount) : null,
@@ -407,6 +602,7 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
         remainingAmount,
         installments: phases,
         paymentPhases: phases,
+        payment_phases: phases,
         dealer: quotationAny.dealer || null,
         customer: quotationAny.customer || null,
         finalAmount: subtotalNum,

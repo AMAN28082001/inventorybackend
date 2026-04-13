@@ -16,6 +16,8 @@ export const createCustomer = async (req: Request, res: Response): Promise<void>
     }
 
     const { firstName, lastName, mobile, email, address } = req.body;
+    const normalizedLastName = (lastName ?? '').trim();
+    const normalizedEmail = (email ?? '').trim();
 
     // Check if customer with mobile already exists
     const existingCustomer = await Customer.findOne({ where: { mobile } });
@@ -34,9 +36,9 @@ export const createCustomer = async (req: Request, res: Response): Promise<void>
     const customer = await Customer.create({
       id: uuidv4(),
       firstName,
-      lastName,
+      lastName: normalizedLastName,
       mobile,
-      email: email && email.trim() !== '' ? email : null,
+      email: normalizedEmail !== '' ? normalizedEmail : null,
       streetAddress: address.street,
       city: address.city,
       state: address.state,
@@ -52,9 +54,9 @@ export const createCustomer = async (req: Request, res: Response): Promise<void>
       data: {
         id: customerData.id,
         firstName: customerData.firstName,
-        lastName: customerData.lastName,
+        lastName: customerData.lastName ?? '',
         mobile: customerData.mobile,
-        email: customerData.email,
+        email: customerData.email ?? '',
         address: {
           street: customerData.streetAddress || '',
           city: customerData.city || '',
@@ -118,9 +120,9 @@ export const getCustomers = async (req: Request, res: Response): Promise<void> =
       return {
         id: customerData.id,
         firstName: customerData.firstName,
-        lastName: customerData.lastName,
+        lastName: customerData.lastName ?? '',
         mobile: customerData.mobile,
-        email: customerData.email,
+        email: customerData.email ?? '',
         address: {
           street: customerData.streetAddress || '',
           city: customerData.city || '',
@@ -194,9 +196,9 @@ export const getCustomerById = async (req: Request, res: Response): Promise<void
       data: {
         id: customerData.id,
         firstName: customerData.firstName,
-        lastName: customerData.lastName,
+        lastName: customerData.lastName ?? '',
         mobile: customerData.mobile,
-        email: customerData.email,
+        email: customerData.email ?? '',
         address: {
           street: customerData.streetAddress || '',
           city: customerData.city || '',
@@ -230,6 +232,8 @@ export const updateCustomer = async (req: Request, res: Response): Promise<void>
 
     const { customerId } = req.params;
     const { firstName, lastName, mobile, email, address } = req.body;
+    const normalizedLastName = (lastName ?? '').trim();
+    const normalizedEmail = (email ?? '').trim();
 
     // Admins can update all customers, dealers only their own
     const where: any = { id: customerId };
@@ -267,9 +271,9 @@ export const updateCustomer = async (req: Request, res: Response): Promise<void>
     // Update customer fields
     const updateData: any = {};
     if (firstName !== undefined) updateData.firstName = firstName;
-    if (lastName !== undefined) updateData.lastName = lastName;
+    if (lastName !== undefined) updateData.lastName = normalizedLastName;
     if (mobile !== undefined) updateData.mobile = mobile;
-    if (email !== undefined) updateData.email = email && email.trim() !== '' ? email : null;
+    if (email !== undefined) updateData.email = normalizedEmail !== '' ? normalizedEmail : null;
     
     // Update address fields if address object is provided
     if (address) {
@@ -289,9 +293,9 @@ export const updateCustomer = async (req: Request, res: Response): Promise<void>
       data: {
         id: customerData.id,
         firstName: customerData.firstName,
-        lastName: customerData.lastName,
+        lastName: customerData.lastName ?? '',
         mobile: customerData.mobile,
-        email: customerData.email,
+        email: customerData.email ?? '',
         address: {
           street: customerData.streetAddress || '',
           city: customerData.city || '',

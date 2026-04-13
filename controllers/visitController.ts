@@ -4,6 +4,36 @@ import { Op } from 'sequelize';
 import { Visit, VisitAssignment, Quotation, Visitor, Customer } from '../models/index-quotation';
 import { logError, logInfo } from '../utils/loggerHelper';
 
+const timeRangeRegex = /^([01]\d|2[0-3]):([0-5]\d)\s-\s([01]\d|2[0-3]):([0-5]\d)$/;
+const hhmmRegex = /^([01]\d|2[0-3]):([0-5]\d)$/;
+
+const getVisitTimeFields = (visitTimeValue: unknown) => {
+  const visitTime = typeof visitTimeValue === 'string' ? visitTimeValue : '';
+  if (timeRangeRegex.test(visitTime)) {
+    const [visitStartTime, visitEndTime] = visitTime.split(' - ');
+    return {
+      visitTime,
+      visitStartTime,
+      visitEndTime,
+      visitTimeRange: visitTime
+    };
+  }
+  if (hhmmRegex.test(visitTime)) {
+    return {
+      visitTime,
+      visitStartTime: visitTime,
+      visitEndTime: null,
+      visitTimeRange: null
+    };
+  }
+  return {
+    visitTime,
+    visitStartTime: null,
+    visitEndTime: null,
+    visitTimeRange: null
+  };
+};
+
 // Create visit
 export const createVisit = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -105,11 +135,13 @@ export const createVisit = async (req: Request, res: Response): Promise<void> =>
 
     const visitData = visitAny.toJSON();
     delete visitData.assignments; // Remove raw assignments, use formatted visitors instead
+    const visitTimeFields = getVisitTimeFields(visitData.visitTime);
 
     res.status(201).json({
       success: true,
       data: {
         ...visitData,
+        ...visitTimeFields,
         visitors: formattedVisitors
       }
     });
@@ -251,7 +283,7 @@ export const getAllVisits = async (req: Request, res: Response): Promise<void> =
           email: customer.email
         } : null,
         visitDate: v.visitDate,
-        visitTime: v.visitTime,
+        ...getVisitTimeFields(v.visitTime),
         location: v.location,
         locationLink: v.locationLink,
         notes: v.notes,
@@ -404,7 +436,7 @@ export const getVisitsForQuotation = async (req: Request, res: Response): Promis
           return {
             id: v.id,
             visitDate: v.visitDate,
-            visitTime: v.visitTime,
+            ...getVisitTimeFields(v.visitTime),
             location: v.location,
             locationLink: v.locationLink,
             notes: v.notes,
@@ -631,7 +663,7 @@ export const rescheduleVisit = async (req: Request, res: Response): Promise<void
     }
 
     const { visitId } = req.params;
-    const { reason } = req.body;
+    const { reason, visitDate, visitTime } = req.body;
 
     const visit = await Visit.findByPk(visitId, {
       include: [{ model: VisitAssignment, as: 'assignments' }]
@@ -655,16 +687,22 @@ export const rescheduleVisit = async (req: Request, res: Response): Promise<void
       return;
     }
 
-    await visit.update({
+    const updatePayload: any = {
       status: 'rescheduled',
       rejectionReason: reason
-    });
+    };
+    if (visitDate !== undefined) updatePayload.visitDate = visitDate;
+    if (visitTime !== undefined) updatePayload.visitTime = visitTime;
+
+    await visit.update(updatePayload);
 
     res.json({
       success: true,
       data: {
         id: visit.id,
         status: visit.status,
+        visitDate: visit.visitDate,
+        ...getVisitTimeFields(visit.visitTime),
         rejectionReason: visit.rejectionReason,
         updatedAt: visit.updatedAt
       }

@@ -62,7 +62,7 @@ Visit.init(
       allowNull: false
     },
     visitTime: {
-      type: DataTypes.TIME,
+      type: DataTypes.STRING(32),
       allowNull: false
     },
     location: {

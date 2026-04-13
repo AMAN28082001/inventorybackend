@@ -10,7 +10,7 @@ import { logError, logInfo } from '../utils/loggerHelper';
 import { deleteFileFromS3IfExists } from '../middleware/upload';
 import { generatePublicUrl } from '../utils/s3Service';
 import { normalizePaymentModeInput } from '../utils/paymentMode';
-import { quotationPaymentApiFields } from '../utils/quotationApiJson';
+import { quotationPaymentApiFields, quotationAdminMetadataFields } from '../utils/quotationApiJson';
 
 // Helper function to normalize catalog data - ensures all arrays are arrays (never null/undefined)
 const normalizeCatalog = (catalog: any): any => {
@@ -562,20 +562,32 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
     // Handle customer creation if customer object is provided
     let finalCustomerId = customerId;
     if (customer && !customerId) {
+      const normalizedLastName = (customer.lastName ?? '').trim();
+      const normalizedEmail = (customer.email ?? '').trim();
       // Check if customer exists by mobile
       let existingCustomer = await Customer.findOne({ where: { mobile: customer.mobile } });
       if (!existingCustomer) {
         existingCustomer = await Customer.create({
           id: uuidv4(),
           firstName: customer.firstName,
-          lastName: customer.lastName,
+          lastName: normalizedLastName,
           mobile: customer.mobile,
-          email: customer.email && customer.email.trim() !== '' ? customer.email : null,
+          email: normalizedEmail !== '' ? normalizedEmail : null,
           streetAddress: customer.address.street,
           city: customer.address.city,
           state: customer.address.state,
           pincode: customer.address.pincode,
           dealerId: req.dealer.id
+        });
+      } else {
+        await existingCustomer.update({
+          firstName: customer.firstName,
+          lastName: normalizedLastName,
+          email: normalizedEmail !== '' ? normalizedEmail : null,
+          streetAddress: customer.address.street,
+          city: customer.address.city,
+          state: customer.address.state,
+          pincode: customer.address.pincode
         });
       }
       finalCustomerId = existingCustomer.id;
@@ -1257,7 +1269,7 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         } : null,
         customer: customer ? {
           firstName: customer.firstName,
-          lastName: customer.lastName,
+          lastName: customer.lastName ?? '',
           mobile: customer.mobile
         } : null,
         products: products ? {
@@ -1266,6 +1278,7 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         } : null,
         systemType: q.systemType,
         ...quotationPaymentApiFields(row),
+        ...quotationAdminMetadataFields(row),
         subtotal: subtotalNum,
         paidAmount: q.paidAmount !== undefined && q.paidAmount !== null ? Number(q.paidAmount) : null,
         remaining: remainingAmount,
@@ -1274,6 +1287,7 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         paymentStatus: q.paymentStatus,
         installments: phaseRows,
         paymentPhases: phaseRows,
+        payment_phases: phaseRows,
         finalAmount: subtotalNum,
         installationStatus: (q as any).installationStatus || 'pending_installer',
         approvedAt: (q as any).approvedAt || null,
@@ -1595,9 +1609,9 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
         customer: customer ? {
           id: customer.id,
           firstName: customer.firstName,
-          lastName: customer.lastName,
+          lastName: customer.lastName ?? '',
           mobile: customer.mobile,
-          email: customer.email,
+          email: customer.email ?? '',
           address: {
             street: customer.streetAddress,
             city: customer.city,
@@ -1645,6 +1659,7 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
         ),
         documents: resolvedDocuments,
         ...quotationPaymentApiFields(rowById),
+        ...quotationAdminMetadataFields(rowById),
         subtotal: subtotalNum,
         paidAmount: quotation.paidAmount ? Number(quotation.paidAmount) : null,
         remaining: remainingAmount,
@@ -1653,6 +1668,7 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
         paymentStatus: quotation.paymentStatus,
         installments: phaseRows,
         paymentPhases: phaseRows,
+        payment_phases: phaseRows,
         createdAt: quotation.createdAt,
         validUntil: quotation.validUntil
       }
@@ -2161,25 +2177,35 @@ export const updateQuotationPricing = async (req: Request, res: Response): Promi
 export const updateQuotationPaymentDetails = async (req: Request, res: Response): Promise<void> => {
   try {
     const { quotationId } = req.params;
-    const { paymentMode, paymentType: paymentTypeBody } = req.body as {
+    const {
+      paymentMode,
+      paymentType: paymentTypeBody,
+      paymentStatus: paymentStatusFromBody,
+      subsidyCheques
+    } = req.body as {
       paymentType?: 'loan' | 'cash' | 'mix';
       paymentMode?: 'cash' | 'upi' | 'loan' | 'netbanking' | 'bank_transfer' | 'cheque' | 'card' | 'mix';
       paymentStatus?: 'pending' | 'partial' | 'completed';
       phases?: any[];
       installments?: any[];
       paymentPhases?: any[];
+      subsidyCheques?: Array<{
+        id: string;
+        details: string;
+        amount: number;
+        status: 'pending' | 'cleared';
+        clearedAt?: string;
+      }>;
     };
     const paymentType =
       paymentTypeBody ||
       (paymentMode && ['loan', 'cash', 'mix'].includes(paymentMode) ? (paymentMode as 'loan' | 'cash' | 'mix') : undefined);
     const phasePayload = req.body.phases || req.body.installments || req.body.paymentPhases;
 
-    const isAccountManager = req.user && req.user.role === 'account-management';
-    const isInventoryAdmin = req.user && (
-      req.user.role === 'admin' ||
-      req.user.role === 'super-admin' ||
-      req.user.role === 'super-admin-manager'
-    );
+    // Reference: account-management + admin only; quotation JWT admin (dealer.role === 'admin') included.
+    const role = req.user?.role;
+    const isAccountManager = role === 'account-management';
+    const isInventoryAdmin = role === 'admin';
     const isQuotationAdmin = req.dealer && req.dealer.role === 'admin';
 
     if (!isAccountManager && !isInventoryAdmin && !isQuotationAdmin) {
@@ -2244,6 +2270,17 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
       const mergedPhases = (phaseRows as any[]).map(serializePaymentPhaseRow);
       const totalPaidAmount = sumPhasePaidAmounts(mergedPhases);
       const paymentCapSubtotal = Number(quotation.subtotal || 0);
+      if (totalPaidAmount > paymentCapSubtotal + 0.01) {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'VAL_012',
+            message: `Total paid (${totalPaidAmount}) cannot exceed subtotal (${paymentCapSubtotal})`
+          }
+        });
+        return;
+      }
+      const remainingStored = remainingPaymentAgainstSubtotal(paymentCapSubtotal, totalPaidAmount);
       const effectivePaymentStatus = calculatePaymentStatus(totalPaidAmount, paymentCapSubtotal);
       const latestPaymentDate = mergedPhases
         .map((phase) => phase.paymentDate)
@@ -2251,13 +2288,20 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
         .sort()
         .pop() || null;
 
+      const resolvedPaymentStatus =
+        paymentStatusFromBody !== undefined && paymentStatusFromBody !== null
+          ? paymentStatusFromBody
+          : effectivePaymentStatus;
+
       await quotation.update({
         paymentMode: paymentMode !== undefined ? paymentMode : quotation.paymentMode,
         paymentType: paymentType !== undefined ? paymentType : (quotation as any).paymentType,
-        paymentStatus: effectivePaymentStatus,
+        paymentStatus: resolvedPaymentStatus,
         paidAmount: totalPaidAmount,
         paymentDate: latestPaymentDate ? new Date(latestPaymentDate) : quotation.paymentDate,
         paymentPhases: mergedPhases,
+        remainingAmount: remainingStored,
+        ...(subsidyCheques !== undefined ? { subsidyCheques } : {}),
         paymentPlanUpdatedBy: actorId,
         paymentPlanUpdatedAt: new Date()
       });
@@ -2265,6 +2309,7 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
       await quotation.update({
         paymentMode: paymentMode !== undefined ? paymentMode : quotation.paymentMode,
         paymentType: paymentType !== undefined ? paymentType : (quotation as any).paymentType,
+        ...(subsidyCheques !== undefined ? { subsidyCheques } : {}),
         paymentPlanUpdatedBy: actorId,
         paymentPlanUpdatedAt: new Date()
       });
@@ -2279,21 +2324,27 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
     const totalPaidSaved = quotation.paidAmount != null ? Number(quotation.paidAmount) : sumPhasePaidAmounts(responsePhases);
     const subtotalNum = Number(quotation.subtotal || 0);
     const remainingAmount = remainingPaymentAgainstSubtotal(subtotalNum, totalPaidSaved);
+    const qAny = quotation as any;
+    const subsidyChequesOut = Array.isArray(qAny.subsidyCheques) ? qAny.subsidyCheques : [];
+    const rowPlain = quotation.get({ plain: true }) as unknown as Record<string, unknown>;
 
     res.json({
       success: true,
       data: {
         id: quotation.id,
         quotationId: quotation.id,
-        paymentType: (quotation as any).paymentType || null,
-        paymentMode: quotation.paymentMode,
+        ...quotationPaymentApiFields(rowPlain),
+        ...quotationAdminMetadataFields(rowPlain),
         paymentStatus: quotation.paymentStatus,
         subtotal: subtotalNum,
         paidAmount: totalPaidSaved,
         remaining: remainingAmount,
         remainingAmount,
+        subsidyCheques: subsidyChequesOut,
+        subsidy_cheques: subsidyChequesOut,
         installments: responsePhases,
         paymentPhases: responsePhases,
+        payment_phases: responsePhases,
         paymentPlanUpdatedBy: (quotation as any).paymentPlanUpdatedBy || null,
         paymentPlanUpdatedAt: (quotation as any).paymentPlanUpdatedAt || null,
         updatedAt: quotation.updatedAt
@@ -2420,6 +2471,9 @@ const resolveQuotationDocumentUrls = async (documents: any) => {
     'panImage',
     'electricityBillImage',
     'bankPassbookImage',
+    'geotagRoofPhoto',
+    'customerWithHousePhoto',
+    'propertyDocumentPdf',
     'compliantAadharFront',
     'compliantAadharBack',
     'compliantPanImage',
@@ -2429,6 +2483,10 @@ const resolveQuotationDocumentUrls = async (documents: any) => {
   for (const field of imageFields) {
     json[field] = await resolveDocumentImageUrl(json[field]);
   }
+
+  json.geotagRoofPhotoUrl = json.geotagRoofPhoto;
+  json.customerWithHousePhotoUrl = json.customerWithHousePhoto;
+  json.propertyDocumentPdfUrl = json.propertyDocumentPdf;
 
   return json;
 };
@@ -2487,6 +2545,9 @@ export const saveQuotationDocuments = async (req: Request, res: Response): Promi
     const panImageUrl = await getUploadedFileUrl(req, 'panImage', quotation.id);
     const electricityBillImageUrl = await getUploadedFileUrl(req, 'electricityBillImage', quotation.id);
     const bankPassbookImageUrl = await getUploadedFileUrl(req, 'bankPassbookImage', quotation.id);
+    const geotagRoofPhotoUrl = await getUploadedFileUrl(req, 'geotagRoofPhoto', quotation.id);
+    const customerWithHousePhotoUrl = await getUploadedFileUrl(req, 'customerWithHousePhoto', quotation.id);
+    const propertyDocumentPdfUrl = await getUploadedFileUrl(req, 'propertyDocumentPdf', quotation.id);
     const compliantAadharFrontUrl = await getUploadedFileUrl(req, 'compliantAadharFront', quotation.id);
     const compliantAadharBackUrl = await getUploadedFileUrl(req, 'compliantAadharBack', quotation.id);
     const compliantPanImageUrl = await getUploadedFileUrl(req, 'compliantPanImage', quotation.id);
@@ -2499,6 +2560,9 @@ export const saveQuotationDocuments = async (req: Request, res: Response): Promi
       panImageUrl,
       electricityBillImageUrl,
       bankPassbookImageUrl,
+      geotagRoofPhotoUrl,
+      customerWithHousePhotoUrl,
+      propertyDocumentPdfUrl,
       compliantAadharFrontUrl,
       compliantAadharBackUrl,
       compliantPanImageUrl,
@@ -2512,6 +2576,9 @@ export const saveQuotationDocuments = async (req: Request, res: Response): Promi
         { newUrl: panImageUrl, oldUrl: existing.panImage },
         { newUrl: electricityBillImageUrl, oldUrl: existing.electricityBillImage },
         { newUrl: bankPassbookImageUrl, oldUrl: existing.bankPassbookImage },
+        { newUrl: geotagRoofPhotoUrl, oldUrl: existing.geotagRoofPhoto },
+        { newUrl: customerWithHousePhotoUrl, oldUrl: existing.customerWithHousePhoto },
+        { newUrl: propertyDocumentPdfUrl, oldUrl: existing.propertyDocumentPdf },
         { newUrl: compliantAadharFrontUrl, oldUrl: existing.compliantAadharFront },
         { newUrl: compliantAadharBackUrl, oldUrl: existing.compliantAadharBack },
         { newUrl: compliantPanImageUrl, oldUrl: existing.compliantPanImage },
@@ -2587,6 +2654,21 @@ export const saveQuotationDocuments = async (req: Request, res: Response): Promi
         body.bankPassbookImage,
         existing?.bankPassbookImage
       ),
+      geotagRoofPhoto: resolveMediaValue(
+        geotagRoofPhotoUrl,
+        body.geotagRoofPhoto,
+        existing?.geotagRoofPhoto
+      ),
+      customerWithHousePhoto: resolveMediaValue(
+        customerWithHousePhotoUrl,
+        body.customerWithHousePhoto,
+        existing?.customerWithHousePhoto
+      ),
+      propertyDocumentPdf: resolveMediaValue(
+        propertyDocumentPdfUrl,
+        body.propertyDocumentPdf,
+        existing?.propertyDocumentPdf
+      ),
       isCompliantSenior: isCompliantSenior ? true : false,
       compliantAadharNumber: resolveValue(
         undefined,
@@ -2644,6 +2726,28 @@ export const saveQuotationDocuments = async (req: Request, res: Response): Promi
         existing?.compliantBankPassbookImage
       )
     };
+
+    const requiredDocumentFields = [
+      'aadharFront',
+      'aadharBack',
+      'panImage',
+      'electricityBillImage',
+      'bankPassbookImage',
+      'geotagRoofPhoto',
+      'customerWithHousePhoto',
+      'propertyDocumentPdf'
+    ] as const;
+    const missingRequired = requiredDocumentFields.filter((field) => !payload[field]);
+    if (missingRequired.length > 0) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VAL_001',
+          message: `Missing required documents: ${missingRequired.join(', ')}`
+        }
+      });
+      return;
+    }
 
     if (payload.isCompliantSenior) {
       if (

@@ -7,7 +7,9 @@ export const updateStatusSchema = z
     paymentMode: z.enum(['loan', 'cash', 'mix']).optional(),
     bankName: z.string().optional(),
     bankIfsc: z.string().optional(),
-    bank_ifsc: z.string().optional()
+    bank_ifsc: z.string().optional(),
+    subsidyChequeDetails: z.string().optional(),
+    subsidy_cheque_details: z.string().optional()
   })
   .refine(
     (data) => {
@@ -19,6 +21,27 @@ export const updateStatusSchema = z
       path: ['paymentType']
     }
   );
+
+/** PATCH /admin/quotations/:id/file-login — body validated loosely; controller enforces rules. */
+export const fileLoginSchema = z
+  .object({
+    resetFileLogin: z.boolean().optional(),
+    fileLoginStatus: z.string().optional(),
+    file_login_status: z.string().optional(),
+    filePaymentType: z.enum(['loan', 'cash', 'mix']).optional(),
+    file_payment_type: z.enum(['loan', 'cash', 'mix']).optional(),
+    paymentMode: z.enum(['loan', 'cash', 'mix']).optional(),
+    fileBankName: z.string().optional(),
+    file_bank_name: z.string().optional(),
+    bankName: z.string().optional(),
+    fileBankIfsc: z.string().optional(),
+    file_bank_ifsc: z.string().optional(),
+    bankIfsc: z.string().optional(),
+    bank_ifsc: z.string().optional(),
+    fileSubsidyChequeDetails: z.string().optional(),
+    file_subsidy_cheque_details: z.string().optional()
+  })
+  .passthrough();
 
 export const createVisitorSchema = z.object({
   username: z.string().min(1, 'Username is required').max(50),

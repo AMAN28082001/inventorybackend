@@ -1579,8 +1579,36 @@ export const getHrLeadUploadBatches = async (req: Request, res: Response): Promi
     }
 
     const total = batches.count;
+    const hrUploadsList = batches.rows.map((batch) => {
+      const assignedDealers = Array.isArray(batch.assignedDealers) ? batch.assignedDealers : [];
+      return {
+        id: batch.id,
+        uploadedAt: batch.uploadedAt,
+        fileName: batch.fileName,
+        rowCount: batch.rowCount,
+        dealerIds: assignedDealers,
+        rows: (rowsByBatch.get(batch.id) || []).map((row) => {
+          const rawPayload = (row.rawPayload || {}) as Record<string, unknown>;
+          return {
+            id: row.id,
+            name: row.customerName || '',
+            mobile: row.customerMobile || '',
+            altMobile: String(extractCell(rawPayload, ALT_MOBILE_KEYS) || '').trim() || null,
+            kNumber: String(extractCell(rawPayload, K_NUMBER_KEYS) || '').trim() || null,
+            address: row.customerAddress || '',
+            city: String(extractCell(rawPayload, CITY_KEYS) || '').trim() || null,
+            state: String(extractCell(rawPayload, STATE_KEYS) || '').trim() || null,
+            customerNote: String(extractCell(rawPayload, NOTE_KEYS) || '').trim() || null,
+            assignedDealerId: null,
+            status: row.status
+          };
+        })
+      };
+    });
+
     res.json({
       success: true,
+      uploads: hrUploadsList,
       data: {
         batches: batches.rows.map((batch) => {
           const assignedDealers = Array.isArray(batch.assignedDealers) ? batch.assignedDealers : [];
@@ -1619,32 +1647,7 @@ export const getHrLeadUploadBatches = async (req: Request, res: Response): Promi
             rows
           };
         }),
-        uploads: batches.rows.map((batch) => {
-          const assignedDealers = Array.isArray(batch.assignedDealers) ? batch.assignedDealers : [];
-          return {
-            id: batch.id,
-            uploadedAt: batch.uploadedAt,
-            fileName: batch.fileName,
-            rowCount: batch.rowCount,
-            dealerIds: assignedDealers,
-            rows: (rowsByBatch.get(batch.id) || []).map((row) => {
-              const rawPayload = (row.rawPayload || {}) as Record<string, unknown>;
-              return {
-                id: row.id,
-                name: row.customerName || '',
-                mobile: row.customerMobile || '',
-                altMobile: String(extractCell(rawPayload, ALT_MOBILE_KEYS) || '').trim() || null,
-                kNumber: String(extractCell(rawPayload, K_NUMBER_KEYS) || '').trim() || null,
-                address: row.customerAddress || '',
-                city: String(extractCell(rawPayload, CITY_KEYS) || '').trim() || null,
-                state: String(extractCell(rawPayload, STATE_KEYS) || '').trim() || null,
-                customerNote: String(extractCell(rawPayload, NOTE_KEYS) || '').trim() || null,
-                assignedDealerId: null,
-                status: row.status
-              };
-            })
-          };
-        }),
+        uploads: hrUploadsList,
         pagination: {
           page,
           limit,

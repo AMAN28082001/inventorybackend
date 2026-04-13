@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ALLOWED_PAYMENT_MODES, normalizePaymentModeInput } from '../utils/paymentMode';
+import { normalizeSubsidyChequesFromRequestBody } from '../utils/subsidyChequesNormalize';
 
 const addressSchema = z.object({
   street: z.string().min(1),
@@ -10,9 +11,9 @@ const addressSchema = z.object({
 
 const customerSchema = z.object({
   firstName: z.string().min(1),
-  lastName: z.string().min(1),
+  lastName: z.string().trim().optional().nullable().default(''),
   mobile: z.string().regex(/^\d{10}$/),
-  email: z.union([z.string().email(), z.literal('')]).optional(),
+  email: z.string().trim().email('Invalid email format').optional().or(z.literal('')).nullable().default(''),
   address: addressSchema
 });
 
@@ -199,6 +200,16 @@ const rawPaymentPhaseSchema = z.object({
 const resolvePhasePaid = (p: z.infer<typeof rawPaymentPhaseSchema>): number =>
   Number(p.paidAmount ?? p.paid_amount ?? p.paidAmt ?? p.paid ?? 0);
 
+const subsidyChequeRowSchema = z.object({
+  id: z.union([z.string(), z.number()]).optional(),
+  details: z.string().optional(),
+  chequeDetails: z.string().optional(),
+  amount: z.union([z.number(), z.string()]).optional(),
+  status: z.enum(['pending', 'cleared']).optional(),
+  clearedAt: z.union([z.string(), z.null()]).optional(),
+  cleared_at: z.union([z.string(), z.null()]).optional()
+});
+
 export const updatePaymentDetailsSchema = z
   .object({
     paymentType: z.enum(['loan', 'cash', 'mix']).optional(),
@@ -206,7 +217,9 @@ export const updatePaymentDetailsSchema = z
     paymentStatus: paymentStatusEnum.optional(),
     phases: z.array(rawPaymentPhaseSchema).optional(),
     installments: z.array(rawPaymentPhaseSchema).optional(),
-    paymentPhases: z.array(rawPaymentPhaseSchema).optional()
+    paymentPhases: z.array(rawPaymentPhaseSchema).optional(),
+    subsidyCheques: z.array(subsidyChequeRowSchema).optional(),
+    subsidy_cheques: z.array(subsidyChequeRowSchema).optional()
   })
   .refine(
     (data) =>
@@ -257,11 +270,16 @@ export const updatePaymentDetailsSchema = z
             : String(rawTid)
       };
     });
+    const subsidyCheques =
+      data.subsidyCheques !== undefined || data.subsidy_cheques !== undefined
+        ? normalizeSubsidyChequesFromRequestBody(data.subsidyCheques ?? data.subsidy_cheques ?? [])
+        : undefined;
     return {
       paymentType: data.paymentType,
       paymentMode: topMode,
       paymentStatus: data.paymentStatus,
-      phases
+      phases,
+      subsidyCheques
     };
   })
   .superRefine((data, ctx) => {
@@ -342,6 +360,9 @@ export const quotationDocumentsSchema = z.object({
   bankName: z.string().min(1).optional(),
   bankBranch: z.string().min(1).optional(),
   bankPassbookImage: z.string().min(1).optional(),
+  geotagRoofPhoto: z.string().min(1).optional(),
+  customerWithHousePhoto: z.string().min(1).optional(),
+  propertyDocumentPdf: z.string().min(1).optional(),
   isCompliantSenior: booleanOrString.optional(),
   compliantAadharNumber: z.string().min(1).optional().refine((val) => !val || aadharRegex.test(val), {
     message: 'Compliant Aadhar number must be 12 digits'

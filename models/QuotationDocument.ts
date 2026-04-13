@@ -18,6 +18,9 @@ interface QuotationDocumentAttributes {
   bankName?: string | null;
   bankBranch?: string | null;
   bankPassbookImage?: string | null;
+  geotagRoofPhoto?: string | null;
+  customerWithHousePhoto?: string | null;
+  propertyDocumentPdf?: string | null;
   isCompliantSenior?: boolean | null;
   compliantAadharNumber?: string | null;
   compliantAadharFront?: string | null;
@@ -51,6 +54,9 @@ interface QuotationDocumentCreationAttributes extends Optional<
   | 'bankName'
   | 'bankBranch'
   | 'bankPassbookImage'
+  | 'geotagRoofPhoto'
+  | 'customerWithHousePhoto'
+  | 'propertyDocumentPdf'
   | 'isCompliantSenior'
   | 'compliantAadharNumber'
   | 'compliantAadharFront'
@@ -87,6 +93,9 @@ class QuotationDocument
   public bankName!: string | null;
   public bankBranch!: string | null;
   public bankPassbookImage!: string | null;
+  public geotagRoofPhoto!: string | null;
+  public customerWithHousePhoto!: string | null;
+  public propertyDocumentPdf!: string | null;
   public isCompliantSenior!: boolean | null;
   public compliantAadharNumber!: string | null;
   public compliantAadharFront!: string | null;
@@ -128,6 +137,9 @@ QuotationDocument.init(
     bankName: { type: DataTypes.STRING(100), allowNull: true },
     bankBranch: { type: DataTypes.STRING(100), allowNull: true },
     bankPassbookImage: { type: DataTypes.STRING(255), allowNull: true },
+    geotagRoofPhoto: { type: DataTypes.STRING(255), allowNull: true },
+    customerWithHousePhoto: { type: DataTypes.STRING(255), allowNull: true },
+    propertyDocumentPdf: { type: DataTypes.STRING(255), allowNull: true },
     isCompliantSenior: { type: DataTypes.BOOLEAN, allowNull: true },
     compliantAadharNumber: { type: DataTypes.STRING(50), allowNull: true },
     compliantAadharFront: { type: DataTypes.STRING(255), allowNull: true },
