@@ -95,6 +95,13 @@ const parseDateSafe = (value: string | undefined): Date | null => {
   return parsed;
 };
 
+const toIsoStringOrNull = (value: unknown): string | null => {
+  if (!value) return null;
+  if (value instanceof Date) return value.toISOString();
+  const parsed = new Date(String(value));
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+};
+
 const parseTaggedCallRemark = (rawRemark: unknown): { statusCategory: string | null; status: string | null; remark: string | null } => {
   const raw = String(rawRemark || '').trim();
   if (!raw) return { statusCategory: null, status: null, remark: null };
@@ -125,7 +132,7 @@ const callingActionToApiJson = (row: any) => {
     name: row.lead?.name || '',
     mobile: row.lead?.mobile || '',
     action: row.action,
-    actionAt: row.actionAt,
+    actionAt: toIsoStringOrNull(row.actionAt),
     // compatibility
     callRemark: row.callRemark,
     statusLabel: row.statusLabel,
@@ -140,7 +147,7 @@ const callingActionToApiJson = (row: any) => {
     // Required by Calling Data > Recent Actions card
     kNumber: row.kNumber ?? row.k_number ?? row.lead?.kNumber ?? row.lead?.k_number ?? null,
     address: row.address ?? row.leadAddress ?? row.lead_address ?? row.lead?.address ?? null,
-    nextFollowUpAt: row.nextFollowUpAt,
+    nextFollowUpAt: toIsoStringOrNull(row.nextFollowUpAt),
     assignmentStatus: row.status
   };
 };
@@ -296,20 +303,46 @@ const buildLatestStatusMetaMap = async (dealerId: string, leadIds: string[]): Pr
 };
 
 const buildCallingActionsFilter = (req: Request): WhereOptions => {
-  const requestedRange = String(req.query.range || 'all').toLowerCase();
+  const rawRange = String(req.query.range ?? req.query.dateRange ?? 'all')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+  const rangeAliases: Record<string, CallingActionFilterRange> = {
+    day: 'daily',
+    today: 'daily',
+    daily: 'daily',
+    week: 'weekly',
+    weekly: 'weekly',
+    month: 'monthly',
+    monthly: 'monthly',
+    lastmonth: 'last_month',
+    last_month: 'last_month',
+    all: 'all'
+  };
+  const requestedRange = rangeAliases[rawRange] || 'all';
   const range: CallingActionFilterRange =
     (CALLING_ACTION_FILTER_RANGES as readonly string[]).includes(requestedRange)
       ? (requestedRange as CallingActionFilterRange)
       : 'all';
-  const dealerId = req.query.dealerId ? String(req.query.dealerId) : undefined;
+  const dealerIdRaw =
+    req.query.dealerId ??
+    req.query.dealer_id ??
+    req.query.selectedDealerId ??
+    req.query.selected_dealer_id;
+  const dealerId = dealerIdRaw ? String(dealerIdRaw).trim() : '';
+  const dealerName =
+    req.query.dealerName ??
+    req.query.dealer_name ??
+    req.query.dealer ??
+    req.query.selectedDealerName;
   const category = req.query.category ? String(req.query.category).trim() : '';
   const statusCategoryKey = req.query.statusCategoryKey ? String(req.query.statusCategoryKey).trim() : '';
   const reason = req.query.reason ? String(req.query.reason).trim() : '';
   const action = req.query.action ? String(req.query.action).trim() : '';
   const search = req.query.search ? String(req.query.search).trim() : '';
   const dateRange = req.query.dateRange ? String(req.query.dateRange).trim().toLowerCase() : '';
-  const startDate = parseDateBoundary(req.query.startDate, 'start');
-  const endDate = parseDateBoundary(req.query.endDate, 'end');
+  const startDate = parseDateBoundary(req.query.startDate ?? req.query.start_date, 'start');
+  const endDate = parseDateBoundary(req.query.endDate ?? req.query.end_date, 'end');
 
   const { rangeStart, rangeEnd } = resolveReportDateRange(range, dateRange, startDate, endDate);
 
@@ -317,14 +350,29 @@ const buildCallingActionsFilter = (req: Request): WhereOptions => {
   if (dealerId) {
     (filter as any).dealerId = dealerId;
   }
+  if (!dealerId && dealerName) {
+    (filter as any).dealerName = { [Op.iLike]: `%${String(dealerName).trim()}%` };
+  }
   if (rangeStart || rangeEnd) {
-    (filter as any).actionAt = {};
+    const actionAtBound: Record<symbol, Date> = {} as Record<symbol, Date>;
+    const createdAtBound: Record<symbol, Date> = {} as Record<symbol, Date>;
     if (rangeStart) {
-      (filter as any).actionAt[Op.gte] = rangeStart;
+      actionAtBound[Op.gte] = rangeStart;
+      createdAtBound[Op.gte] = rangeStart;
     }
     if (rangeEnd) {
-      (filter as any).actionAt[Op.lte] = rangeEnd;
+      actionAtBound[Op.lte] = rangeEnd;
+      createdAtBound[Op.lte] = rangeEnd;
     }
+    // Backward compatibility: some historical rows may miss actionAt.
+    (filter as any)[Op.and] = [
+      {
+        [Op.or]: [
+          { actionAt: actionAtBound },
+          { createdAt: createdAtBound }
+        ]
+      }
+    ];
   }
   if (category || statusCategoryKey) {
     (filter as any).statusCategory = statusCategoryKey || category;
@@ -421,12 +469,12 @@ const buildCallingActionsResponse = async (req: Request) => {
       isCustomReason: row.isCustomReason,
       statusCategoryKey: row.statusCategory,
       statusCategoryLabel: row.statusLabel,
-      actionAt: row.actionAt,
-      nextFollowUpAt: row.nextFollowUpAt,
+      actionAt: toIsoStringOrNull(row.actionAt),
+      nextFollowUpAt: toIsoStringOrNull(row.nextFollowUpAt),
       customerName: row.customerName,
       customerMobile: row.customerMobile,
       customerAddress: row.customerAddress,
-      createdAt: row.createdAt
+      createdAt: toIsoStringOrNull(row.createdAt)
     }));
 
   const dealers = allDealers.map((dealer) => ({
@@ -1443,16 +1491,16 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
   }
 };
 
-export const getHrDealersForAssignment = async (_req: Request, res: Response): Promise<void> => {
+export const getHrDealersForAssignment = async (req: Request, res: Response): Promise<void> => {
   try {
+    const includeInactive = String(req.query.includeInactive || 'true').toLowerCase() === 'true';
+    const where: any = { role: 'dealer' };
+    if (!includeInactive) {
+      where[Op.or] = [{ isActive: true }, { emailVerified: true }];
+    }
+
     const dealers = await Dealer.findAll({
-      where: {
-        role: 'dealer',
-        [Op.or]: [
-          { isActive: true },
-          { emailVerified: true }
-        ]
-      },
+      where,
       attributes: ['id', 'firstName', 'lastName', 'mobile', 'email', 'isActive', 'emailVerified'],
       order: [['firstName', 'ASC'], ['lastName', 'ASC']]
     });

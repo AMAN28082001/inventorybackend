@@ -124,7 +124,7 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
         {
           model: Dealer,
           as: 'dealer',
-          attributes: ['id', 'firstName', 'lastName', 'mobile']
+          attributes: ['id', 'firstName', 'lastName', 'email', 'mobile', 'username', 'role']
         },
         {
           model: Customer,
@@ -177,7 +177,10 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
               id: qAny.dealer.id,
               firstName: qAny.dealer.firstName,
               lastName: qAny.dealer.lastName,
-              mobile: qAny.dealer.mobile ?? null
+              email: qAny.dealer.email ?? null,
+              mobile: qAny.dealer.mobile ?? null,
+              username: qAny.dealer.username ?? null,
+              role: qAny.dealer.role ?? null
             } : null,
             customer: qAny.customer ? {
               firstName: qAny.customer.firstName,
@@ -550,7 +553,7 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
         {
           model: Dealer,
           as: 'dealer',
-          attributes: ['id', 'firstName', 'lastName', 'email', 'mobile']
+          attributes: ['id', 'firstName', 'lastName', 'email', 'mobile', 'username', 'role']
         },
         {
           model: Customer,
@@ -637,11 +640,12 @@ export const getAllDealers = async (req: Request, res: Response): Promise<void> 
     const offset = (page - 1) * limit;
     const search = req.query.search as string;
     const isActive = req.query.isActive as string;
+    const includeInactive = String(req.query.includeInactive || '').toLowerCase() === 'true';
 
     const where: any = { role: 'dealer' };
     
-    // Filter by isActive if provided
-    if (isActive !== undefined) {
+    // HR dealer-pool selector can request all dealers regardless of active status.
+    if (!includeInactive && isActive !== undefined) {
       where.isActive = isActive === 'true';
     }
 
