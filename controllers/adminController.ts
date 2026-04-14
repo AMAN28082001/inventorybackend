@@ -124,7 +124,7 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
         {
           model: Dealer,
           as: 'dealer',
-          attributes: ['id', 'firstName', 'lastName']
+          attributes: ['id', 'firstName', 'lastName', 'mobile']
         },
         {
           model: Customer,
@@ -176,7 +176,8 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
             dealer: qAny.dealer ? {
               id: qAny.dealer.id,
               firstName: qAny.dealer.firstName,
-              lastName: qAny.dealer.lastName
+              lastName: qAny.dealer.lastName,
+              mobile: qAny.dealer.mobile ?? null
             } : null,
             customer: qAny.customer ? {
               firstName: qAny.customer.firstName,

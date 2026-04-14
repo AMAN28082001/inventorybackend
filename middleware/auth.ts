@@ -83,12 +83,20 @@ export const authorizeProductManagement = (req: Request, res: Response, next: Ne
   }
 
   const userRole = normalizeRole(req.user.role);
-  const isProductManager =
+  const compactRole = userRole.replace(/-/g, '');
+  const isSuperAdmin =
+    userRole === 'super-admin' ||
+    compactRole === 'superadmin';
+  const isSuperAdminManager =
     userRole === 'super-admin-manager' ||
+    compactRole === 'superadminmanager' ||
+    (compactRole.includes('super') && compactRole.includes('admin') && compactRole.includes('manager'));
+  const isProductManager =
+    isSuperAdminManager ||
     userRole === 'product-manager' ||
     (userRole.includes('product') && userRole.includes('manager'));
 
-  if (userRole !== 'super-admin' && !isProductManager) {
+  if (!isSuperAdmin && !isProductManager) {
     res.status(403).json({ error: 'Access denied. Insufficient permissions.' });
     return;
   }
