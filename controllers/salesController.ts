@@ -739,7 +739,8 @@ export const updateSale = async (req: Request, res: Response): Promise<void> => 
       sale.created_by === req.user.id ||
       req.user.role === 'super-admin' ||
       req.user.role === 'admin' ||
-      req.user.role === 'account';
+      req.user.role === 'account' ||
+      req.user.role === 'super-admin-manager';
 
     if (!canUpdate) {
       await transaction.rollback();
@@ -787,9 +788,9 @@ export const updateSale = async (req: Request, res: Response): Promise<void> => 
     }
 
     if (approval_status !== undefined) {
-      if (req.user.role !== 'account') {
+      if (!['account', 'super-admin-manager', 'super-admin'].includes(req.user.role)) {
         await transaction.rollback();
-        res.status(403).json({ error: 'Only account managers can approve sales' });
+        res.status(403).json({ error: 'Only account roles can approve sales' });
         return;
       }
       if (!['pending', 'approved'].includes(approval_status)) {
@@ -963,9 +964,9 @@ export const confirmB2BBill = async (req: Request, res: Response): Promise<void>
       return;
     }
 
-    if (req.user.role !== 'account') {
+    if (!['account', 'super-admin-manager', 'super-admin'].includes(req.user.role)) {
       res.status(403).json({
-        error: 'Only account managers can confirm bills'
+        error: 'Only account roles can confirm bills'
       });
       return;
     }
@@ -991,7 +992,7 @@ export const confirmB2BBill = async (req: Request, res: Response): Promise<void>
       bill_image: billImage,
       bill_confirmed_date: new Date(),
       bill_confirmed_by_id: req.user.id,
-      bill_confirmed_by_name: req.user.name,
+      bill_confirmed_by_name: (req.user as any).name || req.user.username || null,
       payment_status: 'completed',
       approval_status: 'approved'
     });
@@ -1016,8 +1017,8 @@ export const approveSale = async (req: Request, res: Response): Promise<void> =>
       return;
     }
 
-    if (req.user.role !== 'account') {
-      res.status(403).json({ error: 'Only account managers can approve sales' });
+    if (!['account', 'super-admin-manager', 'super-admin'].includes(req.user.role)) {
+      res.status(403).json({ error: 'Only account roles can approve sales' });
       return;
     }
 

@@ -24,7 +24,7 @@ export const getAllUsers = async (req: Request, res: Response): Promise<void> =>
       // Admins only see their own agents
       where.role = 'agent';
       where.created_by_id = userId;
-    } else if (userRole === 'account') {
+    } else if (userRole === 'account' || userRole === 'super-admin-manager') {
       // Account role sees all agents by default
       if (role) {
         where.role = role;
@@ -194,14 +194,14 @@ export const updateUser = async (req: Request, res: Response): Promise<void> => 
       return;
     }
 
-    if (req.user.role === 'account') {
+    if (req.user.role === 'account' || req.user.role === 'super-admin-manager') {
       if (user.role !== 'agent') {
-        res.status(403).json({ error: 'Account role can only approve agents' });
+        res.status(403).json({ error: 'This role can only approve agents' });
         return;
       }
       const onlyIsActive = Object.keys(req.body).every((key) => key === 'is_active');
       if (!onlyIsActive) {
-        res.status(403).json({ error: 'Account role can only update is_active' });
+        res.status(403).json({ error: 'This role can only update is_active' });
         return;
       }
     }

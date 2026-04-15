@@ -129,10 +129,10 @@ router.post('/', authorize('agent', 'admin'), upload.single('image'), uploadToS3
 router.put('/:id', upload.single('image'), uploadToS3('sales'), validate(updateSaleSchema), updateSale);
 
 // Confirm B2B bill - only account role
-router.post('/:id/confirm-bill', authorize('account'), upload.single('bill_image'), uploadToS3('sales'), confirmB2BBill);
+router.post('/:id/confirm-bill', authorize('account', 'super-admin-manager', 'super-admin'), upload.single('bill_image'), uploadToS3('sales'), confirmB2BBill);
 
 // Approve sale - only account role
-router.post('/:id/approve', authorize('account'), approveSale);
+router.post('/:id/approve', authorize('account', 'super-admin-manager', 'super-admin'), approveSale);
 
 // Delete - creator or super-admin can delete
 router.delete('/:id', deleteSale);
