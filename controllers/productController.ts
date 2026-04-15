@@ -484,22 +484,24 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
       return;
     }
 
-    if (quantity !== undefined) {
-      if (quantity < 0) {
+    const quantityNumber = quantity !== undefined ? Number(quantity) : undefined;
+    if (quantityNumber !== undefined) {
+      if (!Number.isFinite(quantityNumber) || quantityNumber < 0) {
         res.status(400).json({ error: 'Quantity cannot be negative' });
         return;
       }
       if (stockToAdd === undefined) {
-        updates.quantity = quantity;
+        updates.quantity = quantityNumber;
       }
     }
 
     if (unit_price !== undefined) {
-      if (unit_price < 0) {
+      const unitPriceNumber = unit_price === null || unit_price === '' ? null : Number(unit_price);
+      if (unitPriceNumber !== null && (!Number.isFinite(unitPriceNumber) || unitPriceNumber < 0)) {
         res.status(400).json({ error: 'Unit price cannot be negative' });
         return;
       }
-      updates.unit_price = unit_price;
+      updates.unit_price = unitPriceNumber;
     }
 
     if (selling_price !== undefined) {
@@ -568,8 +570,19 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
         const hasPriceMap = Object.keys(priceMap).length > 0;
 
         const currentQuantity = Number(product.quantity);
-        if (currentQuantity === 0) {
-          throw new Error('Cannot add stock to a product with zero quantity. Please set initial quantity first.');
+        if (!Number.isFinite(currentQuantity) || currentQuantity < 0) {
+          throw new Error('Current product quantity is invalid');
+        }
+
+        // Contract (delta mode): stock_to_add is always additive.
+        // If frontend also sends quantity, it must match current + stock_to_add.
+        if (quantityNumber !== undefined) {
+          const expectedQuantity = currentQuantity + stockToAdd;
+          if (quantityNumber !== expectedQuantity) {
+            throw new Error(
+              `quantity must match current quantity + stock_to_add (${currentQuantity} + ${stockToAdd} = ${expectedQuantity})`
+            );
+          }
         }
 
         if (finalSerials.length === 0) {
@@ -667,7 +680,7 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
         }
         createdSerials = uniqueSerials;
 
-        if (stockToAdd > 0 && stockToAdd !== currentQuantity) {
+        if (stockToAdd > 0) {
           await product.increment('quantity', { by: stockToAdd, transaction });
         }
 

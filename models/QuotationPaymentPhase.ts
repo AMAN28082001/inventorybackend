@@ -13,6 +13,7 @@ interface QuotationPaymentPhaseAttributes {
   paymentDate?: Date | null;
   paymentMode?: 'cash' | 'upi' | 'loan' | 'netbanking' | 'bank_transfer' | 'cheque' | 'card' | 'mix' | null;
   transactionId?: string | null;
+  note?: string | null;
   updatedBy?: string | null;
   updatedAtPhase?: Date | null;
   createdAt?: Date;
@@ -26,6 +27,7 @@ interface QuotationPaymentPhaseCreationAttributes extends Optional<
   | 'paymentDate'
   | 'paymentMode'
   | 'transactionId'
+  | 'note'
   | 'updatedBy'
   | 'updatedAtPhase'
   | 'createdAt'
@@ -46,6 +48,7 @@ class QuotationPaymentPhase
   public paymentDate!: Date | null;
   public paymentMode!: 'cash' | 'upi' | 'loan' | 'netbanking' | 'bank_transfer' | 'cheque' | 'card' | 'mix' | null;
   public transactionId!: string | null;
+  public note!: string | null;
   public updatedBy!: string | null;
   public updatedAtPhase!: Date | null;
   public readonly createdAt!: Date;
@@ -99,6 +102,10 @@ QuotationPaymentPhase.init(
     },
     transactionId: {
       type: DataTypes.STRING(255),
+      allowNull: true
+    },
+    note: {
+      type: DataTypes.TEXT,
       allowNull: true
     },
     updatedBy: {

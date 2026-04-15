@@ -297,6 +297,7 @@ type PaymentPhaseRecord = {
   paymentDate?: string | null;
   paymentMode?: 'cash' | 'upi' | 'loan' | 'netbanking' | 'bank_transfer' | 'cheque' | 'card' | 'mix' | null;
   transactionId?: string | null;
+  note?: string | null;
   updatedBy?: string | null;
   updatedAt?: string | null;
 };
@@ -336,6 +337,7 @@ const normalizePaymentPhases = (phases: any[], updatedBy: string | null): Paymen
           : computedStatus;
 
       const transactionIdRaw = phase.transactionId ?? phase.transaction_id;
+      const noteRaw = phase.note;
       return {
         phaseNumber: Number(phase.phaseNumber),
         phaseName: String(phase.phaseName || '').trim(),
@@ -346,6 +348,10 @@ const normalizePaymentPhases = (phases: any[], updatedBy: string | null): Paymen
         paymentDate: normalizeDateString(phase.paymentDate),
         paymentMode,
         transactionId: transactionIdRaw ? String(transactionIdRaw) : null,
+        note:
+          noteRaw === undefined || noteRaw === null || String(noteRaw).trim() === ''
+            ? null
+            : String(noteRaw).trim(),
         updatedBy,
         updatedAt: new Date().toISOString()
       } as PaymentPhaseRecord;
@@ -363,6 +369,7 @@ const serializePaymentPhaseRow = (row: any): PaymentPhaseRecord => ({
   paymentDate: row.paymentDate ? new Date(row.paymentDate).toISOString() : null,
   paymentMode: normalizePaymentModeInput(row.paymentMode) ?? null,
   transactionId: row.transactionId || null,
+  note: row.note || null,
   updatedBy: row.updatedBy || null,
   updatedAt: row.updatedAtPhase ? new Date(row.updatedAtPhase).toISOString() : null
 });
@@ -2249,6 +2256,7 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
           paymentDate: phase.paymentDate ? new Date(phase.paymentDate) : null,
           paymentMode: phase.paymentMode || null,
           transactionId: phase.transactionId || null,
+          note: phase.note || null,
           updatedBy: actorId,
           updatedAtPhase: new Date()
         };

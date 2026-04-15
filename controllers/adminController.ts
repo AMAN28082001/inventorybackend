@@ -153,7 +153,8 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
         dueDate: phase.dueDate ? new Date(phase.dueDate).toISOString() : null,
         paymentDate: phase.paymentDate ? new Date(phase.paymentDate).toISOString() : null,
         paymentMode: normalizePaymentModeInput(phase.paymentMode) ?? null,
-        transactionId: phase.transactionId || null
+        transactionId: phase.transactionId || null,
+        note: phase.note || null
       });
     }
 
@@ -585,7 +586,8 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
       dueDate: phase.dueDate ? new Date(phase.dueDate).toISOString() : null,
       paymentDate: phase.paymentDate ? new Date(phase.paymentDate).toISOString() : null,
       paymentMode: normalizePaymentModeInput(phase.paymentMode) ?? null,
-      transactionId: phase.transactionId || null
+      transactionId: phase.transactionId || null,
+      note: phase.note || null
     }));
     const subtotalNum = Number(quotation.subtotal || 0);
     const totalPaidForRemaining =

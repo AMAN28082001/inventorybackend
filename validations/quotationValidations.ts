@@ -194,7 +194,8 @@ const rawPaymentPhaseSchema = z.object({
   paymentDate: z.union([z.string(), z.null()]).optional(),
   paymentMode: z.union([z.string(), z.null()]).optional(),
   transactionId: z.union([z.string(), z.null()]).optional(),
-  transaction_id: z.union([z.string(), z.null()]).optional()
+  transaction_id: z.union([z.string(), z.null()]).optional(),
+  note: z.union([z.string(), z.null()]).optional()
 });
 
 const resolvePhasePaid = (p: z.infer<typeof rawPaymentPhaseSchema>): number =>
@@ -267,7 +268,11 @@ export const updatePaymentDetailsSchema = z
         transactionId:
           rawTid === undefined || rawTid === null || rawTid === ''
             ? undefined
-            : String(rawTid)
+            : String(rawTid),
+        note:
+          p.note === undefined || p.note === null
+            ? undefined
+            : String(p.note).trim()
       };
     });
     const subsidyCheques =
