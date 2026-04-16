@@ -2367,6 +2367,76 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
   }
 };
 
+export const updateQuotationInstallationRelease = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { quotationId } = req.params;
+    const { installationReadyForInstaller, installationReleasedAt } = req.body as {
+      installationReadyForInstaller: boolean;
+      installationReleasedAt?: string | null;
+    };
+
+    // Account-management/admin only; dealer-admin JWT kept for backward compatibility.
+    const role = req.user?.role;
+    const isAccountManager = role === 'account-management';
+    const isInventoryAdmin = role === 'admin';
+    const isQuotationAdmin = req.dealer && req.dealer.role === 'admin';
+    if (!isAccountManager && !isInventoryAdmin && !isQuotationAdmin) {
+      res.status(403).json({
+        success: false,
+        error: { code: 'AUTH_004', message: 'Insufficient permissions' }
+      });
+      return;
+    }
+
+    const quotation = await Quotation.findByPk(quotationId);
+    if (!quotation) {
+      res.status(404).json({
+        success: false,
+        error: { code: 'RES_001', message: 'Quotation not found' }
+      });
+      return;
+    }
+
+    const releaseTimestamp =
+      installationReadyForInstaller === true
+        ? (installationReleasedAt ? new Date(installationReleasedAt) : new Date())
+        : null;
+
+    const existingHistory = Array.isArray((quotation as any).statusHistory)
+      ? ([...(quotation as any).statusHistory] as Array<{ status: string; at: string; actorRole?: string | null; actorId?: string | null }>)
+      : [];
+    existingHistory.push({
+      status: installationReadyForInstaller ? 'installation_released' : 'installation_release_revoked',
+      at: new Date().toISOString(),
+      actorRole: role || req.dealer?.role || null,
+      actorId: req.user?.id || req.dealer?.id || null
+    });
+
+    await quotation.update({
+      installationReadyForInstaller,
+      installationReleasedAt: releaseTimestamp,
+      statusHistory: existingHistory
+    });
+
+    const rowPlain = quotation.get({ plain: true }) as unknown as Record<string, unknown>;
+    res.json({
+      success: true,
+      data: {
+        id: quotation.id,
+        quotationId: quotation.id,
+        ...quotationAdminMetadataFields(rowPlain),
+        updatedAt: quotation.updatedAt
+      }
+    });
+  } catch (error) {
+    logError('Update quotation installation release error', error, { quotationId: req.params.quotationId });
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
+};
+
 const getS3Client = () => {
   const region = process.env.AWS_REGION;
   const accessKeyId = process.env.AWS_ACCESS_KEY;

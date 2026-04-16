@@ -336,6 +336,31 @@ export const updatePaymentModeSchema = z.object({
     .refine((v) => v !== undefined, { message: 'Invalid or missing payment mode' })
 });
 
+export const updateInstallationReleaseSchema = z.object({
+  installationReadyForInstaller: z
+    .union([z.boolean(), z.string()])
+    .transform((value) => {
+      if (typeof value === 'boolean') return value;
+      const normalized = value.trim().toLowerCase();
+      if (normalized === 'true') return true;
+      if (normalized === 'false') return false;
+      throw new Error('installationReadyForInstaller must be boolean');
+    }),
+  installationReleasedAt: z
+    .union([z.string(), z.date(), z.null()])
+    .optional()
+    .transform((value) => {
+      if (value === undefined) return undefined;
+      if (value === null) return null;
+      if (value instanceof Date) return value.toISOString();
+      const parsed = new Date(value);
+      if (Number.isNaN(parsed.getTime())) {
+        throw new Error('installationReleasedAt must be a valid date');
+      }
+      return parsed.toISOString();
+    })
+});
+
 const aadharRegex = /^\d{12}$/;
 const phoneRegex = /^\d{10}$/;
 const panRegex = /^[A-Z]{5}\d{4}[A-Z]$/;

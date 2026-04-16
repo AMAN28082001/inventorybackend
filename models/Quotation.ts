@@ -62,6 +62,8 @@ interface QuotationAttributes {
   installerInProgressAt?: Date | null;
   installerApprovedAt?: Date | null;
   installerRemarks?: string | null;
+  installationReadyForInstaller?: boolean;
+  installationReleasedAt?: Date | null;
   baldevId?: string | null;
   baldevActionAt?: Date | null;
   baldevRemarks?: string | null;
@@ -73,7 +75,7 @@ interface QuotationAttributes {
 
 interface QuotationCreationAttributes extends Optional<
   QuotationAttributes,
-  'id' | 'status' | 'discount' | 'createdAt' | 'updatedAt' | 'centralSubsidy' | 'stateSubsidy' | 'totalSubsidy' | 'amountAfterSubsidy' | 'discountAmount' |   'paymentMode' | 'paymentType' | 'bankName' | 'bankIfsc' | 'subsidyChequeDetails' | 'fileLoginStatus' | 'filePaymentType' | 'fileBankName' | 'fileBankIfsc' | 'fileSubsidyChequeDetails' | 'fileLoginAt' | 'statusApprovedAt'   | 'statusHistory' | 'subsidyCheques' | 'remainingAmount' | 'paidAmount' | 'paymentDate' | 'paymentStatus' | 'paymentPhases' | 'paymentPlanUpdatedBy' | 'paymentPlanUpdatedAt' | 'approvedAt' | 'installationStatus' | 'installerId' | 'installerActionAt' | 'installerInProgressAt' | 'installerApprovedAt' | 'installerRemarks' | 'baldevId' | 'baldevActionAt' | 'baldevRemarks' | 'completionAt'
+  'id' | 'status' | 'discount' | 'createdAt' | 'updatedAt' | 'centralSubsidy' | 'stateSubsidy' | 'totalSubsidy' | 'amountAfterSubsidy' | 'discountAmount' |   'paymentMode' | 'paymentType' | 'bankName' | 'bankIfsc' | 'subsidyChequeDetails' | 'fileLoginStatus' | 'filePaymentType' | 'fileBankName' | 'fileBankIfsc' | 'fileSubsidyChequeDetails' | 'fileLoginAt' | 'statusApprovedAt'   | 'statusHistory' | 'subsidyCheques' | 'remainingAmount' | 'paidAmount' | 'paymentDate' | 'paymentStatus' | 'paymentPhases' | 'paymentPlanUpdatedBy' | 'paymentPlanUpdatedAt' | 'approvedAt' | 'installationStatus' | 'installerId' | 'installerActionAt' | 'installerInProgressAt' | 'installerApprovedAt' | 'installerRemarks' | 'installationReadyForInstaller' | 'installationReleasedAt' | 'baldevId' | 'baldevActionAt' | 'baldevRemarks' | 'completionAt'
 > {}
 
 class Quotation extends Model<QuotationAttributes, QuotationCreationAttributes> implements QuotationAttributes {
@@ -137,6 +139,8 @@ class Quotation extends Model<QuotationAttributes, QuotationCreationAttributes> 
   public installerInProgressAt!: Date | null;
   public installerApprovedAt!: Date | null;
   public installerRemarks!: string | null;
+  public installationReadyForInstaller!: boolean;
+  public installationReleasedAt!: Date | null;
   public baldevId!: string | null;
   public baldevActionAt!: Date | null;
   public baldevRemarks!: string | null;
@@ -336,6 +340,15 @@ Quotation.init(
       type: DataTypes.TEXT,
       allowNull: true
     },
+    installationReadyForInstaller: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false
+    },
+    installationReleasedAt: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
     baldevId: {
       type: DataTypes.STRING(50),
       allowNull: true
@@ -373,7 +386,9 @@ Quotation.init(
       { fields: ['dealerId', 'status'] },
       { fields: ['createdAt', 'status'] },
       { fields: ['installationStatus'] },
-      { fields: ['installationStatus', 'createdAt'] }
+      { fields: ['installationStatus', 'createdAt'] },
+      { fields: ['installationReadyForInstaller'] },
+      { fields: ['status', 'installationReadyForInstaller'] }
     ]
   }
 );

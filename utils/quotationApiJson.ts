@@ -70,6 +70,12 @@ export function quotationAdminMetadataFields(q: Record<string, unknown>) {
   const fileSubsidyChequeDetails = (q.fileSubsidyChequeDetails ?? q.file_subsidy_cheque_details ?? null) as string | null;
   const fileLoginAt = toIsoStringOrNull(q.fileLoginAt ?? q.file_login_at);
   const statusApprovedAt = toIsoStringOrNull(q.statusApprovedAt ?? q.status_approved_at);
+  const installationReadyForInstaller = Boolean(
+    q.installationReadyForInstaller ?? q.installation_ready_for_installer ?? false
+  );
+  const installationReleasedAt = toIsoStringOrNull(
+    q.installationReleasedAt ?? q.installation_released_at
+  );
   const statusHistory = readStatusHistoryFromRow(q);
   const subsidyCheques = readSubsidyChequesFromRow(q);
   return {
@@ -91,6 +97,10 @@ export function quotationAdminMetadataFields(q: Record<string, unknown>) {
     file_login_at: fileLoginAt,
     statusApprovedAt,
     status_approved_at: statusApprovedAt,
+    installationReadyForInstaller,
+    installation_ready_for_installer: installationReadyForInstaller,
+    installationReleasedAt,
+    installation_released_at: installationReleasedAt,
     statusHistory,
     status_history: statusHistory
   };

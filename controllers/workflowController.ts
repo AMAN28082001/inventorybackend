@@ -61,7 +61,12 @@ const mapWorkflowDocumentsForFrontend = (docs: any[]) => {
   };
 };
 
-const getWorkflowQueue = async (req: Request, res: Response, targetStatus: string) => {
+const getWorkflowQueue = async (
+  req: Request,
+  res: Response,
+  targetStatus: string,
+  extraWhere: Record<string, unknown> = {}
+) => {
   try {
     const page = parseInt(req.query.page as string) || 1;
     const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
@@ -78,6 +83,7 @@ const getWorkflowQueue = async (req: Request, res: Response, targetStatus: strin
     const where: any = requestedStatuses.length > 1
       ? { installationStatus: { [Op.in]: requestedStatuses } }
       : { installationStatus: requestedStatuses[0] || targetStatus };
+    Object.assign(where, extraWhere);
     if (search) {
       where[Op.or] = [
         { id: { [Op.iLike]: `%${search}%` } },
@@ -111,6 +117,8 @@ const getWorkflowQueue = async (req: Request, res: Response, targetStatus: strin
           id: q.id,
           status: q.status,
           installationStatus: q.installationStatus,
+          installationReadyForInstaller: Boolean(q.installationReadyForInstaller),
+          installationReleasedAt: q.installationReleasedAt || null,
           dealer: q.dealer || null,
           customer: q.customer || null,
           products: q.products || null,
@@ -145,7 +153,10 @@ const getWorkflowQueue = async (req: Request, res: Response, targetStatus: strin
 };
 
 export const getInstallerQueue = async (req: Request, res: Response): Promise<void> => {
-  await getWorkflowQueue(req, res, 'pending_installer');
+  await getWorkflowQueue(req, res, 'pending_installer', {
+    status: 'approved',
+    installationReadyForInstaller: true
+  });
 };
 
 export const getBaldevQueue = async (req: Request, res: Response): Promise<void> => {

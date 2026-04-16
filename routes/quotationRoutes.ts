@@ -8,6 +8,7 @@ import {
   updateQuotationProducts,
   updateQuotationPricing,
   updateQuotationPaymentDetails,
+  updateQuotationInstallationRelease,
   downloadQuotationsExcel,
   downloadQuotationPDF,
   getProductCatalog,
@@ -18,7 +19,7 @@ import { getVisitsForQuotation } from '../controllers/visitController';
 import { authenticate, authorizeDealer, authorizeDealerAdminOrVisitor, authorizeDealerOrAccountManager, rejectAccountManager } from '../middleware/authQuotation';
 import { validate } from '../middleware/validate';
 import { logRequestBeforeValidation, logRequestAfterValidation } from '../middleware/requestLogger';
-import { createQuotationSchema, updateDiscountSchema, updateProductsSchema, updatePricingSchema, updatePaymentDetailsSchema, updatePaymentModeSchema } from '../validations/quotationValidations';
+import { createQuotationSchema, updateDiscountSchema, updateProductsSchema, updatePricingSchema, updatePaymentDetailsSchema, updatePaymentModeSchema, updateInstallationReleaseSchema } from '../validations/quotationValidations';
 
 const router: Router = express.Router();
 
@@ -558,6 +559,8 @@ router.patch('/:quotationId/payment-details', authorizeDealerOrAccountManager, v
 router.patch('/:quotationId/installments', authorizeDealerOrAccountManager, validate(updatePaymentDetailsSchema), updateQuotationPaymentDetails);
 router.put('/:quotationId/installments', authorizeDealerOrAccountManager, validate(updatePaymentDetailsSchema), updateQuotationPaymentDetails);
 router.patch('/:quotationId/payment-mode', authorizeDealerOrAccountManager, validate(updatePaymentModeSchema), updateQuotationPaymentDetails);
+router.patch('/:quotationId/installation-release', authorizeDealerOrAccountManager, validate(updateInstallationReleaseSchema), updateQuotationInstallationRelease);
+router.patch('/:quotationId/installation/ready', authorizeDealerOrAccountManager, validate(updateInstallationReleaseSchema), updateQuotationInstallationRelease);
 
 router.post(
   '/:quotationId/documents',
