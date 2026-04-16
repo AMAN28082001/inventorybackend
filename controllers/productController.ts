@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { Product, AdminInventory, ProductSerialNumber } from '../models';
+import { Product, AdminInventory, ProductSerialNumber, InventoryTransaction } from '../models';
 import { v4 as uuidv4 } from 'uuid';
 import { Op } from 'sequelize';
 import sequelize from '../config/database';
@@ -8,6 +8,35 @@ import { deleteFileFromS3IfExists } from '../middleware/upload';
 import fs from 'fs';
 import path from 'path';
 import XLSX from 'xlsx';
+
+const logProductInventoryTransaction = async ({
+  productId,
+  transactionType,
+  quantity,
+  reference,
+  notes,
+  createdBy,
+  transaction
+}: {
+  productId: string;
+  transactionType: 'purchase' | 'adjustment' | 'sale' | 'transfer' | 'return';
+  quantity: number;
+  reference: string;
+  notes?: string | null;
+  createdBy?: string | null;
+  transaction?: any;
+}) => {
+  if (!quantity || Number.isNaN(quantity)) return;
+  await InventoryTransaction.create({
+    id: uuidv4(),
+    product_id: productId,
+    transaction_type: transactionType,
+    quantity,
+    reference,
+    notes: notes || null,
+    created_by: createdBy || null
+  }, transaction ? { transaction } : undefined);
+};
 
 // Get all products
 export const getAllProducts = async (req: Request, res: Response): Promise<void> => {
@@ -357,6 +386,18 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
       return;
     }
 
+    const initialQuantity = Number(newProduct.quantity || 0);
+    if (initialQuantity > 0) {
+      await logProductInventoryTransaction({
+        productId: newProduct.id,
+        transactionType: 'purchase',
+        quantity: initialQuantity,
+        reference: 'product_create',
+        notes: 'Initial stock on product creation',
+        createdBy: req.user?.id || null
+      });
+    }
+
     logInfo('Product created', { productId: newProduct.id, name: newProduct.name, model: newProduct.model, createdBy: req.user?.id });
     res.status(201).json({
       ...newProduct.toJSON(),
@@ -548,11 +589,30 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
 
     const effectiveCategory = (category || product.category || '').toString().toLowerCase();
     const requiresSerials = ['panels', 'panel', 'inverters', 'inverter', 'meter', 'meters'].includes(effectiveCategory);
+    const baseQuantityBeforeUpdate = Number(product.quantity || 0);
+    const plannedAbsoluteQuantity = updates.quantity !== undefined ? Number(updates.quantity) : undefined;
 
     let createdSerials: string[] = [];
     await sequelize.transaction(async (transaction) => {
       if (Object.keys(updates).length > 0) {
         await product.update(updates, { transaction });
+      }
+
+      if (
+        plannedAbsoluteQuantity !== undefined &&
+        Number.isFinite(plannedAbsoluteQuantity) &&
+        plannedAbsoluteQuantity !== baseQuantityBeforeUpdate
+      ) {
+        const quantityDelta = plannedAbsoluteQuantity - baseQuantityBeforeUpdate;
+        await logProductInventoryTransaction({
+          productId: product.id,
+          transactionType: 'adjustment',
+          quantity: quantityDelta,
+          reference: 'manual_quantity_update',
+          notes: `Manual quantity set from ${baseQuantityBeforeUpdate} to ${plannedAbsoluteQuantity}`,
+          createdBy: req.user?.id || null,
+          transaction
+        });
       }
 
       if (stockToAdd !== undefined) {
@@ -591,6 +651,15 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
           }
           if (stockToAdd > 0) {
             await product.increment('quantity', { by: stockToAdd, transaction });
+            await logProductInventoryTransaction({
+              productId: product.id,
+              transactionType: 'purchase',
+              quantity: stockToAdd,
+              reference: 'manual_add_stock',
+              notes: `Stock added via product update${finalSerials.length > 0 ? ` (${finalSerials.length} serials)` : ''}`,
+              createdBy: req.user?.id || null,
+              transaction
+            });
           }
           if (excelFile) {
             try {
@@ -682,6 +751,15 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
 
         if (stockToAdd > 0) {
           await product.increment('quantity', { by: stockToAdd, transaction });
+          await logProductInventoryTransaction({
+            productId: product.id,
+            transactionType: 'purchase',
+            quantity: stockToAdd,
+            reference: 'manual_add_stock',
+            notes: `Stock added via product update (${uniqueSerials.length} serials)`,
+            createdBy: req.user?.id || null,
+            transaction
+          });
         }
 
         if (selling_price === undefined && use_max_cost_price !== false) {

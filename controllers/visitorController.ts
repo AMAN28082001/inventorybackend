@@ -3,6 +3,18 @@ import { Visit, VisitAssignment, Quotation, Customer, Dealer, Visitor } from '..
 import { Op } from 'sequelize';
 import { logError } from '../utils/loggerHelper';
 
+const toSafeString = (value: unknown): string => {
+  if (typeof value === 'string') return value;
+  if (value === null || value === undefined) return '';
+  return String(value);
+};
+
+const normalizeVisitTime = (value: unknown): string => {
+  const raw = toSafeString(value).trim();
+  if (!raw) return '';
+  return raw;
+};
+
 // Get assigned visits (visitor)
 export const getAssignedVisits = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -78,12 +90,17 @@ export const getAssignedVisits = async (req: Request, res: Response): Promise<vo
         const quotation = vAny.quotation;
         const customer = quotation?.customer;
         const searchLower = search.toLowerCase();
+        const location = toSafeString(v.location).toLowerCase();
+        const quotationId = toSafeString(quotation?.id).toLowerCase();
+        const firstName = toSafeString(customer?.firstName).toLowerCase();
+        const lastName = toSafeString(customer?.lastName).toLowerCase();
+        const fullName = `${firstName} ${lastName}`.trim();
         return (
-          v.location.toLowerCase().includes(searchLower) ||
-          quotation?.id?.toLowerCase().includes(searchLower) ||
-          customer?.firstName?.toLowerCase().includes(searchLower) ||
-          customer?.lastName?.toLowerCase().includes(searchLower) ||
-          `${customer?.firstName} ${customer?.lastName}`.toLowerCase().includes(searchLower)
+          location.includes(searchLower) ||
+          quotationId.includes(searchLower) ||
+          firstName.includes(searchLower) ||
+          lastName.includes(searchLower) ||
+          fullName.includes(searchLower)
         );
       });
     }
@@ -91,88 +108,98 @@ export const getAssignedVisits = async (req: Request, res: Response): Promise<vo
     const formattedVisits = filteredVisits.map(v => {
       const vAny = v as any;
       const quotation = vAny.quotation;
+      const customer = quotation?.customer;
+      const safeQuotation = {
+        id: toSafeString(quotation?.id),
+        systemType: toSafeString(quotation?.systemType),
+        finalAmount: Number(quotation?.finalAmount || 0),
+        createdAt: quotation?.createdAt || null,
+        customer: {
+          firstName: toSafeString(customer?.firstName),
+          lastName: toSafeString(customer?.lastName),
+          mobile: toSafeString(customer?.mobile),
+          email: toSafeString(customer?.email)
+        }
+      };
+      const safeCustomer = {
+        firstName: toSafeString(customer?.firstName),
+        lastName: toSafeString(customer?.lastName),
+        mobile: toSafeString(customer?.mobile),
+        email: toSafeString(customer?.email),
+        address: {
+          street: toSafeString(customer?.streetAddress),
+          city: toSafeString(customer?.city),
+          state: toSafeString(customer?.state),
+          pincode: toSafeString(customer?.pincode)
+        }
+      };
       return {
         id: v.id,
-        quotation: quotation ? {
-          id: quotation.id,
-          systemType: quotation.systemType,
-          finalAmount: Number(quotation.finalAmount),
-          createdAt: quotation.createdAt
-        } : null,
-        customer: quotation?.customer ? {
-          firstName: quotation.customer.firstName,
-          lastName: quotation.customer.lastName,
-          mobile: quotation.customer.mobile,
-          email: quotation.customer.email,
-          address: {
-            street: quotation.customer.streetAddress,
-            city: quotation.customer.city,
-            state: quotation.customer.state,
-            pincode: quotation.customer.pincode
-          }
-        } : null,
+        quotation: safeQuotation,
+        customer: safeCustomer,
         dealer: quotation?.dealer ? {
           firstName: quotation.dealer.firstName,
           lastName: quotation.dealer.lastName
         } : null,
-      visitDate: v.visitDate,
-      visitTime: v.visitTime,
-      location: v.location,
-      locationLink: v.locationLink,
-      notes: v.notes,
-      status: v.status,
-      length: v.length,
-      width: v.width,
-      height: v.height,
-      images: v.images,
-      otherVisitors: (vAny.assignments || []).filter((a: any) => a.visitorId !== req.visitor!.id).map((a: any) => {
-        const visitor = a.visitor;
-        if (visitor) {
+        visitDate: v.visitDate || '',
+        visitTime: normalizeVisitTime(v.visitTime),
+        location: toSafeString(v.location),
+        locationLink: toSafeString(v.locationLink),
+        notes: toSafeString(v.notes),
+        status: v.status,
+        length: v.length,
+        width: v.width,
+        height: v.height,
+        images: Array.isArray(v.images) ? v.images : [],
+        otherVisitors: (vAny.assignments || []).filter((a: any) => a.visitorId !== req.visitor!.id).map((a: any) => {
+          const visitor = a.visitor;
+          if (visitor) {
+            return {
+              visitorId: visitor.id,
+              username: visitor.username,
+              firstName: visitor.firstName,
+              lastName: visitor.lastName,
+              fullName: `${visitor.firstName} ${visitor.lastName}`,
+              email: visitor.email,
+              mobile: visitor.mobile,
+              employeeId: visitor.employeeId,
+              isActive: visitor.isActive
+            };
+          }
           return {
-            visitorId: visitor.id,
-            username: visitor.username,
-            firstName: visitor.firstName,
-            lastName: visitor.lastName,
-            fullName: `${visitor.firstName} ${visitor.lastName}`,
-            email: visitor.email,
-            mobile: visitor.mobile,
-            employeeId: visitor.employeeId,
-            isActive: visitor.isActive
+            visitorId: a.visitorId,
+            visitorName: a.visitorName,
+            fullName: a.visitorName
           };
-        }
-        return {
-          visitorId: a.visitorId,
-          visitorName: a.visitorName,
-          fullName: a.visitorName
-        };
-      }),
-      assignedVisitors: (vAny.assignments || []).map((a: any) => {
-        const visitor = a.visitor;
-        if (visitor) {
+        }),
+        assignedVisitors: (vAny.assignments || []).map((a: any) => {
+          const visitor = a.visitor;
+          if (visitor) {
+            return {
+              visitorId: visitor.id,
+              username: visitor.username,
+              firstName: visitor.firstName,
+              lastName: visitor.lastName,
+              fullName: `${visitor.firstName} ${visitor.lastName}`,
+              email: visitor.email,
+              mobile: visitor.mobile,
+              employeeId: visitor.employeeId,
+              isActive: visitor.isActive
+            };
+          }
           return {
-            visitorId: visitor.id,
-            username: visitor.username,
-            firstName: visitor.firstName,
-            lastName: visitor.lastName,
-            fullName: `${visitor.firstName} ${visitor.lastName}`,
-            email: visitor.email,
-            mobile: visitor.mobile,
-            employeeId: visitor.employeeId,
-            isActive: visitor.isActive
+            visitorId: a.visitorId,
+            visitorName: a.visitorName,
+            fullName: a.visitorName
           };
-        }
-        return {
-          visitorId: a.visitorId,
-          visitorName: a.visitorName,
-          fullName: a.visitorName
-        };
-      }),
-      createdAt: v.createdAt
+        }),
+        createdAt: v.createdAt
       };
     });
 
     res.json({
       success: true,
+      visits: formattedVisits,
       data: {
         visits: formattedVisits,
         count: formattedVisits.length

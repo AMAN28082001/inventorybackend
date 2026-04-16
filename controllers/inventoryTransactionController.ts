@@ -7,7 +7,7 @@ import { logError, logInfo } from '../utils/loggerHelper';
 // Get all inventory transactions
 export const getAllInventoryTransactions = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { product_id, transaction_type, start_date, end_date } = req.query;
+    const { product_id, transaction_type, start_date, end_date, page, limit } = req.query;
     const where: any = {};
 
     if (product_id) {
@@ -28,7 +28,13 @@ export const getAllInventoryTransactions = async (req: Request, res: Response): 
       }
     }
 
-    const transactions = await InventoryTransaction.findAll({
+    const parsedPage = Math.max(1, Number(page) || 1);
+    const parsedLimitRaw = Number(limit);
+    const usePagination = Number.isFinite(parsedLimitRaw) && parsedLimitRaw > 0;
+    const parsedLimit = usePagination ? Math.min(200, parsedLimitRaw) : null;
+    const offset = usePagination ? (parsedPage - 1) * (parsedLimit as number) : undefined;
+
+    const transactionsResult = await InventoryTransaction.findAndCountAll({
       where,
       include: [
         {
@@ -54,13 +60,24 @@ export const getAllInventoryTransactions = async (req: Request, res: Response): 
           required: false
         }
       ],
-      order: [['timestamp', 'DESC']]
+      order: [['timestamp', 'DESC']],
+      ...(usePagination ? { limit: parsedLimit as number, offset } : {})
     });
 
-    const formatted = transactions.map(txn => {
+    const formatted = transactionsResult.rows.map(txn => {
       const txnAny = txn as any;
       return {
-        ...txn.toJSON(),
+        id: txn.id,
+        product_id: txn.product_id,
+        transaction_type: txn.transaction_type,
+        quantity: txn.quantity,
+        reference: txn.reference || null,
+        notes: txn.notes || null,
+        created_at: txn.timestamp || null,
+        timestamp: txn.timestamp || null,
+        related_stock_request_id: txn.related_stock_request_id || null,
+        related_sale_id: txn.related_sale_id || null,
+        created_by: txn.created_by || null,
         product_name: txnAny.product ? (txnAny.product as Product).name : null,
         model: txnAny.product ? (txnAny.product as Product).model : null,
         created_by_name: txnAny.creator ? (txnAny.creator as User).name : null,
@@ -69,7 +86,26 @@ export const getAllInventoryTransactions = async (req: Request, res: Response): 
       };
     });
 
-    logInfo('Get all inventory transactions', { count: formatted.length, productId: product_id as string || 'all', transactionType: transaction_type as string || 'all' });
+    logInfo('Get all inventory transactions', {
+      count: formatted.length,
+      total: transactionsResult.count,
+      productId: product_id as string || 'all',
+      transactionType: transaction_type as string || 'all'
+    });
+
+    if (usePagination) {
+      res.json({
+        transactions: formatted,
+        pagination: {
+          page: parsedPage,
+          limit: parsedLimit,
+          total: transactionsResult.count,
+          totalPages: Math.max(1, Math.ceil(transactionsResult.count / (parsedLimit as number)))
+        }
+      });
+      return;
+    }
+
     res.json(formatted);
   } catch (error) {
     logError('Get all inventory transactions error', error);
