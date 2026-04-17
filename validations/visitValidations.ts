@@ -148,11 +148,21 @@ export const createVisitSchema = z.object({
   path: ['locationLink']
 });
 
+const positiveNumberFromBody = z
+  .union([z.number(), z.string()])
+  .transform((value) => Number(value))
+  .pipe(z.number().positive());
+
 export const completeVisitSchema = z.object({
-  length: z.number().positive().optional(),
-  width: z.number().positive().optional(),
-  height: z.number().positive().optional(),
-  images: z.array(z.string()).optional(),
+  length: positiveNumberFromBody.optional(),
+  width: positiveNumberFromBody.optional(),
+  height: positiveNumberFromBody.optional(),
+  unit: z.enum(['feet', 'cm']).optional(),
+  backLegFeet: positiveNumberFromBody.optional(),
+  midLegFeet: positiveNumberFromBody.optional(),
+  frontLegFeet: positiveNumberFromBody.optional(),
+  existingImages: z.union([z.array(z.string()), z.string()]).optional(),
+  existingRowDiagramImage: z.string().optional(),
   notes: z.string().optional()
 });
 

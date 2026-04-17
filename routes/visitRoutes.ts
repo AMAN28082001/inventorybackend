@@ -12,6 +12,7 @@ import {
 import { authenticate, authorizeDealer, authorizeVisitor } from '../middleware/authQuotation';
 import { validate } from '../middleware/validate';
 import { createVisitSchema, completeVisitSchema, incompleteVisitSchema, rescheduleVisitSchema, rejectVisitSchema } from '../validations/visitValidations';
+import upload, { uploadToS3 } from '../middleware/upload';
 
 const router: Router = express.Router();
 
@@ -264,7 +265,18 @@ router.patch('/:visitId/approve', authenticate, authorizeVisitor, approveVisit);
  *       401:
  *         description: Unauthorized
  */
-router.patch('/:visitId/complete', authenticate, authorizeVisitor, validate(completeVisitSchema), completeVisit);
+router.patch(
+  '/:visitId/complete',
+  authenticate,
+  authorizeVisitor,
+  upload.fields([
+    { name: 'images', maxCount: 20 },
+    { name: 'rowDiagramImage', maxCount: 1 }
+  ]),
+  uploadToS3('visits'),
+  validate(completeVisitSchema),
+  completeVisit
+);
 
 /**
  * @swagger

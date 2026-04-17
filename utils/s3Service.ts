@@ -14,6 +14,20 @@ AWS.config.update({
 const s3 = new AWS.S3();
 
 const BUCKET_NAME = process.env.AWS_BUCKET_NAME || 'cbpl-bajaj-node';
+const AWS_REGION = process.env.AWS_REGION || 'ap-south-1';
+
+const toBool = (value: string | undefined, fallback = false): boolean => {
+  if (value === undefined) return fallback;
+  return value.toLowerCase() === 'true';
+};
+
+// Default to signed URLs so private buckets work out-of-the-box.
+const shouldUseSignedUrls = toBool(process.env.AWS_S3_USE_SIGNED_URLS, true);
+const shouldUsePublicReadAcl = toBool(process.env.AWS_S3_USE_PUBLIC_READ_ACL, false);
+const signedUrlTtlSeconds = Number(process.env.AWS_S3_SIGNED_URL_TTL_SECONDS || 604800); // 7 days
+
+export const buildS3ObjectUrl = (key: string): string =>
+  `https://${BUCKET_NAME}.s3.${AWS_REGION}.amazonaws.com/${key}`;
 
 /**
  * Upload a file from disk to S3
@@ -46,13 +60,19 @@ export async function uploadFileToS3(filePath: string, folder: string = 'photos'
       Body: fileStream,
       ContentType: contentType,
     };
+    if (shouldUsePublicReadAcl) {
+      uploadParams.ACL = 'public-read';
+    }
 
     const uploadResult = await s3.upload(uploadParams).promise();
+    const finalFileUrl = shouldUseSignedUrls
+      ? await generatePublicUrl(uploadResult.Key, signedUrlTtlSeconds)
+      : uploadResult.Location || buildS3ObjectUrl(uploadResult.Key);
 
     const fileInfo = {
       fileName: uploadResult.Key.split('/').pop() || fileName,
       fileType: contentType,
-      filePath: uploadResult.Location,
+      filePath: finalFileUrl,
       key: uploadResult.Key,
     };
 
@@ -96,6 +116,9 @@ export async function uploadFileToS3FromBuffer(
       Body: buffer,
       ContentType: contentType,
     };
+    if (shouldUsePublicReadAcl) {
+      uploadParams.ACL = 'public-read';
+    }
 
     const uploadResult = await s3.upload(uploadParams).promise();
 

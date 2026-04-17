@@ -17,11 +17,16 @@ interface VisitAttributes {
   width?: number | null;
   height?: number | null;
   images?: any | null; // JSONB field
+  rowDiagramImage?: string | null;
+  unit?: 'feet' | 'cm' | null;
+  backLegFeet?: number | null;
+  midLegFeet?: number | null;
+  frontLegFeet?: number | null;
   createdAt?: Date;
   updatedAt?: Date;
 }
 
-interface VisitCreationAttributes extends Optional<VisitAttributes, 'id' | 'locationLink' | 'notes' | 'status' | 'feedback' | 'rejectionReason' | 'length' | 'width' | 'height' | 'images' | 'createdAt' | 'updatedAt'> {}
+interface VisitCreationAttributes extends Optional<VisitAttributes, 'id' | 'locationLink' | 'notes' | 'status' | 'feedback' | 'rejectionReason' | 'length' | 'width' | 'height' | 'images' | 'rowDiagramImage' | 'unit' | 'backLegFeet' | 'midLegFeet' | 'frontLegFeet' | 'createdAt' | 'updatedAt'> {}
 
 class Visit extends Model<VisitAttributes, VisitCreationAttributes> implements VisitAttributes {
   public id!: string;
@@ -39,6 +44,11 @@ class Visit extends Model<VisitAttributes, VisitCreationAttributes> implements V
   public width!: number | null;
   public height!: number | null;
   public images!: any | null;
+  public rowDiagramImage!: string | null;
+  public unit!: 'feet' | 'cm' | null;
+  public backLegFeet!: number | null;
+  public midLegFeet!: number | null;
+  public frontLegFeet!: number | null;
   public readonly createdAt!: Date;
   public readonly updatedAt!: Date;
 }
@@ -104,6 +114,26 @@ Visit.init(
     },
     images: {
       type: DataTypes.JSONB,
+      allowNull: true
+    },
+    rowDiagramImage: {
+      type: DataTypes.STRING(1000),
+      allowNull: true
+    },
+    unit: {
+      type: DataTypes.ENUM('feet', 'cm'),
+      allowNull: true
+    },
+    backLegFeet: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: true
+    },
+    midLegFeet: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: true
+    },
+    frontLegFeet: {
+      type: DataTypes.DECIMAL(10, 2),
       allowNull: true
     }
   },

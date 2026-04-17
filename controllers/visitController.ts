@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { Op } from 'sequelize';
 import { Visit, VisitAssignment, Quotation, Visitor, Customer } from '../models/index-quotation';
 import { logError, logInfo } from '../utils/loggerHelper';
+import { extractS3Key, generatePublicUrl } from '../utils/s3Service';
 
 const timeRangeRegex = /^([01]\d|2[0-3]):([0-5]\d)\s-\s([01]\d|2[0-3]):([0-5]\d)$/;
 const hhmmRegex = /^([01]\d|2[0-3]):([0-5]\d)$/;
@@ -32,6 +33,41 @@ const getVisitTimeFields = (visitTimeValue: unknown) => {
     visitEndTime: null,
     visitTimeRange: null
   };
+};
+
+const parseExistingImages = (raw: unknown): string[] => {
+  if (!raw) return [];
+  if (Array.isArray(raw)) {
+    return raw.map((v) => String(v).trim()).filter(Boolean);
+  }
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.map((v) => String(v).trim()).filter(Boolean);
+      }
+    } catch {
+      return raw.split(',').map((v) => v.trim()).filter(Boolean);
+    }
+  }
+  return [];
+};
+
+const resolveMediaUrl = async (url: unknown): Promise<string | null> => {
+  if (typeof url !== 'string' || !url.trim()) return null;
+  const key = extractS3Key(url);
+  if (!key) return url;
+  try {
+    return await generatePublicUrl(key);
+  } catch {
+    return url;
+  }
+};
+
+const resolveMediaUrls = async (urls: unknown): Promise<string[]> => {
+  if (!Array.isArray(urls)) return [];
+  const resolved = await Promise.all(urls.map((u) => resolveMediaUrl(u)));
+  return resolved.filter((u): u is string => !!u);
 };
 
 // Create visit
@@ -237,11 +273,13 @@ export const getAllVisits = async (req: Request, res: Response): Promise<void> =
       });
     }
 
-    const formattedVisits = filteredVisits.map(v => {
+    const formattedVisits = await Promise.all(filteredVisits.map(async (v) => {
       const vAny = v as any;
       const quotation = vAny.quotation;
       const customer = quotation?.customer;
       const assignments = vAny.assignments || [];
+      const resolvedImages = await resolveMediaUrls(v.images);
+      const resolvedRowDiagramImage = await resolveMediaUrl((v as any).rowDiagramImage);
 
       // Get full visitor details
       const visitors = assignments.map((a: any) => {
@@ -291,14 +329,19 @@ export const getAllVisits = async (req: Request, res: Response): Promise<void> =
         length: v.length,
         width: v.width,
         height: v.height,
-        images: v.images,
+        images: resolvedImages,
         feedback: v.feedback,
+        unit: (v as any).unit || null,
+        backLegFeet: (v as any).backLegFeet || null,
+        midLegFeet: (v as any).midLegFeet || null,
+        frontLegFeet: (v as any).frontLegFeet || null,
+        rowDiagramImage: resolvedRowDiagramImage,
         rejectionReason: v.rejectionReason,
         visitors: visitors,
         createdAt: v.createdAt,
         updatedAt: v.updatedAt
       };
-    });
+    }));
 
     res.json({
       success: true,
@@ -402,56 +445,65 @@ export const getVisitsForQuotation = async (req: Request, res: Response): Promis
       order: [['visitDate', 'DESC'], ['visitTime', 'DESC']]
     });
 
+    const mappedVisits = await Promise.all(visits.map(async (v) => {
+      const vAny = v as any;
+      const assignments = vAny.assignments || [];
+      const resolvedImages = await resolveMediaUrls(v.images);
+      const resolvedRowDiagramImage = await resolveMediaUrl((v as any).rowDiagramImage);
+
+      // Get full visitor details from the included Visitor model
+      const visitors = assignments.map((a: any) => {
+        const visitor = a.visitor;
+        if (visitor) {
+          return {
+            visitorId: visitor.id,
+            username: visitor.username,
+            firstName: visitor.firstName,
+            lastName: visitor.lastName,
+            fullName: `${visitor.firstName} ${visitor.lastName}`,
+            email: visitor.email,
+            mobile: visitor.mobile,
+            employeeId: visitor.employeeId,
+            isActive: visitor.isActive
+          };
+        }
+        // Fallback to assignment data if visitor not loaded
+        return {
+          visitorId: a.visitorId,
+          visitorName: a.visitorName,
+          fullName: a.visitorName
+        };
+      });
+
+      return {
+        id: v.id,
+        visitDate: v.visitDate,
+        ...getVisitTimeFields(v.visitTime),
+        location: v.location,
+        locationLink: v.locationLink,
+        notes: v.notes,
+        status: v.status,
+        length: v.length,
+        width: v.width,
+        height: v.height,
+        images: resolvedImages,
+        feedback: v.feedback,
+        unit: (v as any).unit || null,
+        backLegFeet: (v as any).backLegFeet || null,
+        midLegFeet: (v as any).midLegFeet || null,
+        frontLegFeet: (v as any).frontLegFeet || null,
+        rowDiagramImage: resolvedRowDiagramImage,
+        rejectionReason: v.rejectionReason,
+        visitors,
+        createdAt: v.createdAt,
+        updatedAt: v.updatedAt
+      };
+    }));
+
     res.json({
       success: true,
       data: {
-        visits: visits.map(v => {
-          const vAny = v as any;
-          const assignments = vAny.assignments || [];
-          
-          // Get full visitor details from the included Visitor model
-          const visitors = assignments.map((a: any) => {
-            const visitor = a.visitor;
-            if (visitor) {
-              return {
-                visitorId: visitor.id,
-                username: visitor.username,
-                firstName: visitor.firstName,
-                lastName: visitor.lastName,
-                fullName: `${visitor.firstName} ${visitor.lastName}`,
-                email: visitor.email,
-                mobile: visitor.mobile,
-                employeeId: visitor.employeeId,
-                isActive: visitor.isActive
-              };
-            }
-            // Fallback to assignment data if visitor not loaded
-            return {
-              visitorId: a.visitorId,
-              visitorName: a.visitorName,
-              fullName: a.visitorName
-            };
-          });
-
-          return {
-            id: v.id,
-            visitDate: v.visitDate,
-            ...getVisitTimeFields(v.visitTime),
-            location: v.location,
-            locationLink: v.locationLink,
-            notes: v.notes,
-            status: v.status,
-            length: v.length,
-            width: v.width,
-            height: v.height,
-            images: v.images,
-            feedback: v.feedback,
-            rejectionReason: v.rejectionReason,
-            visitors: visitors,
-            createdAt: v.createdAt,
-            updatedAt: v.updatedAt
-          };
-        })
+        visits: mappedVisits
       }
     });
   } catch (error) {
@@ -537,7 +589,18 @@ export const completeVisit = async (req: Request, res: Response): Promise<void> 
     }
 
     const { visitId } = req.params;
-    const { length, width, height, images, notes } = req.body;
+    const {
+      length,
+      width,
+      height,
+      unit,
+      backLegFeet,
+      midLegFeet,
+      frontLegFeet,
+      existingImages,
+      existingRowDiagramImage,
+      notes
+    } = req.body;
 
     const visit = await Visit.findByPk(visitId, {
       include: [{ model: VisitAssignment, as: 'assignments' }]
@@ -561,14 +624,39 @@ export const completeVisit = async (req: Request, res: Response): Promise<void> 
       return;
     }
 
+    const files = (req.files || {}) as Record<string, Express.Multer.File[]>;
+    const imageFiles = files.images || [];
+    const rowDiagramFile = (files.rowDiagramImage || [])[0];
+
+    const existingImageUrls = parseExistingImages(existingImages);
+    const uploadedImageUrls = imageFiles
+      .map((file) => (file as any).s3Location || null)
+      .filter((url): url is string => !!url);
+    const mergedImages = [...existingImageUrls, ...uploadedImageUrls];
+
+    const rowDiagramImageUrl =
+      (rowDiagramFile && (rowDiagramFile as any).s3Location) ||
+      (typeof existingRowDiagramImage === 'string' && existingRowDiagramImage.trim() !== ''
+        ? existingRowDiagramImage.trim()
+        : null);
+
     await visit.update({
       status: 'completed',
-      length,
-      width,
-      height,
-      images: images || [],
-      feedback: notes
+      length: length !== undefined ? Number(length) : visit.length,
+      width: width !== undefined ? Number(width) : visit.width,
+      height: height !== undefined ? Number(height) : visit.height,
+      unit: unit || (visit as any).unit || null,
+      backLegFeet: backLegFeet !== undefined ? Number(backLegFeet) : (visit as any).backLegFeet,
+      midLegFeet: midLegFeet !== undefined && String(midLegFeet) !== '' ? Number(midLegFeet) : (visit as any).midLegFeet,
+      frontLegFeet: frontLegFeet !== undefined ? Number(frontLegFeet) : (visit as any).frontLegFeet,
+      rowDiagramImage: rowDiagramImageUrl,
+      images: mergedImages,
+      feedback: notes,
+      notes: notes !== undefined ? notes : visit.notes
     });
+
+    const responseImages = await resolveMediaUrls(visit.images);
+    const responseRowDiagramImage = await resolveMediaUrl((visit as any).rowDiagramImage);
 
     res.json({
       success: true,
@@ -578,8 +666,13 @@ export const completeVisit = async (req: Request, res: Response): Promise<void> 
         length: visit.length,
         width: visit.width,
         height: visit.height,
-        images: visit.images,
-        notes: visit.feedback || notes,
+        unit: (visit as any).unit || null,
+        backLegFeet: (visit as any).backLegFeet || null,
+        midLegFeet: (visit as any).midLegFeet || null,
+        frontLegFeet: (visit as any).frontLegFeet || null,
+        images: responseImages,
+        rowDiagramImage: responseRowDiagramImage,
+        notes: visit.notes || visit.feedback || notes || null,
         updatedAt: visit.updatedAt
       }
     });

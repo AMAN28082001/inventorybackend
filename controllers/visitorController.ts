@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { Visit, VisitAssignment, Quotation, Customer, Dealer, Visitor } from '../models/index-quotation';
 import { Op } from 'sequelize';
 import { logError } from '../utils/loggerHelper';
+import { extractS3Key, generatePublicUrl } from '../utils/s3Service';
 
 const toSafeString = (value: unknown): string => {
   if (typeof value === 'string') return value;
@@ -13,6 +14,23 @@ const normalizeVisitTime = (value: unknown): string => {
   const raw = toSafeString(value).trim();
   if (!raw) return '';
   return raw;
+};
+
+const resolveMediaUrl = async (url: unknown): Promise<string | null> => {
+  if (typeof url !== 'string' || !url.trim()) return null;
+  const key = extractS3Key(url);
+  if (!key) return url;
+  try {
+    return await generatePublicUrl(key);
+  } catch {
+    return url;
+  }
+};
+
+const resolveMediaUrls = async (urls: unknown): Promise<string[]> => {
+  if (!Array.isArray(urls)) return [];
+  const resolved = await Promise.all(urls.map((u) => resolveMediaUrl(u)));
+  return resolved.filter((u): u is string => !!u);
 };
 
 // Get assigned visits (visitor)
@@ -105,10 +123,12 @@ export const getAssignedVisits = async (req: Request, res: Response): Promise<vo
       });
     }
 
-    const formattedVisits = filteredVisits.map(v => {
+    const formattedVisits = await Promise.all(filteredVisits.map(async (v) => {
       const vAny = v as any;
       const quotation = vAny.quotation;
       const customer = quotation?.customer;
+      const resolvedImages = await resolveMediaUrls(v.images);
+      const resolvedRowDiagramImage = await resolveMediaUrl(vAny.rowDiagramImage);
       const safeQuotation = {
         id: toSafeString(quotation?.id),
         systemType: toSafeString(quotation?.systemType),
@@ -147,10 +167,15 @@ export const getAssignedVisits = async (req: Request, res: Response): Promise<vo
         locationLink: toSafeString(v.locationLink),
         notes: toSafeString(v.notes),
         status: v.status,
-        length: v.length,
-        width: v.width,
-        height: v.height,
-        images: Array.isArray(v.images) ? v.images : [],
+        length: v.length ?? null,
+        width: v.width ?? null,
+        height: v.height ?? null,
+        unit: (vAny.unit as 'feet' | 'cm' | null) ?? null,
+        backLegFeet: vAny.backLegFeet ?? null,
+        midLegFeet: vAny.midLegFeet ?? null,
+        frontLegFeet: vAny.frontLegFeet ?? null,
+        images: resolvedImages,
+        rowDiagramImage: resolvedRowDiagramImage,
         otherVisitors: (vAny.assignments || []).filter((a: any) => a.visitorId !== req.visitor!.id).map((a: any) => {
           const visitor = a.visitor;
           if (visitor) {
@@ -195,7 +220,7 @@ export const getAssignedVisits = async (req: Request, res: Response): Promise<vo
         }),
         createdAt: v.createdAt
       };
-    });
+    }));
 
     res.json({
       success: true,
