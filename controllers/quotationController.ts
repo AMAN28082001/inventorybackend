@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import AWS from 'aws-sdk';
 import path from 'path';
+import archiver from 'archiver';
 import { v4 as uuidv4 } from 'uuid';
 import XLSX from 'xlsx';
 import { Quotation, QuotationProduct, QuotationPaymentPhase, CustomPanel, Customer, Visit, VisitAssignment, SystemConfig, Dealer, QuotationDocument, QuotationInstallationDoc } from '../models/index-quotation';
@@ -2543,7 +2544,7 @@ const resolveQuotationDocumentUrls = async (documents: any) => {
   if (!documents) return null;
 
   const json = typeof documents.toJSON === 'function' ? documents.toJSON() : { ...documents };
-  const imageFields = [
+  const mediaFields = [
     'aadharFront',
     'aadharBack',
     'panImage',
@@ -2558,13 +2559,19 @@ const resolveQuotationDocumentUrls = async (documents: any) => {
     'compliantBankPassbookImage'
   ];
 
-  for (const field of imageFields) {
+  for (const field of mediaFields) {
     json[field] = await resolveDocumentImageUrl(json[field]);
   }
 
-  json.geotagRoofPhotoUrl = json.geotagRoofPhoto;
-  json.customerWithHousePhotoUrl = json.customerWithHousePhoto;
-  json.propertyDocumentPdfUrl = json.propertyDocumentPdf;
+  // Always expose consistent alias keys for frontend compatibility.
+  for (const field of mediaFields) {
+    const value = json[field] ?? null;
+    const urlKey = `${field}Url`;
+    const snakeField = field.replace(/[A-Z]/g, (m) => `_${m.toLowerCase()}`);
+    const snakeUrlKey = `${snakeField}_url`;
+    json[urlKey] = value;
+    json[snakeUrlKey] = value;
+  }
 
   return json;
 };
@@ -2955,6 +2962,148 @@ export const downloadQuotationPDF = async (req: Request, res: Response): Promise
       success: false,
       error: { code: 'SYS_001', message: 'Internal server error' }
     });
+  }
+};
+
+const getFileExtFromDocumentValue = (value: string | null | undefined, fallback = '.bin'): string => {
+  if (!value) return fallback;
+  const clean = value.split('?')[0];
+  const ext = path.extname(clean);
+  return ext || fallback;
+};
+
+const fetchS3ObjectBuffer = async (key: string): Promise<Buffer | null> => {
+  const bucket = process.env.AWS_BUCKET_NAME;
+  if (!bucket) return null;
+  try {
+    const result = await getS3Client().getObject({ Bucket: bucket, Key: key }).promise();
+    if (!result.Body) return null;
+    return Buffer.isBuffer(result.Body) ? result.Body : Buffer.from(result.Body as any);
+  } catch (error) {
+    logError('Failed to fetch S3 object for zip', error, { key });
+    return null;
+  }
+};
+
+export const downloadQuotationDocumentsZip = async (req: Request, res: Response): Promise<void> => {
+  try {
+    // Visitors are intentionally blocked from ZIP export.
+    if (req.visitor) {
+      res.status(403).json({
+        success: false,
+        error: { code: 'AUTH_004', message: 'Insufficient permissions' }
+      });
+      return;
+    }
+    if (!req.dealer && !req.user) {
+      res.status(401).json({
+        success: false,
+        error: { code: 'AUTH_003', message: 'User not authenticated' }
+      });
+      return;
+    }
+
+    const { quotationId } = req.params;
+    const where: any = { id: quotationId };
+    if (req.dealer && req.dealer.role !== 'admin') {
+      where.dealerId = req.dealer.id;
+    }
+    if (req.user && (req.user.role === 'account-management' || req.user.role === 'hr')) {
+      where.status = 'approved';
+    }
+
+    const quotation = await Quotation.findOne({
+      where,
+      include: [
+        { model: Customer, as: 'customer', required: false },
+        { model: QuotationDocument, as: 'documents', required: false }
+      ]
+    });
+
+    if (!quotation || !(quotation as any).documents) {
+      res.status(404).json({
+        success: false,
+        error: { code: 'RES_001', message: 'Quotation/documents not found' }
+      });
+      return;
+    }
+
+    const doc = (quotation as any).documents;
+    const fields: Array<{ source: string; outputBase: string; fallbackExt?: string }> = [
+      { source: 'aadharFront', outputBase: 'aadhar-front' },
+      { source: 'aadharBack', outputBase: 'aadhar-back' },
+      { source: 'compliantAadharFront', outputBase: 'compliant-aadhar-front' },
+      { source: 'compliantAadharBack', outputBase: 'compliant-aadhar-back' },
+      { source: 'panImage', outputBase: 'pan' },
+      { source: 'compliantPanImage', outputBase: 'compliant-pan' },
+      { source: 'electricityBillImage', outputBase: 'electricity-bill' },
+      { source: 'bankPassbookImage', outputBase: 'bank-passbook' },
+      { source: 'compliantBankPassbookImage', outputBase: 'compliant-bank-passbook' },
+      { source: 'geotagRoofPhoto', outputBase: 'geotag-roof' },
+      { source: 'customerWithHousePhoto', outputBase: 'customer-with-house' },
+      { source: 'propertyDocumentPdf', outputBase: 'property-document', fallbackExt: '.pdf' }
+    ];
+
+    const archive = archiver('zip', { zlib: { level: 9 } });
+    const customerName = `${(quotation as any).customer?.firstName || 'Customer'} ${(quotation as any).customer?.lastName || ''}`.trim().replace(/\s+/g, '-');
+    const safeCustomer = customerName.replace(/[^a-zA-Z0-9-_]/g, '') || 'Customer';
+    const zipName = `${safeCustomer}-${quotation.id}.zip`;
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${zipName}"`);
+    res.setHeader('Cache-Control', 'no-store');
+
+    archive.on('error', (error) => {
+      logError('Quotation documents zip archive error', error, { quotationId });
+      if (!res.headersSent) {
+        res.status(500).json({
+          success: false,
+          error: { code: 'SYS_001', message: 'Failed to generate ZIP' }
+        });
+      }
+    });
+    archive.pipe(res);
+
+    const detailsLines: string[] = [
+      `Quotation ID: ${quotation.id}`,
+      `Customer: ${(quotation as any).customer?.firstName || ''} ${(quotation as any).customer?.lastName || ''}`.trim(),
+      `Generated At: ${new Date().toISOString()}`,
+      '',
+      'Documents:'
+    ];
+
+    for (const field of fields) {
+      const rawValue = doc[field.source] as string | null | undefined;
+      if (!rawValue) {
+        detailsLines.push(`- ${field.source}: MISSING`);
+        continue;
+      }
+      const key = extractS3KeyFromDocumentUrl(rawValue);
+      if (!key) {
+        detailsLines.push(`- ${field.source}: SKIPPED (non-S3 value)`);
+        continue;
+      }
+      const fileBuffer = await fetchS3ObjectBuffer(key);
+      if (!fileBuffer) {
+        detailsLines.push(`- ${field.source}: MISSING/UNREADABLE (${key})`);
+        continue;
+      }
+      const ext = getFileExtFromDocumentValue(rawValue, field.fallbackExt || '.bin');
+      const outputName = `${field.outputBase}${ext}`;
+      archive.append(fileBuffer, { name: outputName });
+      detailsLines.push(`- ${field.source}: INCLUDED as ${outputName}`);
+    }
+
+    archive.append(detailsLines.join('\n'), { name: 'document-details.txt' });
+    await archive.finalize();
+  } catch (error) {
+    logError('Download quotation documents zip error', error, { quotationId: req.params.quotationId });
+    if (!res.headersSent) {
+      res.status(500).json({
+        success: false,
+        error: { code: 'SYS_001', message: 'Internal server error' }
+      });
+    }
   }
 };
 

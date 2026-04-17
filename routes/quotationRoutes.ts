@@ -11,6 +11,7 @@ import {
   updateQuotationInstallationRelease,
   downloadQuotationsExcel,
   downloadQuotationPDF,
+  downloadQuotationDocumentsZip,
   getProductCatalog,
   saveQuotationDocuments
 } from '../controllers/quotationController';
@@ -636,6 +637,7 @@ router.patch(
  *         description: Unauthorized
  */
 router.get('/:quotationId/pdf', rejectAccountManager, authorizeDealerAdminOrVisitor, downloadQuotationPDF);
+router.get('/:quotationId/documents/zip', authorizeDealerAdminOrVisitor, downloadQuotationDocumentsZip);
 
 /**
  * @swagger
