@@ -1688,6 +1688,10 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
           dcdb: products.dcdb,
           hybridInverter: products.hybridInverter,
           batteryCapacity: products.batteryCapacity,
+          batteryPrice:
+            products.batteryPrice !== undefined && products.batteryPrice !== null
+              ? Number(products.batteryPrice)
+              : null,
           centralSubsidy: Number(products.centralSubsidy || 0),
           stateSubsidy: Number(products.stateSubsidy || 0)
         } : null,
