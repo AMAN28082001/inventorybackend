@@ -1556,6 +1556,20 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
           as: 'installationDocs'
         },
         {
+          model: Visit,
+          as: 'visits',
+          required: false,
+          attributes: ['id', 'visitDate', 'visitTime', 'location', 'locationLink', 'status', 'createdAt'],
+          include: [
+            {
+              model: VisitAssignment,
+              as: 'assignments',
+              required: false,
+              attributes: ['visitorId', 'visitorName']
+            }
+          ]
+        },
+        {
           model: Dealer,
           as: 'dealer',
           attributes: ['id', 'firstName', 'lastName', 'email', 'mobile', 'username', 'role']
@@ -1579,6 +1593,7 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
     const dealer = quotationAny.dealer;
     const documents = quotationAny.documents;
     const installationDocs = quotationAny.installationDocs || [];
+    const visits = quotationAny.visits || [];
     const resolvedDocuments = await resolveQuotationDocumentUrls(documents);
     
     // Calculate pricing breakdown (component prices for display)
@@ -1599,6 +1614,26 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
         : Number(quotation.paidAmount || 0);
     const remainingAmount = remainingPaymentAgainstSubtotal(subtotalNum, totalPaidForRemaining);
     const rowById = quotation.get({ plain: true }) as unknown as Record<string, unknown>;
+
+    const serializedVisits = (visits as any[]).map((visit: any) => {
+      const assignedVisitors = (visit.assignments || []).map((a: any) => ({
+        visitorId: a.visitorId || null,
+        visitorName: a.visitorName || null,
+        fullName: a.visitorName || null
+      }));
+      return {
+        id: visit.id,
+        visitDate: visit.visitDate || null,
+        visitTime: visit.visitTime || null,
+        status: visit.status || null,
+        location: visit.location || null,
+        visitLocation: visit.location || null,
+        locationLink: visit.locationLink || null,
+        visitors: assignedVisitors,
+        assignedVisitors
+      };
+    });
+    const primaryVisit = serializedVisits[0] || null;
 
     res.json({
       success: true,
@@ -1665,6 +1700,13 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
         installationDocuments: groupInstallationDocsByType(
           installationDocs.map((doc: any) => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc))
         ),
+        visits: serializedVisits,
+        location: primaryVisit?.location || null,
+        visitLocation: primaryVisit?.visitLocation || null,
+        locationLink: primaryVisit?.locationLink || null,
+        visitors: primaryVisit?.visitors || [],
+        otherVisitors: primaryVisit?.assignedVisitors || [],
+        assignedVisitors: primaryVisit?.assignedVisitors || [],
         documents: resolvedDocuments,
         ...quotationPaymentApiFields(rowById),
         ...quotationAdminMetadataFields(rowById),

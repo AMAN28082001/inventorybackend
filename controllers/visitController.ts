@@ -495,6 +495,8 @@ export const getVisitsForQuotation = async (req: Request, res: Response): Promis
         rowDiagramImage: resolvedRowDiagramImage,
         rejectionReason: v.rejectionReason,
         visitors,
+        otherVisitors: visitors,
+        assignedVisitors: visitors,
         createdAt: v.createdAt,
         updatedAt: v.updatedAt
       };

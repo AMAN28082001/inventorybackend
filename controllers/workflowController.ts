@@ -3,7 +3,7 @@ import AWS from 'aws-sdk';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { Op } from 'sequelize';
-import { Quotation, QuotationInstallationDoc, Dealer, Customer, QuotationProduct } from '../models/index-quotation';
+import { Quotation, QuotationInstallationDoc, Dealer, Customer, QuotationProduct, Visit, VisitAssignment, Visitor, CustomPanel } from '../models/index-quotation';
 import { logError, logInfo } from '../utils/loggerHelper';
 
 const getS3Client = () => {
@@ -61,6 +61,65 @@ const mapWorkflowDocumentsForFrontend = (docs: any[]) => {
   };
 };
 
+const mapAssignedVisitors = (assignments: any[]) =>
+  (assignments || []).map((a: any) => {
+    const visitor = a.visitor;
+    if (visitor) {
+      return {
+        visitorId: visitor.id,
+        username: visitor.username,
+        firstName: visitor.firstName,
+        lastName: visitor.lastName,
+        fullName: `${visitor.firstName || ''} ${visitor.lastName || ''}`.trim(),
+        mobile: visitor.mobile || null,
+        email: visitor.email || null
+      };
+    }
+    return {
+      visitorId: a.visitorId || null,
+      fullName: a.visitorName || null
+    };
+  });
+
+const mapInstallerProducts = (products: any, customPanels: any[]) => {
+  if (!products) return null;
+  return {
+    systemType: products.systemType || null,
+    phase: products.phase || null,
+    panelBrand: products.panelBrand || null,
+    panelSize: products.panelSize || null,
+    panelQuantity: products.panelQuantity ?? null,
+    dcrPanelBrand: products.dcrPanelBrand || null,
+    dcrPanelSize: products.dcrPanelSize || null,
+    dcrPanelQuantity: products.dcrPanelQuantity ?? null,
+    nonDcrPanelBrand: products.nonDcrPanelBrand || null,
+    nonDcrPanelSize: products.nonDcrPanelSize || null,
+    nonDcrPanelQuantity: products.nonDcrPanelQuantity ?? null,
+    customPanels: (customPanels || []).map((p: any) => ({
+      brand: p.brand || null,
+      size: p.size || null,
+      quantity: p.quantity ?? null,
+      type: p.type || null,
+      price: p.price !== undefined && p.price !== null ? Number(p.price) : null
+    })),
+    inverterType: products.inverterType || null,
+    inverterBrand: products.inverterBrand || null,
+    inverterSize: products.inverterSize || null,
+    hybridInverter: products.hybridInverter || null,
+    batteryCapacity: products.batteryCapacity || null,
+    batteryPrice: products.batteryPrice !== undefined && products.batteryPrice !== null ? Number(products.batteryPrice) : null,
+    structureType: products.structureType || null,
+    structureSize: products.structureSize || null,
+    meterBrand: products.meterBrand || null,
+    acCableBrand: products.acCableBrand || null,
+    acCableSize: products.acCableSize || null,
+    dcCableBrand: products.dcCableBrand || null,
+    dcCableSize: products.dcCableSize || null,
+    acdb: products.acdb || null,
+    dcdb: products.dcdb || null
+  };
+};
+
 const getWorkflowQueue = async (
   req: Request,
   res: Response,
@@ -99,9 +158,36 @@ const getWorkflowQueue = async (
       where,
       include: [
         { model: Dealer, as: 'dealer', attributes: ['id', 'firstName', 'lastName', 'email', 'mobile'] },
-        { model: Customer, as: 'customer', attributes: ['id', 'firstName', 'lastName', 'mobile'] },
+        {
+          model: Customer,
+          as: 'customer',
+          attributes: ['id', 'firstName', 'lastName', 'mobile', 'email', 'streetAddress', 'city', 'state', 'pincode']
+        },
         { model: QuotationProduct, as: 'products', required: false },
-        { model: QuotationInstallationDoc, as: 'installationDocs', required: false }
+        { model: CustomPanel, as: 'customPanels', required: false },
+        { model: QuotationInstallationDoc, as: 'installationDocs', required: false },
+        {
+          model: Visit,
+          as: 'visits',
+          required: false,
+          attributes: ['id', 'visitDate', 'visitTime', 'location', 'locationLink', 'status', 'createdAt'],
+          include: [
+            {
+              model: VisitAssignment,
+              as: 'assignments',
+              required: false,
+              attributes: ['visitorId', 'visitorName'],
+              include: [
+                {
+                  model: Visitor,
+                  as: 'visitor',
+                  required: false,
+                  attributes: ['id', 'username', 'firstName', 'lastName', 'mobile', 'email']
+                }
+              ]
+            }
+          ]
+        }
       ],
       subQuery: false,
       distinct: true,
@@ -113,26 +199,79 @@ const getWorkflowQueue = async (
     res.json({
       success: true,
       data: {
-        quotations: quotations.rows.map((q: any) => ({
-          id: q.id,
-          status: q.status,
-          installationStatus: q.installationStatus,
-          installationReadyForInstaller: Boolean(q.installationReadyForInstaller),
-          installationReleasedAt: q.installationReleasedAt || null,
-          dealer: q.dealer || null,
-          customer: q.customer || null,
-          products: q.products || null,
-          pricing: {
-            subtotal: Number(q.subtotal || 0),
-            totalAmount: Number(q.totalAmount || 0),
-            finalAmount: Number(q.finalAmount || 0)
-          },
-          approvedAt: q.approvedAt || null,
-          installerApprovedAt: q.installerApprovedAt || null,
-          documents: mapWorkflowDocumentsForFrontend((q.installationDocs || []).map((doc: any) => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc))),
-          createdAt: q.createdAt,
-          validUntil: q.validUntil
-        })),
+        quotations: quotations.rows.map((q: any) => {
+          const rawVisits = Array.isArray(q.visits) ? q.visits : [];
+          const sortedVisits = [...rawVisits].sort((a: any, b: any) => {
+            const da = new Date(`${a.visitDate || ''} ${a.visitTime || '00:00'}`).getTime();
+            const db = new Date(`${b.visitDate || ''} ${b.visitTime || '00:00'}`).getTime();
+            return da - db;
+          });
+          const visits = sortedVisits.map((v: any) => {
+            const assignedVisitors = mapAssignedVisitors(v.assignments || []);
+            return {
+              id: v.id,
+              visitDate: v.visitDate || null,
+              visitTime: v.visitTime || null,
+              status: v.status || null,
+              location: v.location || null,
+              visitLocation: v.location || null,
+              locationLink: v.locationLink || null,
+              visitors: assignedVisitors,
+              assignedVisitors
+            };
+          });
+          const primaryVisit = visits[0] || null;
+          return {
+            id: q.id,
+            status: q.status,
+            installationStatus: q.installationStatus,
+            installationReadyForInstaller: Boolean(q.installationReadyForInstaller),
+            installationReleasedAt: q.installationReleasedAt || null,
+            dealer: q.dealer
+              ? {
+                id: q.dealer.id,
+                firstName: q.dealer.firstName || null,
+                lastName: q.dealer.lastName || null,
+                mobile: q.dealer.mobile || null,
+                email: q.dealer.email || null
+              }
+              : null,
+            customer: q.customer
+              ? {
+                id: q.customer.id,
+                firstName: q.customer.firstName || null,
+                lastName: q.customer.lastName || null,
+                mobile: q.customer.mobile || null,
+                email: q.customer.email || null,
+                address: {
+                  street: q.customer.streetAddress || null,
+                  city: q.customer.city || null,
+                  state: q.customer.state || null,
+                  pincode: q.customer.pincode || null
+                },
+                location: [q.customer.city, q.customer.state].filter(Boolean).join(', ') || null
+              }
+              : null,
+            visits,
+            location: primaryVisit?.location || null,
+            visitLocation: primaryVisit?.visitLocation || null,
+            locationLink: primaryVisit?.locationLink || null,
+            visitors: primaryVisit?.visitors || [],
+            otherVisitors: primaryVisit?.assignedVisitors || [],
+            assignedVisitors: primaryVisit?.assignedVisitors || [],
+            products: mapInstallerProducts(q.products, q.customPanels || []),
+            pricing: {
+              subtotal: Number(q.subtotal || 0),
+              totalAmount: Number(q.totalAmount || 0),
+              finalAmount: Number(q.finalAmount || 0)
+            },
+            approvedAt: q.approvedAt || null,
+            installerApprovedAt: q.installerApprovedAt || null,
+            documents: mapWorkflowDocumentsForFrontend((q.installationDocs || []).map((doc: any) => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc))),
+            createdAt: q.createdAt,
+            validUntil: q.validUntil
+          };
+        }),
         pagination: {
           page,
           limit,
