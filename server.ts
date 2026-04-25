@@ -36,6 +36,7 @@ import dealerRequestRoutes from './routes/dealerRequestRoutes';
 import installerRoutes from './routes/installerRoutes';
 import baldevRoutes from './routes/baldevRoutes';
 import hrLeadRoutes from './routes/hrLeadRoutes';
+import meteringRoutes from './routes/meteringRoutes';
 
 const app: Application = express();
 const PORT = process.env.PORT || 3000;
@@ -152,6 +153,7 @@ app.use('/api/dealer-requests', dealerRequestRoutes);
 app.use('/api/installer', installerRoutes);
 app.use('/api/baldev', baldevRoutes);
 app.use('/api/hr', hrLeadRoutes);
+app.use('/api/metering', meteringRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/products', productRoutes);

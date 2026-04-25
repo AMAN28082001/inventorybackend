@@ -188,4 +188,26 @@ export const rejectVisitSchema = z.object({
   rejectionReason: z.string().min(1, 'Rejection reason is required')
 });
 
+const optionalNumericField = z.preprocess((v) => {
+  if (v === undefined || v === null || v === '') return undefined;
+  const n = typeof v === 'number' ? v : Number(String(v).trim());
+  return Number.isFinite(n) ? n : undefined;
+}, z.number().optional());
+
+export const patchVisitSiteSchema = z
+  .object({
+    unit: z.enum(['feet', 'cm']).optional(),
+    length: optionalNumericField,
+    width: optionalNumericField,
+    height: optionalNumericField,
+    siteLength: optionalNumericField,
+    siteWidth: optionalNumericField,
+    siteHeight: optionalNumericField,
+    backLegFeet: optionalNumericField,
+    midLegFeet: optionalNumericField,
+    frontLegFeet: optionalNumericField
+  })
+  .refine((o) => Object.values(o).some((v) => v !== undefined), {
+    message: 'At least one field is required'
+  });
 

@@ -150,13 +150,13 @@ export const createAccountManager = async (req: Request, res: Response): Promise
     // Authorization is handled by middleware (authorizeAdmin)
     const { username, password, firstName, lastName, email, mobile, role } = req.body;
 
-    if (!role || !['account-management', 'installer', 'baldev', 'hr'].includes(role)) {
+    if (!role || !['account-management', 'installer', 'baldev', 'hr', 'metering'].includes(role)) {
       res.status(400).json({
         success: false,
         error: {
           code: 'VAL_001',
           message: 'Validation error',
-          details: [{ field: 'role', message: 'Role must be one of: account-management, installer, baldev, hr' }]
+          details: [{ field: 'role', message: 'Role must be one of: account-management, installer, baldev, hr, metering' }]
         }
       });
       return;

@@ -1,5 +1,5 @@
 import express, { Router } from 'express';
-import multer from 'multer';
+import multer, { MulterError } from 'multer';
 import {
   createQuotation,
   getQuotations,
@@ -15,12 +15,20 @@ import {
   getProductCatalog,
   saveQuotationDocuments
 } from '../controllers/quotationController';
-import { getWorkflowHistory } from '../controllers/workflowController';
+import { getWorkflowHistory, meteringStatusUpdate, saveMeteringDetails } from '../controllers/workflowController';
 import { getVisitsForQuotation } from '../controllers/visitController';
-import { authenticate, authorizeDealer, authorizeDealerAdminOrVisitor, authorizeDealerOrAccountManager, rejectAccountManager } from '../middleware/authQuotation';
+import {
+  authenticate,
+  authorizeDealer,
+  authorizeDealerAdminOrVisitor,
+  authorizeDealerOrAccountManager,
+  authorizeMeteringOrAdmin,
+  rejectAccountManager
+} from '../middleware/authQuotation';
 import { validate } from '../middleware/validate';
 import { logRequestBeforeValidation, logRequestAfterValidation } from '../middleware/requestLogger';
 import { createQuotationSchema, updateDiscountSchema, updateProductsSchema, updatePricingSchema, updatePaymentDetailsSchema, updatePaymentModeSchema, updateInstallationReleaseSchema } from '../validations/quotationValidations';
+import { meteringDetailsSchema, meteringStatusSchema } from '../validations/workflowValidations';
 
 const router: Router = express.Router();
 
@@ -70,6 +78,83 @@ const documentsUpload = multer({
   },
   limits: { fileSize: 10 * 1024 * 1024 }
 });
+
+const DOCUMENT_UPLOAD_FIELDS: multer.Field[] = [
+  { name: 'aadharFront', maxCount: 1 },
+  { name: 'aadharBack', maxCount: 1 },
+  { name: 'panImage', maxCount: 1 },
+  { name: 'electricityBillImage', maxCount: 1 },
+  { name: 'bankPassbookImage', maxCount: 1 },
+  { name: 'geotagRoofPhoto', maxCount: 1 },
+  { name: 'customerWithHousePhoto', maxCount: 1 },
+  { name: 'propertyDocumentPdf', maxCount: 1 },
+  { name: 'compliantAadharFront', maxCount: 1 },
+  { name: 'compliantAadharBack', maxCount: 1 },
+  { name: 'compliantPanImage', maxCount: 1 },
+  { name: 'compliantBankPassbookImage', maxCount: 1 }
+];
+
+const handleQuotationDocumentsMultipart = (req: express.Request, res: express.Response, next: express.NextFunction): void => {
+  documentsUpload.fields(DOCUMENT_UPLOAD_FIELDS)(req, res, (err: unknown) => {
+    if (!err) {
+      next();
+      return;
+    }
+    const e = err as MulterError;
+    if (e.code === 'LIMIT_FILE_SIZE') {
+      res.status(413).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'One or more files exceed the maximum upload size' }
+      });
+      return;
+    }
+    if (e.code === 'LIMIT_UNEXPECTED_FILE' || e.code === 'LIMIT_FILE_COUNT') {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Unexpected or too many file fields',
+          details: [{ field: e.field || 'files', message: e.message }]
+        }
+      });
+      return;
+    }
+
+    const genericError = err as Error;
+    res.status(400).json({
+      success: false,
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: genericError.message || 'Invalid document upload payload'
+      }
+    });
+  });
+};
+
+const handleQuotationMeteringDetailsMultipart = (
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+): void => {
+  documentsUpload.fields([{ name: 'meterDocumentImage', maxCount: 1 }])(req, res, (err: unknown) => {
+    if (!err) {
+      next();
+      return;
+    }
+    const e = err as MulterError;
+    if (e.code === 'LIMIT_FILE_SIZE') {
+      res.status(413).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'meterDocumentImage exceeds max file size' }
+      });
+      return;
+    }
+    res.status(400).json({
+      success: false,
+      error: { code: 'VALIDATION_ERROR', message: e.message || 'Invalid multipart payload' }
+    });
+  });
+};
 
 // All routes require authentication
 router.use(authenticate);
@@ -563,43 +648,34 @@ router.patch('/:quotationId/payment-mode', authorizeDealerOrAccountManager, vali
 router.patch('/:quotationId/installation-release', authorizeDealerOrAccountManager, validate(updateInstallationReleaseSchema), updateQuotationInstallationRelease);
 router.patch('/:quotationId/installation/ready', authorizeDealerOrAccountManager, validate(updateInstallationReleaseSchema), updateQuotationInstallationRelease);
 
+/** Fallback for stricter gateways: same handler as `PATCH /api/metering/quotations/:id/status`. */
+router.patch(
+  '/:quotationId/metering-status',
+  authorizeMeteringOrAdmin,
+  validate(meteringStatusSchema),
+  meteringStatusUpdate
+);
+
+/** Fallback detail-save path used by some frontend clients. */
+router.post(
+  '/:quotationId/metering-details',
+  authorizeMeteringOrAdmin,
+  handleQuotationMeteringDetailsMultipart,
+  validate(meteringDetailsSchema),
+  saveMeteringDetails
+);
+
 router.post(
   '/:quotationId/documents',
   authorizeDealerOrAccountManager,
-  documentsUpload.fields([
-    { name: 'aadharFront', maxCount: 1 },
-    { name: 'aadharBack', maxCount: 1 },
-    { name: 'panImage', maxCount: 1 },
-    { name: 'electricityBillImage', maxCount: 1 },
-    { name: 'bankPassbookImage', maxCount: 1 },
-    { name: 'geotagRoofPhoto', maxCount: 1 },
-    { name: 'customerWithHousePhoto', maxCount: 1 },
-    { name: 'propertyDocumentPdf', maxCount: 1 },
-    { name: 'compliantAadharFront', maxCount: 1 },
-    { name: 'compliantAadharBack', maxCount: 1 },
-    { name: 'compliantPanImage', maxCount: 1 },
-    { name: 'compliantBankPassbookImage', maxCount: 1 }
-  ]),
+  handleQuotationDocumentsMultipart,
   saveQuotationDocuments
 );
 
 router.patch(
   '/:quotationId/documents',
   authorizeDealerOrAccountManager,
-  documentsUpload.fields([
-    { name: 'aadharFront', maxCount: 1 },
-    { name: 'aadharBack', maxCount: 1 },
-    { name: 'panImage', maxCount: 1 },
-    { name: 'electricityBillImage', maxCount: 1 },
-    { name: 'bankPassbookImage', maxCount: 1 },
-    { name: 'geotagRoofPhoto', maxCount: 1 },
-    { name: 'customerWithHousePhoto', maxCount: 1 },
-    { name: 'propertyDocumentPdf', maxCount: 1 },
-    { name: 'compliantAadharFront', maxCount: 1 },
-    { name: 'compliantAadharBack', maxCount: 1 },
-    { name: 'compliantPanImage', maxCount: 1 },
-    { name: 'compliantBankPassbookImage', maxCount: 1 }
-  ]),
+  handleQuotationDocumentsMultipart,
   saveQuotationDocuments
 );
 

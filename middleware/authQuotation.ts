@@ -97,7 +97,11 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
         decoded.role === 'installer' ||
         decoded.role === 'baldev' ||
         decoded.role === 'confirmation' ||
-        decoded.role === 'hr'
+        decoded.role === 'hr' ||
+        decoded.role === 'metering' ||
+        decoded.role === 'meter' ||
+        decoded.role === 'metering-team' ||
+        decoded.role === 'mco'
       ) {
         const accountManager = await AccountManager.findByPk(decoded.id);
         if (!accountManager || !accountManager.isActive) {
@@ -130,7 +134,11 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
         decoded.role === 'installer' ||
         decoded.role === 'baldev' ||
         decoded.role === 'confirmation' ||
-        decoded.role === 'hr'
+        decoded.role === 'hr' ||
+        decoded.role === 'metering' ||
+        decoded.role === 'meter' ||
+        decoded.role === 'metering-team' ||
+        decoded.role === 'mco'
       ) {
         const user = await User.findByPk(decoded.id);
         if (!user || !user.is_active) {
@@ -296,7 +304,11 @@ export const authorizeDealerAdminOrVisitor = (req: Request, res: Response, next:
     req.user.role === 'installer' ||
     req.user.role === 'baldev' ||
     req.user.role === 'confirmation' ||
-    req.user.role === 'hr'
+    req.user.role === 'hr' ||
+    req.user.role === 'metering' ||
+    req.user.role === 'meter' ||
+    req.user.role === 'metering-team' ||
+    req.user.role === 'mco'
   );
   
   if (!isDealerOrAdmin && !isVisitor && !isAccountManager && !isInventoryUser) {
@@ -325,6 +337,41 @@ export const authorizeInstaller = (req: Request, res: Response, next: NextFuncti
 
 export const authorizeBaldev = (req: Request, res: Response, next: NextFunction): void => {
   if (req.user && (req.user.role === 'baldev' || req.user.role === 'confirmation')) {
+    next();
+    return;
+  }
+  res.status(403).json({
+    success: false,
+    error: { code: 'AUTH_004', message: 'Insufficient permissions' }
+  });
+};
+
+export const authorizeMetering = (req: Request, res: Response, next: NextFunction): void => {
+  if (req.user && (
+    req.user.role === 'admin' ||
+    req.user.role === 'metering' ||
+    req.user.role === 'meter' ||
+    req.user.role === 'metering-team' ||
+    req.user.role === 'mco'
+  )) {
+    next();
+    return;
+  }
+  res.status(403).json({
+    success: false,
+    error: { code: 'AUTH_004', message: 'Insufficient permissions' }
+  });
+};
+
+/** Metering workflow updates from quotation-scoped fallback routes (metering team or admin). */
+export const authorizeMeteringOrAdmin = (req: Request, res: Response, next: NextFunction): void => {
+  if (req.user && (
+    req.user.role === 'admin' ||
+    req.user.role === 'metering' ||
+    req.user.role === 'meter' ||
+    req.user.role === 'metering-team' ||
+    req.user.role === 'mco'
+  )) {
     next();
     return;
   }

@@ -369,7 +369,7 @@ export const getAllVisits = async (req: Request, res: Response): Promise<void> =
 // Get visits for quotation
 export const getVisitsForQuotation = async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!req.dealer && !req.visitor) {
+    if (!req.dealer && !req.visitor && !req.user) {
       res.status(401).json({
         success: false,
         error: { code: 'AUTH_003', message: 'User not authenticated' }
@@ -415,6 +415,26 @@ export const getVisitsForQuotation = async (req: Request, res: Response): Promis
         where.dealerId = req.dealer.id;
       }
       quotation = await Quotation.findOne({ where });
+    } else if (req.user) {
+      const allowedRoles = new Set([
+        'installer',
+        'baldev',
+        'confirmation',
+        'agent',
+        'account',
+        'admin',
+        'super-admin',
+        'super-admin-manager',
+        'hr'
+      ]);
+      if (!allowedRoles.has(req.user.role)) {
+        res.status(403).json({
+          success: false,
+          error: { code: 'AUTH_004', message: 'Insufficient permissions' }
+        });
+        return;
+      }
+      quotation = await Quotation.findOne({ where: { id: quotationId } });
     }
 
     if (!quotation) {
@@ -475,6 +495,13 @@ export const getVisitsForQuotation = async (req: Request, res: Response): Promis
         };
       });
 
+      const backLegFeet = (v as any).backLegFeet != null ? Number((v as any).backLegFeet) : null;
+      const midLegFeet = (v as any).midLegFeet != null ? Number((v as any).midLegFeet) : null;
+      const frontLegFeet = (v as any).frontLegFeet != null ? Number((v as any).frontLegFeet) : null;
+      const len = v.length != null ? Number(v.length) : null;
+      const wid = v.width != null ? Number(v.width) : null;
+      const hgt = v.height != null ? Number(v.height) : null;
+
       return {
         id: v.id,
         visitDate: v.visitDate,
@@ -483,15 +510,26 @@ export const getVisitsForQuotation = async (req: Request, res: Response): Promis
         locationLink: v.locationLink,
         notes: v.notes,
         status: v.status,
-        length: v.length,
-        width: v.width,
-        height: v.height,
+        length: len,
+        width: wid,
+        height: hgt,
         images: resolvedImages,
         feedback: v.feedback,
         unit: (v as any).unit || null,
-        backLegFeet: (v as any).backLegFeet || null,
-        midLegFeet: (v as any).midLegFeet || null,
-        frontLegFeet: (v as any).frontLegFeet || null,
+        backLegFeet,
+        midLegFeet,
+        frontLegFeet,
+        back_leg_feet: backLegFeet,
+        mid_leg_feet: midLegFeet,
+        front_leg_feet: frontLegFeet,
+        siteDimensions: {
+          siteLength: len,
+          siteWidth: wid,
+          siteHeight: hgt,
+          backLegFeet,
+          midLegFeet,
+          frontLegFeet
+        },
         rowDiagramImage: resolvedRowDiagramImage,
         rejectionReason: v.rejectionReason,
         visitors,
@@ -863,6 +901,121 @@ export const rejectVisit = async (req: Request, res: Response): Promise<void> =>
     });
   } catch (error) {
     logError('Reject visit error', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
+};
+
+const INSTALLER_PATCH_VISIT_STATUSES = new Set([
+  'pending_installer',
+  'installer_in_progress',
+  'installer_approved'
+]);
+
+export const patchVisitSiteDimensions = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { visitId } = req.params;
+    const visit = await Visit.findByPk(visitId, {
+      include: [{ model: Quotation, as: 'quotation' }]
+    });
+
+    if (!visit) {
+      res.status(404).json({
+        success: false,
+        error: { code: 'RES_001', message: 'Visit not found' }
+      });
+      return;
+    }
+
+    const quotation = (visit as any).quotation as InstanceType<typeof Quotation> | null;
+    if (!quotation) {
+      res.status(404).json({
+        success: false,
+        error: { code: 'RES_001', message: 'Quotation not found' }
+      });
+      return;
+    }
+
+    let allowed = false;
+    if (req.dealer) {
+      allowed = req.dealer.role === 'admin' || visit.dealerId === req.dealer.id;
+    } else if (req.user?.role === 'installer') {
+      allowed =
+        quotation.status === 'approved' &&
+        INSTALLER_PATCH_VISIT_STATUSES.has((quotation as any).installationStatus || '');
+    } else if (
+      req.user &&
+      ['admin', 'super-admin', 'super-admin-manager'].includes(req.user.role)
+    ) {
+      allowed = true;
+    }
+
+    if (!allowed) {
+      res.status(403).json({
+        success: false,
+        error: { code: 'AUTH_004', message: 'Insufficient permissions' }
+      });
+      return;
+    }
+
+    const body = req.body as Record<string, unknown>;
+    const updates: Record<string, unknown> = {};
+
+    if (body.unit !== undefined) updates.unit = body.unit;
+    const siteL = body.siteLength ?? body.length;
+    const siteW = body.siteWidth ?? body.width;
+    const siteH = body.siteHeight ?? body.height;
+    if (siteL !== undefined) updates.length = siteL;
+    if (siteW !== undefined) updates.width = siteW;
+    if (siteH !== undefined) updates.height = siteH;
+    if (body.backLegFeet !== undefined) updates.backLegFeet = body.backLegFeet;
+    if (body.midLegFeet !== undefined) updates.midLegFeet = body.midLegFeet;
+    if (body.frontLegFeet !== undefined) updates.frontLegFeet = body.frontLegFeet;
+
+    await visit.update(updates);
+    await visit.reload();
+
+    const resolvedImages = await resolveMediaUrls(visit.images);
+    const resolvedRowDiagramImage = await resolveMediaUrl((visit as any).rowDiagramImage);
+    const backLegFeet = (visit as any).backLegFeet != null ? Number((visit as any).backLegFeet) : null;
+    const midLegFeet = (visit as any).midLegFeet != null ? Number((visit as any).midLegFeet) : null;
+    const frontLegFeet = (visit as any).frontLegFeet != null ? Number((visit as any).frontLegFeet) : null;
+    const len = visit.length != null ? Number(visit.length) : null;
+    const wid = visit.width != null ? Number(visit.width) : null;
+    const hgt = visit.height != null ? Number(visit.height) : null;
+
+    res.json({
+      success: true,
+      data: {
+        id: visit.id,
+        quotationId: visit.quotationId,
+        unit: (visit as any).unit || null,
+        length: len,
+        width: wid,
+        height: hgt,
+        siteLength: len,
+        siteWidth: wid,
+        siteHeight: hgt,
+        backLegFeet,
+        midLegFeet,
+        frontLegFeet,
+        siteDimensions: {
+          siteLength: len,
+          siteWidth: wid,
+          siteHeight: hgt,
+          backLegFeet,
+          midLegFeet,
+          frontLegFeet
+        },
+        images: resolvedImages,
+        rowDiagramImage: resolvedRowDiagramImage,
+        updatedAt: visit.updatedAt
+      }
+    });
+  } catch (error) {
+    logError('Patch visit site dimensions error', error);
     res.status(500).json({
       success: false,
       error: { code: 'SYS_001', message: 'Internal server error' }

@@ -204,6 +204,10 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
             installationStatus: (q as any).installationStatus || 'pending_installer',
             approvedAt: (q as any).approvedAt || null,
             installerApprovedAt: (q as any).installerApprovedAt || null,
+            meteringApprovedAt: (q as any).meteringApprovedAt || null,
+            mcoAt: (q as any).mcoAt || null,
+            meteringStatus: (q as any).installationStatus || null,
+            meteringStage: (q as any).installationStatus || null,
             createdAt: q.createdAt
           };
         }),

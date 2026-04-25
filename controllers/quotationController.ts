@@ -1300,6 +1300,10 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         installationStatus: (q as any).installationStatus || 'pending_installer',
         approvedAt: (q as any).approvedAt || null,
         installerApprovedAt: (q as any).installerApprovedAt || null,
+        meteringApprovedAt: (q as any).meteringApprovedAt || null,
+        mcoAt: (q as any).mcoAt || null,
+        meteringStatus: (q as any).installationStatus || null,
+        meteringStage: (q as any).installationStatus || null,
         installationDocuments: groupInstallationDocsByType(
           installationDocs.map((doc: any) => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc))
         ),
@@ -1700,6 +1704,16 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
         installationStatus: quotationAny.installationStatus || 'pending_installer',
         approvedAt: quotationAny.approvedAt || null,
         installerApprovedAt: quotationAny.installerApprovedAt || null,
+        meteringApprovedAt: quotationAny.meteringApprovedAt || null,
+        mcoAt: quotationAny.mcoAt || null,
+        meteringStatus: quotationAny.installationStatus || null,
+        meteringStage: quotationAny.installationStatus || null,
+        discomName: quotationAny.discomName || null,
+        meterType: quotationAny.meterType || null,
+        meterNo: quotationAny.meterNo || null,
+        solarMeterNo: quotationAny.solarMeterNo || null,
+        netMeterNo: quotationAny.netMeterNo || null,
+        meterDocumentImageUrl: quotationAny.meterDocumentImageUrl || null,
         discount: quotation.discount,
         installationDocuments: groupInstallationDocsByType(
           installationDocs.map((doc: any) => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc))
@@ -2417,10 +2431,27 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
 export const updateQuotationInstallationRelease = async (req: Request, res: Response): Promise<void> => {
   try {
     const { quotationId } = req.params;
-    const { installationReadyForInstaller, installationReleasedAt } = req.body as {
-      installationReadyForInstaller: boolean;
+    const body = req.body as {
+      installationReadyForInstaller?: boolean;
+      installation_ready_for_installer?: boolean;
       installationReleasedAt?: string | null;
+      installation_released_at?: string | null;
     };
+
+    const installationReadyForInstaller =
+      body.installationReadyForInstaller ?? body.installation_ready_for_installer;
+    const installationReleasedAt = body.installationReleasedAt ?? body.installation_released_at;
+
+    if (typeof installationReadyForInstaller !== 'boolean') {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VAL_001',
+          message: 'installationReadyForInstaller (or installation_ready_for_installer) must be boolean'
+        }
+      });
+      return;
+    }
 
     // Account-management/admin only; dealer-admin JWT kept for backward compatibility.
     const role = req.user?.role;
@@ -2462,6 +2493,7 @@ export const updateQuotationInstallationRelease = async (req: Request, res: Resp
     await quotation.update({
       installationReadyForInstaller,
       installationReleasedAt: releaseTimestamp,
+      installationStatus: installationReadyForInstaller ? 'pending_installer' : quotation.installationStatus,
       statusHistory: existingHistory
     });
 
@@ -2472,6 +2504,8 @@ export const updateQuotationInstallationRelease = async (req: Request, res: Resp
         id: quotation.id,
         quotationId: quotation.id,
         ...quotationAdminMetadataFields(rowPlain),
+        installationStatus: (quotation as any).installationStatus || null,
+        installation_status: (quotation as any).installationStatus || null,
         updatedAt: quotation.updatedAt
       }
     });

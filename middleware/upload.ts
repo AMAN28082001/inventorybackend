@@ -2,7 +2,14 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import { Request, Response, NextFunction } from 'express';
-import { uploadFileToS3, deleteFileFromS3, extractS3Key } from '../utils/s3Service';
+import {
+  uploadFileToS3,
+  uploadFileToS3FromBuffer,
+  generatePublicUrl,
+  buildS3ObjectUrl,
+  deleteFileFromS3,
+  extractS3Key
+} from '../utils/s3Service';
 import { logInfo, logError } from '../utils/loggerHelper';
 
 // Create uploads directory if it doesn't exist
@@ -93,6 +100,38 @@ export const uploadToS3 = (folder: string = 'photos') => {
       next();
     } catch (error) {
       logError('Upload to S3 middleware error', error);
+      next(error as any);
+    }
+  };
+};
+
+// Middleware to upload memory-backed multer files to S3 without local disk writes.
+export const uploadToS3FromMemory = (folder: string = 'photos') => {
+  return async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const files = (req as any).files;
+      const fileArrays = files && typeof files === 'object' ? Object.values(files).flat() : [];
+
+      for (const file of fileArrays as Express.Multer.File[]) {
+        if (!file?.buffer) continue;
+
+        const key = await uploadFileToS3FromBuffer(file.buffer, file.originalname, folder);
+        let url: string;
+        try {
+          const ttl = Number(process.env.AWS_S3_SIGNED_URL_TTL_SECONDS || 604800);
+          url = await generatePublicUrl(key, ttl);
+        } catch (urlError) {
+          logError('Failed generating signed URL for memory upload, falling back to object URL', urlError, { key });
+          url = buildS3ObjectUrl(key);
+        }
+
+        (file as any).s3Key = key;
+        (file as any).s3Location = url;
+      }
+
+      next();
+    } catch (error) {
+      logError('Upload to S3 (memory) middleware error', error);
       next(error as any);
     }
   };

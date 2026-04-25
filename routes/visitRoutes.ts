@@ -1,9 +1,11 @@
 import express, { Router } from 'express';
+import multer, { MulterError } from 'multer';
 import {
   createVisit,
   getAllVisits,
   approveVisit,
   completeVisit,
+  patchVisitSiteDimensions,
   markVisitIncomplete,
   rescheduleVisit,
   rejectVisit,
@@ -11,10 +13,56 @@ import {
 } from '../controllers/visitController';
 import { authenticate, authorizeDealer, authorizeVisitor } from '../middleware/authQuotation';
 import { validate } from '../middleware/validate';
-import { createVisitSchema, completeVisitSchema, incompleteVisitSchema, rescheduleVisitSchema, rejectVisitSchema } from '../validations/visitValidations';
-import upload, { uploadToS3 } from '../middleware/upload';
+import {
+  createVisitSchema,
+  completeVisitSchema,
+  incompleteVisitSchema,
+  patchVisitSiteSchema,
+  rescheduleVisitSchema,
+  rejectVisitSchema
+} from '../validations/visitValidations';
+import { uploadToS3FromMemory } from '../middleware/upload';
 
 const router: Router = express.Router();
+const completeVisitUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 15 * 1024 * 1024,
+    files: 25
+  }
+});
+
+const handleCompleteVisitMultipart = (req: express.Request, res: express.Response, next: express.NextFunction): void => {
+  completeVisitUpload.fields([
+    { name: 'images', maxCount: 20 },
+    { name: 'rowDiagramImage', maxCount: 1 }
+  ])(req, res, (err: unknown) => {
+    if (!err) {
+      next();
+      return;
+    }
+    const e = err as MulterError;
+    if (e.code === 'LIMIT_FILE_SIZE') {
+      res.status(413).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'One or more files exceed the maximum upload size' }
+      });
+      return;
+    }
+    if (e.code === 'LIMIT_FILE_COUNT' || e.code === 'LIMIT_UNEXPECTED_FILE') {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Unexpected or too many file fields',
+          details: [{ field: e.field || 'files', message: e.message }]
+        }
+      });
+      return;
+    }
+    next(err as any);
+  });
+};
 
 /**
  * @swagger
@@ -269,14 +317,13 @@ router.patch(
   '/:visitId/complete',
   authenticate,
   authorizeVisitor,
-  upload.fields([
-    { name: 'images', maxCount: 20 },
-    { name: 'rowDiagramImage', maxCount: 1 }
-  ]),
-  uploadToS3('visits'),
+  handleCompleteVisitMultipart,
+  uploadToS3FromMemory('visits'),
   validate(completeVisitSchema),
   completeVisit
 );
+
+router.patch('/:visitId', authenticate, validate(patchVisitSiteSchema), patchVisitSiteDimensions);
 
 /**
  * @swagger

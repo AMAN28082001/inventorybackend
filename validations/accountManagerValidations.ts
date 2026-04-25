@@ -17,8 +17,8 @@ export const createAccountManagerSchema = z.object({
     .email('Invalid email format'),
   mobile: z.string()
     .regex(/^\d{10}$/, 'Mobile must be exactly 10 digits'),
-  role: z.enum(['account-management', 'installer', 'baldev', 'hr'], {
-    message: 'Role must be one of: account-management, installer, baldev, hr'
+  role: z.enum(['account-management', 'installer', 'baldev', 'hr', 'metering'], {
+    message: 'Role must be one of: account-management, installer, baldev, hr, metering'
   })
 });
 
@@ -41,7 +41,7 @@ export const updateAccountManagerSchema = z.object({
     z.string().min(8, 'Password must be at least 8 characters'),
     z.literal('') // Allow empty string (frontend sends empty to keep current)
   ]).optional(),
-  role: z.enum(['account-management', 'installer', 'baldev', 'hr']).optional(),
+  role: z.enum(['account-management', 'installer', 'baldev', 'hr', 'metering']).optional(),
   isActive: z.boolean().optional(),
   emailVerified: z.boolean().optional()
 }).refine((data) => {

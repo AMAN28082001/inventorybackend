@@ -56,7 +56,7 @@ interface QuotationAttributes {
   paymentPlanUpdatedBy?: string | null;
   paymentPlanUpdatedAt?: Date | null;
   approvedAt?: Date | null;
-  installationStatus?: 'pending_installer' | 'installer_in_progress' | 'installer_approved' | 'installer_rejected' | 'pending_baldev' | 'baldev_approved' | 'baldev_rejected' | 'completed';
+  installationStatus?: 'pending_installer' | 'installer_in_progress' | 'installer_approved' | 'installer_rejected' | 'pending_baldev' | 'baldev_approved' | 'baldev_rejected' | 'pending_metering' | 'metering_in_progress' | 'metering_approved' | 'mco' | 'completed';
   installerId?: string | null;
   installerActionAt?: Date | null;
   installerInProgressAt?: Date | null;
@@ -67,7 +67,28 @@ interface QuotationAttributes {
   baldevId?: string | null;
   baldevActionAt?: Date | null;
   baldevRemarks?: string | null;
+  meteringId?: string | null;
+  meteringActionAt?: Date | null;
+  meteringApprovedAt?: Date | null;
+  meteringRemarks?: string | null;
+  discomName?: string | null;
+  meterType?: 'solar' | 'net' | 'both' | null;
+  meterNo?: string | null;
+  solarMeterNo?: string | null;
+  netMeterNo?: string | null;
+  meterDocumentImageUrl?: string | null;
+  mcoAt?: Date | null;
   completionAt?: Date | null;
+  /** Installer site legs (cm): back / mid / front */
+  siteLengthCm?: number | null;
+  siteWidthCm?: number | null;
+  siteHeightCm?: number | null;
+  /** Denormalized feet from installer form */
+  backLegFt?: number | null;
+  midLegFt?: number | null;
+  frontLegFt?: number | null;
+  extraExpensesTotal?: number | null;
+  extraExpensesJson?: Array<{ description: string; amount: number }> | null;
   createdAt?: Date;
   updatedAt?: Date;
   validUntil: Date;
@@ -75,7 +96,7 @@ interface QuotationAttributes {
 
 interface QuotationCreationAttributes extends Optional<
   QuotationAttributes,
-  'id' | 'status' | 'discount' | 'createdAt' | 'updatedAt' | 'centralSubsidy' | 'stateSubsidy' | 'totalSubsidy' | 'amountAfterSubsidy' | 'discountAmount' |   'paymentMode' | 'paymentType' | 'bankName' | 'bankIfsc' | 'subsidyChequeDetails' | 'fileLoginStatus' | 'filePaymentType' | 'fileBankName' | 'fileBankIfsc' | 'fileSubsidyChequeDetails' | 'fileLoginAt' | 'statusApprovedAt'   | 'statusHistory' | 'subsidyCheques' | 'remainingAmount' | 'paidAmount' | 'paymentDate' | 'paymentStatus' | 'paymentPhases' | 'paymentPlanUpdatedBy' | 'paymentPlanUpdatedAt' | 'approvedAt' | 'installationStatus' | 'installerId' | 'installerActionAt' | 'installerInProgressAt' | 'installerApprovedAt' | 'installerRemarks' | 'installationReadyForInstaller' | 'installationReleasedAt' | 'baldevId' | 'baldevActionAt' | 'baldevRemarks' | 'completionAt'
+  'id' | 'status' | 'discount' | 'createdAt' | 'updatedAt' | 'centralSubsidy' | 'stateSubsidy' | 'totalSubsidy' | 'amountAfterSubsidy' | 'discountAmount' |   'paymentMode' | 'paymentType' | 'bankName' | 'bankIfsc' | 'subsidyChequeDetails' | 'fileLoginStatus' | 'filePaymentType' | 'fileBankName' | 'fileBankIfsc' | 'fileSubsidyChequeDetails' | 'fileLoginAt' | 'statusApprovedAt'   | 'statusHistory' | 'subsidyCheques' | 'remainingAmount' | 'paidAmount' | 'paymentDate' | 'paymentStatus' | 'paymentPhases' | 'paymentPlanUpdatedBy' | 'paymentPlanUpdatedAt' | 'approvedAt' | 'installationStatus' | 'installerId' | 'installerActionAt' | 'installerInProgressAt' | 'installerApprovedAt' | 'installerRemarks' | 'installationReadyForInstaller' | 'installationReleasedAt' |   'baldevId' | 'baldevActionAt' | 'baldevRemarks' | 'meteringId' | 'meteringActionAt' | 'meteringApprovedAt' | 'meteringRemarks' | 'discomName' | 'meterType' | 'meterNo' | 'solarMeterNo' | 'netMeterNo' | 'meterDocumentImageUrl' | 'mcoAt' | 'completionAt' | 'siteLengthCm' | 'siteWidthCm' | 'siteHeightCm' | 'backLegFt' | 'midLegFt' | 'frontLegFt' | 'extraExpensesTotal' | 'extraExpensesJson'
 > {}
 
 class Quotation extends Model<QuotationAttributes, QuotationCreationAttributes> implements QuotationAttributes {
@@ -133,7 +154,7 @@ class Quotation extends Model<QuotationAttributes, QuotationCreationAttributes> 
   public paymentPlanUpdatedBy!: string | null;
   public paymentPlanUpdatedAt!: Date | null;
   public approvedAt!: Date | null;
-  public installationStatus!: 'pending_installer' | 'installer_in_progress' | 'installer_approved' | 'installer_rejected' | 'pending_baldev' | 'baldev_approved' | 'baldev_rejected' | 'completed';
+  public installationStatus!: 'pending_installer' | 'installer_in_progress' | 'installer_approved' | 'installer_rejected' | 'pending_baldev' | 'baldev_approved' | 'baldev_rejected' | 'pending_metering' | 'metering_in_progress' | 'metering_approved' | 'mco' | 'completed';
   public installerId!: string | null;
   public installerActionAt!: Date | null;
   public installerInProgressAt!: Date | null;
@@ -144,7 +165,26 @@ class Quotation extends Model<QuotationAttributes, QuotationCreationAttributes> 
   public baldevId!: string | null;
   public baldevActionAt!: Date | null;
   public baldevRemarks!: string | null;
+  public meteringId!: string | null;
+  public meteringActionAt!: Date | null;
+  public meteringApprovedAt!: Date | null;
+  public meteringRemarks!: string | null;
+  public discomName!: string | null;
+  public meterType!: 'solar' | 'net' | 'both' | null;
+  public meterNo!: string | null;
+  public solarMeterNo!: string | null;
+  public netMeterNo!: string | null;
+  public meterDocumentImageUrl!: string | null;
+  public mcoAt!: Date | null;
   public completionAt!: Date | null;
+  public siteLengthCm!: number | null;
+  public siteWidthCm!: number | null;
+  public siteHeightCm!: number | null;
+  public backLegFt!: number | null;
+  public midLegFt!: number | null;
+  public frontLegFt!: number | null;
+  public extraExpensesTotal!: number | null;
+  public extraExpensesJson!: Array<{ description: string; amount: number }> | null;
   public readonly createdAt!: Date;
   public readonly updatedAt!: Date;
   public validUntil!: Date;
@@ -315,6 +355,10 @@ Quotation.init(
         'pending_baldev',
         'baldev_approved',
         'baldev_rejected',
+        'pending_metering',
+        'metering_in_progress',
+        'metering_approved',
+        'mco',
         'completed'
       ),
       allowNull: false,
@@ -361,8 +405,84 @@ Quotation.init(
       type: DataTypes.TEXT,
       allowNull: true
     },
+    meteringId: {
+      type: DataTypes.STRING(50),
+      allowNull: true
+    },
+    meteringActionAt: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
+    meteringApprovedAt: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
+    meteringRemarks: {
+      type: DataTypes.TEXT,
+      allowNull: true
+    },
+    discomName: {
+      type: DataTypes.STRING(255),
+      allowNull: true
+    },
+    meterType: {
+      type: DataTypes.ENUM('solar', 'net', 'both'),
+      allowNull: true
+    },
+    meterNo: {
+      type: DataTypes.STRING(120),
+      allowNull: true
+    },
+    solarMeterNo: {
+      type: DataTypes.STRING(120),
+      allowNull: true
+    },
+    netMeterNo: {
+      type: DataTypes.STRING(120),
+      allowNull: true
+    },
+    meterDocumentImageUrl: {
+      type: DataTypes.TEXT,
+      allowNull: true
+    },
+    mcoAt: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
     completionAt: {
       type: DataTypes.DATE,
+      allowNull: true
+    },
+    siteLengthCm: {
+      type: DataTypes.DECIMAL(12, 3),
+      allowNull: true
+    },
+    siteWidthCm: {
+      type: DataTypes.DECIMAL(12, 3),
+      allowNull: true
+    },
+    siteHeightCm: {
+      type: DataTypes.DECIMAL(12, 3),
+      allowNull: true
+    },
+    backLegFt: {
+      type: DataTypes.DECIMAL(12, 4),
+      allowNull: true
+    },
+    midLegFt: {
+      type: DataTypes.DECIMAL(12, 4),
+      allowNull: true
+    },
+    frontLegFt: {
+      type: DataTypes.DECIMAL(12, 4),
+      allowNull: true
+    },
+    extraExpensesTotal: {
+      type: DataTypes.DECIMAL(14, 2),
+      allowNull: true
+    },
+    extraExpensesJson: {
+      type: DataTypes.JSONB,
       allowNull: true
     },
     validUntil: {

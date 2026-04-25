@@ -3,6 +3,7 @@ import sequelize from '../config/database';
 
 type InstallationDocType =
   | 'installer_po'
+  | 'installer_pi'
   | 'additional_expense'
   | 'site_completion_image'
   | 'warranty_doc'
@@ -58,6 +59,7 @@ QuotationInstallationDoc.init(
     docType: {
       type: DataTypes.ENUM(
         'installer_po',
+        'installer_pi',
         'additional_expense',
         'site_completion_image',
         'warranty_doc',

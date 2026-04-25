@@ -31,7 +31,7 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
       username: user.username,
       password: '', // Not needed in request
       name: user.name,
-      role: user.role as 'super-admin' | 'super-admin-manager' | 'admin' | 'agent' | 'account' | 'installer' | 'baldev' | 'confirmation' | 'hr',
+      role: user.role as 'super-admin' | 'super-admin-manager' | 'admin' | 'agent' | 'account' | 'installer' | 'baldev' | 'confirmation' | 'hr' | 'metering',
       is_active: user.is_active
     };
     next();
