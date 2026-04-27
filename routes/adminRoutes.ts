@@ -3,6 +3,7 @@ import {
   getAllQuotations,
   getAdminQuotationById,
   updateQuotationStatus,
+  updateQuotationInstallationStatus,
   updateQuotationFileLogin,
   getAllDealers,
   updateDealer,
@@ -22,6 +23,7 @@ import { authenticate, authorizeAdmin } from '../middleware/authQuotation';
 import { validate } from '../middleware/validate';
 import {
   updateStatusSchema,
+  updateInstallationStatusSchema,
   fileLoginSchema,
   createVisitorSchema,
   updateVisitorSchema,
@@ -59,6 +61,8 @@ router.use(authorizeAdmin);
  *       - bearerAuth: []
  */
 router.patch('/quotations/:quotationId/status', validate(updateStatusSchema), updateQuotationStatus);
+router.patch('/quotations/:quotationId/installation-status', validate(updateInstallationStatusSchema), updateQuotationInstallationStatus);
+router.patch('/quotations/:quotationId/workflow-status', validate(updateInstallationStatusSchema), updateQuotationInstallationStatus);
 router.patch('/quotations/:quotationId/file-login', validate(fileLoginSchema), updateQuotationFileLogin);
 
 /**

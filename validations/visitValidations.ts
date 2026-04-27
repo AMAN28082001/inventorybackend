@@ -158,9 +158,9 @@ export const completeVisitSchema = z.object({
   width: positiveNumberFromBody.optional(),
   height: positiveNumberFromBody.optional(),
   unit: z.enum(['feet', 'cm']).optional(),
-  backLegFeet: positiveNumberFromBody.optional(),
+  backLegFeet: positiveNumberFromBody,
   midLegFeet: positiveNumberFromBody.optional(),
-  frontLegFeet: positiveNumberFromBody.optional(),
+  frontLegFeet: positiveNumberFromBody,
   existingImages: z.union([z.array(z.string()), z.string()]).optional(),
   existingRowDiagramImage: z.string().optional(),
   notes: z.string().optional()

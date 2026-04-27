@@ -71,3 +71,9 @@ export const meteringDetailsSchema = z.object({
   solarMeterNo: z.string().max(120).optional(),
   netMeterNo: z.string().max(120).optional()
 }).passthrough();
+
+export const meteringMcoDocumentsSchema = z
+  .object({
+    remarks: z.string().max(5000).optional()
+  })
+  .passthrough();

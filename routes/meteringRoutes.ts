@@ -2,8 +2,8 @@ import express, { Router } from 'express';
 import multer, { MulterError } from 'multer';
 import { authenticate, authorizeMetering } from '../middleware/authQuotation';
 import { validate } from '../middleware/validate';
-import { getMeteringQueue, meteringStatusUpdate, saveMeteringDetails } from '../controllers/workflowController';
-import { meteringDetailsSchema, meteringStatusSchema } from '../validations/workflowValidations';
+import { getMeteringQueue, meteringStatusUpdate, saveMeteringDetails, saveMeteringMcoDocuments } from '../controllers/workflowController';
+import { meteringDetailsSchema, meteringMcoDocumentsSchema, meteringStatusSchema } from '../validations/workflowValidations';
 
 const router: Router = express.Router();
 const upload = multer({
@@ -40,6 +40,66 @@ router.post(
   },
   validate(meteringDetailsSchema),
   saveMeteringDetails
+);
+
+router.post(
+  '/quotations/:quotationId/mco-documents',
+  (req, res, next) => {
+    upload.fields([
+      { name: 'workCompleteReportImage', maxCount: 1 },
+      { name: 'meterInstalledPhoto', maxCount: 1 },
+      { name: 'completeDcrReportImage', maxCount: 1 }
+    ])(req, res, (err) => {
+      if (!err) {
+        next();
+        return;
+      }
+      const e = err as MulterError;
+      if (e.code === 'LIMIT_FILE_SIZE') {
+        res.status(413).json({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message: 'One or more MCO documents exceed max file size' }
+        });
+        return;
+      }
+      res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: e.message || 'Invalid multipart payload' }
+      });
+    });
+  },
+  validate(meteringMcoDocumentsSchema),
+  saveMeteringMcoDocuments
+);
+
+router.post(
+  '/quotations/:quotationId/documents',
+  (req, res, next) => {
+    upload.fields([
+      { name: 'workCompleteReportImage', maxCount: 1 },
+      { name: 'meterInstalledPhoto', maxCount: 1 },
+      { name: 'completeDcrReportImage', maxCount: 1 }
+    ])(req, res, (err) => {
+      if (!err) {
+        next();
+        return;
+      }
+      const e = err as MulterError;
+      if (e.code === 'LIMIT_FILE_SIZE') {
+        res.status(413).json({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message: 'One or more MCO documents exceed max file size' }
+        });
+        return;
+      }
+      res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: e.message || 'Invalid multipart payload' }
+      });
+    });
+  },
+  validate(meteringMcoDocumentsSchema),
+  saveMeteringMcoDocuments
 );
 
 export default router;

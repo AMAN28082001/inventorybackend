@@ -2636,7 +2636,11 @@ const resolveQuotationDocumentUrls = async (documents: any) => {
     'compliantAadharFront',
     'compliantAadharBack',
     'compliantPanImage',
-    'compliantBankPassbookImage'
+    'compliantBankPassbookImage',
+    'customerFinalBillFile',
+    'panelWarrantyFile',
+    'inverterWarrantyFile',
+    'workCompletionWarrantyFile'
   ];
 
   for (const field of mediaFields) {
@@ -2717,6 +2721,10 @@ export const saveQuotationDocuments = async (req: Request, res: Response): Promi
     const compliantAadharBackUrl = await getUploadedFileUrl(req, 'compliantAadharBack', quotation.id);
     const compliantPanImageUrl = await getUploadedFileUrl(req, 'compliantPanImage', quotation.id);
     const compliantBankPassbookImageUrl = await getUploadedFileUrl(req, 'compliantBankPassbookImage', quotation.id);
+    const customerFinalBillFileUrl = await getUploadedFileUrl(req, 'customerFinalBillFile', quotation.id);
+    const panelWarrantyFileUrl = await getUploadedFileUrl(req, 'panelWarrantyFile', quotation.id);
+    const inverterWarrantyFileUrl = await getUploadedFileUrl(req, 'inverterWarrantyFile', quotation.id);
+    const workCompletionWarrantyFileUrl = await getUploadedFileUrl(req, 'workCompletionWarrantyFile', quotation.id);
 
     logInfo('Quotation document uploads processed', {
       quotationId: quotation.id,
@@ -2731,7 +2739,11 @@ export const saveQuotationDocuments = async (req: Request, res: Response): Promi
       compliantAadharFrontUrl,
       compliantAadharBackUrl,
       compliantPanImageUrl,
-      compliantBankPassbookImageUrl
+      compliantBankPassbookImageUrl,
+      customerFinalBillFileUrl,
+      panelWarrantyFileUrl,
+      inverterWarrantyFileUrl,
+      workCompletionWarrantyFileUrl
     });
 
     if (existing) {
@@ -2747,7 +2759,11 @@ export const saveQuotationDocuments = async (req: Request, res: Response): Promi
         { newUrl: compliantAadharFrontUrl, oldUrl: existing.compliantAadharFront },
         { newUrl: compliantAadharBackUrl, oldUrl: existing.compliantAadharBack },
         { newUrl: compliantPanImageUrl, oldUrl: existing.compliantPanImage },
-        { newUrl: compliantBankPassbookImageUrl, oldUrl: existing.compliantBankPassbookImage }
+        { newUrl: compliantBankPassbookImageUrl, oldUrl: existing.compliantBankPassbookImage },
+        { newUrl: customerFinalBillFileUrl, oldUrl: (existing as any).customerFinalBillFile },
+        { newUrl: panelWarrantyFileUrl, oldUrl: (existing as any).panelWarrantyFile },
+        { newUrl: inverterWarrantyFileUrl, oldUrl: (existing as any).inverterWarrantyFile },
+        { newUrl: workCompletionWarrantyFileUrl, oldUrl: (existing as any).workCompletionWarrantyFile }
       ];
 
       for (const { newUrl, oldUrl } of replacements) {
@@ -2889,30 +2905,28 @@ export const saveQuotationDocuments = async (req: Request, res: Response): Promi
         compliantBankPassbookImageUrl,
         body.compliantBankPassbookImage,
         existing?.compliantBankPassbookImage
+      ),
+      customerFinalBillFile: resolveMediaValue(
+        customerFinalBillFileUrl,
+        body.customerFinalBillFile,
+        (existing as any)?.customerFinalBillFile
+      ),
+      panelWarrantyFile: resolveMediaValue(
+        panelWarrantyFileUrl,
+        body.panelWarrantyFile,
+        (existing as any)?.panelWarrantyFile
+      ),
+      inverterWarrantyFile: resolveMediaValue(
+        inverterWarrantyFileUrl,
+        body.inverterWarrantyFile,
+        (existing as any)?.inverterWarrantyFile
+      ),
+      workCompletionWarrantyFile: resolveMediaValue(
+        workCompletionWarrantyFileUrl,
+        body.workCompletionWarrantyFile,
+        (existing as any)?.workCompletionWarrantyFile
       )
     };
-
-    const requiredDocumentFields = [
-      'aadharFront',
-      'aadharBack',
-      'panImage',
-      'electricityBillImage',
-      'bankPassbookImage',
-      'geotagRoofPhoto',
-      'customerWithHousePhoto',
-      'propertyDocumentPdf'
-    ] as const;
-    const missingRequired = requiredDocumentFields.filter((field) => !payload[field]);
-    if (missingRequired.length > 0) {
-      res.status(400).json({
-        success: false,
-        error: {
-          code: 'VAL_001',
-          message: `Missing required documents: ${missingRequired.join(', ')}`
-        }
-      });
-      return;
-    }
 
     if (payload.isCompliantSenior) {
       if (

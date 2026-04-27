@@ -15,20 +15,26 @@ import {
   getProductCatalog,
   saveQuotationDocuments
 } from '../controllers/quotationController';
-import { getWorkflowHistory, meteringStatusUpdate, saveMeteringDetails } from '../controllers/workflowController';
+import {
+  getWorkflowHistory,
+  meteringStatusUpdate,
+  saveMeteringDetails,
+  saveMeteringMcoDocuments
+} from '../controllers/workflowController';
 import { getVisitsForQuotation } from '../controllers/visitController';
 import {
   authenticate,
   authorizeDealer,
   authorizeDealerAdminOrVisitor,
   authorizeDealerOrAccountManager,
+  authorizeQuotationDocumentsEditor,
   authorizeMeteringOrAdmin,
   rejectAccountManager
 } from '../middleware/authQuotation';
 import { validate } from '../middleware/validate';
 import { logRequestBeforeValidation, logRequestAfterValidation } from '../middleware/requestLogger';
 import { createQuotationSchema, updateDiscountSchema, updateProductsSchema, updatePricingSchema, updatePaymentDetailsSchema, updatePaymentModeSchema, updateInstallationReleaseSchema } from '../validations/quotationValidations';
-import { meteringDetailsSchema, meteringStatusSchema } from '../validations/workflowValidations';
+import { meteringDetailsSchema, meteringMcoDocumentsSchema, meteringStatusSchema } from '../validations/workflowValidations';
 
 const router: Router = express.Router();
 
@@ -46,7 +52,11 @@ const documentsUpload = multer({
       'compliantPanImage',
       'compliantBankPassbookImage',
       'geotagRoofPhoto',
-      'customerWithHousePhoto'
+      'customerWithHousePhoto',
+      'customerFinalBillFile',
+      'panelWarrantyFile',
+      'inverterWarrantyFile',
+      'workCompletionWarrantyFile'
     ]);
     const pdfOnlyFields = new Set(['propertyDocumentPdf']);
 
@@ -91,7 +101,11 @@ const DOCUMENT_UPLOAD_FIELDS: multer.Field[] = [
   { name: 'compliantAadharFront', maxCount: 1 },
   { name: 'compliantAadharBack', maxCount: 1 },
   { name: 'compliantPanImage', maxCount: 1 },
-  { name: 'compliantBankPassbookImage', maxCount: 1 }
+  { name: 'compliantBankPassbookImage', maxCount: 1 },
+  { name: 'customerFinalBillFile', maxCount: 1 },
+  { name: 'panelWarrantyFile', maxCount: 1 },
+  { name: 'inverterWarrantyFile', maxCount: 1 },
+  { name: 'workCompletionWarrantyFile', maxCount: 1 }
 ];
 
 const handleQuotationDocumentsMultipart = (req: express.Request, res: express.Response, next: express.NextFunction): void => {
@@ -146,6 +160,35 @@ const handleQuotationMeteringDetailsMultipart = (
       res.status(413).json({
         success: false,
         error: { code: 'VALIDATION_ERROR', message: 'meterDocumentImage exceeds max file size' }
+      });
+      return;
+    }
+    res.status(400).json({
+      success: false,
+      error: { code: 'VALIDATION_ERROR', message: e.message || 'Invalid multipart payload' }
+    });
+  });
+};
+
+const handleQuotationMeteringMcoMultipart = (
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+): void => {
+  documentsUpload.fields([
+    { name: 'workCompleteReportImage', maxCount: 1 },
+    { name: 'meterInstalledPhoto', maxCount: 1 },
+    { name: 'completeDcrReportImage', maxCount: 1 }
+  ])(req, res, (err: unknown) => {
+    if (!err) {
+      next();
+      return;
+    }
+    const e = err as MulterError;
+    if (e.code === 'LIMIT_FILE_SIZE') {
+      res.status(413).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'One or more MCO documents exceed max file size' }
       });
       return;
     }
@@ -666,15 +709,23 @@ router.post(
 );
 
 router.post(
+  '/:quotationId/metering-mco-documents',
+  authorizeMeteringOrAdmin,
+  handleQuotationMeteringMcoMultipart,
+  validate(meteringMcoDocumentsSchema),
+  saveMeteringMcoDocuments
+);
+
+router.post(
   '/:quotationId/documents',
-  authorizeDealerOrAccountManager,
+  authorizeQuotationDocumentsEditor,
   handleQuotationDocumentsMultipart,
   saveQuotationDocuments
 );
 
 router.patch(
   '/:quotationId/documents',
-  authorizeDealerOrAccountManager,
+  authorizeQuotationDocumentsEditor,
   handleQuotationDocumentsMultipart,
   saveQuotationDocuments
 );

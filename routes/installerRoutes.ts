@@ -1,6 +1,6 @@
 import express, { NextFunction, Request, Response, Router } from 'express';
 import multer, { MulterError } from 'multer';
-import { authenticate, authorizeInstaller } from '../middleware/authQuotation';
+import { authenticate, authorizeInstaller, authorizeInstallerOrAdmin } from '../middleware/authQuotation';
 import { validate } from '../middleware/validate';
 import { installerStatusSchema, installerUploadMetaSchema } from '../validations/workflowValidations';
 import { getInstallerQueue, installerDecision, installerUploadDocuments } from '../controllers/workflowController';
@@ -57,10 +57,11 @@ const handleInstallerMultipart = (req: Request, res: Response, next: NextFunctio
 };
 
 router.use(authenticate);
-router.use(authorizeInstaller);
 
-router.get('/quotations', getInstallerQueue);
-router.get('/queue', getInstallerQueue);
+router.get('/quotations', authorizeInstallerOrAdmin, getInstallerQueue);
+router.get('/queue', authorizeInstallerOrAdmin, getInstallerQueue);
+
+router.use(authorizeInstaller);
 router.patch('/quotations/:quotationId/status', validate(installerStatusSchema), installerDecision);
 router.patch('/quotations/:quotationId/decision', validate(installerStatusSchema), installerDecision);
 router.post(

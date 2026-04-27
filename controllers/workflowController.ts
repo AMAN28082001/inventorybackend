@@ -6,6 +6,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { Op } from 'sequelize';
 import { Quotation, QuotationInstallationDoc, Dealer, Customer, QuotationProduct, Visit, VisitAssignment, Visitor, CustomPanel } from '../models/index-quotation';
 import { logError, logInfo } from '../utils/loggerHelper';
+import { INSTALLER_RELEASE_STATUSES, resolveInstallerQueueStatuses } from '../constants/workflowQueues';
 
 const getS3Client = () => {
   const region = process.env.AWS_REGION;
@@ -83,6 +84,44 @@ const getLatestMeterDocMeta = (docs: any[]): { url: string | null; name: string 
   return {
     url: typeof latest?.fileUrl === 'string' && latest.fileUrl.trim() ? latest.fileUrl : null,
     name: originalName
+  };
+};
+
+const MCO_DOC_FIELDS = [
+  'workCompleteReportImage',
+  'meterInstalledPhoto',
+  'completeDcrReportImage'
+] as const;
+
+const getLatestMcoDocMeta = (docs: any[]) => {
+  const latestByField: Record<string, any> = {};
+  for (const field of MCO_DOC_FIELDS) {
+    const matching = (docs || [])
+      .filter((doc: any) => doc?.metadata?.mcoField === field && typeof doc?.fileUrl === 'string')
+      .sort((a: any, b: any) => {
+        const ta = new Date(a.uploadedAt || a.createdAt || 0).getTime();
+        const tb = new Date(b.uploadedAt || b.createdAt || 0).getTime();
+        return tb - ta;
+      });
+    latestByField[field] = matching[0] || null;
+  }
+
+  const readName = (doc: any): string | null => {
+    const metadata = doc?.metadata || {};
+    return (
+      (typeof metadata.originalName === 'string' && metadata.originalName.trim()) ||
+      (typeof metadata.original_name === 'string' && metadata.original_name.trim()) ||
+      null
+    );
+  };
+
+  return {
+    workCompleteReportImageUrl: latestByField.workCompleteReportImage?.fileUrl || null,
+    meterInstalledPhotoUrl: latestByField.meterInstalledPhoto?.fileUrl || null,
+    completeDcrReportImageUrl: latestByField.completeDcrReportImage?.fileUrl || null,
+    workCompleteReportImageName: readName(latestByField.workCompleteReportImage),
+    meterInstalledPhotoName: readName(latestByField.meterInstalledPhoto),
+    completeDcrReportImageName: readName(latestByField.completeDcrReportImage)
   };
 };
 
@@ -164,10 +203,26 @@ const getWorkflowQueue = async (
       .split(',')
       .map((value) => value.trim())
       .filter(Boolean);
-    const where: any = requestedStatuses.length > 1
-      ? { installationStatus: { [Op.in]: requestedStatuses } }
-      : { installationStatus: requestedStatuses[0] || targetStatus };
-    Object.assign(where, extraWhere);
+    const releaseOrStatuses = extraWhere.installationReadyForInstaller === true;
+    const where: any = {};
+    const installationStatusFilter =
+      requestedStatuses.length > 1
+        ? { [Op.in]: requestedStatuses }
+        : requestedStatuses[0] || targetStatus;
+
+    if (releaseOrStatuses) {
+      // Operational visibility contract: released records OR records already in operational stages.
+      where[Op.or] = [
+        { installationReadyForInstaller: true },
+        { installationStatus: installationStatusFilter }
+      ];
+    } else {
+      where.installationStatus = installationStatusFilter;
+    }
+
+    const sanitizedExtraWhere = { ...extraWhere };
+    delete (sanitizedExtraWhere as any).installationReadyForInstaller;
+    Object.assign(where, sanitizedExtraWhere);
     if (search) {
       where[Op.or] = [
         { id: { [Op.iLike]: `%${search}%` } },
@@ -287,6 +342,7 @@ const getWorkflowQueue = async (
             (typeof doc.toJSON === 'function' ? doc.toJSON() : doc)
           );
           const latestMeterDoc = getLatestMeterDocMeta(rawInstallationDocs);
+          const latestMcoDocs = getLatestMcoDocMeta(rawInstallationDocs);
           const meterDocumentImageUrl = q.meterDocumentImageUrl || latestMeterDoc.url || null;
           return {
             id: q.id,
@@ -301,8 +357,12 @@ const getWorkflowQueue = async (
             meteringApprovedAt: q.meteringApprovedAt || null,
             meteringRemarks: q.meteringRemarks || null,
             meteringStatus: q.installationStatus || null,
+            metering_status: q.installationStatus || null,
             meteringStage: q.installationStatus || null,
+            mcoStatus: q.installationStatus === 'mco' ? 'mco' : null,
+            mco_status: q.installationStatus === 'mco' ? 'mco' : null,
             mcoAt: q.mcoAt || null,
+            completionAt: q.completionAt || null,
             discomName: q.discomName || null,
             meterType: q.meterType || null,
             meterNo: q.meterNo || null,
@@ -313,6 +373,18 @@ const getWorkflowQueue = async (
             meter_document_url: meterDocumentImageUrl,
             meterDocumentName: latestMeterDoc.name,
             meter_document_name: latestMeterDoc.name,
+            workCompleteReportImageUrl: latestMcoDocs.workCompleteReportImageUrl,
+            work_complete_report_image_url: latestMcoDocs.workCompleteReportImageUrl,
+            meterInstalledPhotoUrl: latestMcoDocs.meterInstalledPhotoUrl,
+            meter_installed_photo_url: latestMcoDocs.meterInstalledPhotoUrl,
+            completeDcrReportImageUrl: latestMcoDocs.completeDcrReportImageUrl,
+            complete_dcr_report_image_url: latestMcoDocs.completeDcrReportImageUrl,
+            workCompleteReportImageName: latestMcoDocs.workCompleteReportImageName,
+            work_complete_report_image_name: latestMcoDocs.workCompleteReportImageName,
+            meterInstalledPhotoName: latestMcoDocs.meterInstalledPhotoName,
+            meter_installed_photo_name: latestMcoDocs.meterInstalledPhotoName,
+            completeDcrReportImageName: latestMcoDocs.completeDcrReportImageName,
+            complete_dcr_report_image_name: latestMcoDocs.completeDcrReportImageName,
             dealer: q.dealer
               ? {
                 id: q.dealer.id,
@@ -378,7 +450,8 @@ const getWorkflowQueue = async (
 };
 
 export const getInstallerQueue = async (req: Request, res: Response): Promise<void> => {
-  await getWorkflowQueue(req, res, 'pending_installer,installer_in_progress,installer_approved,pending_baldev', {
+  req.query.status = resolveInstallerQueueStatuses(req.query.status as string | undefined) as any;
+  await getWorkflowQueue(req, res, INSTALLER_RELEASE_STATUSES.join(','), {
     status: 'approved',
     installationReadyForInstaller: true
   });
@@ -497,8 +570,33 @@ export const meteringStatusUpdate = async (req: Request, res: Response): Promise
         patch.mcoAt = new Date();
       }
       if (action === 'mark_completed') {
-        patch.installationStatus = 'completed';
-        patch.completionAt = new Date();
+        const docs = await QuotationInstallationDoc.findAll({
+          where: { quotationId, docType: 'other' },
+          order: [['uploadedAt', 'DESC'], ['createdAt', 'DESC']]
+        });
+        const latestMcoDocs = getLatestMcoDocMeta(docs.map((d) => (typeof (d as any).toJSON === 'function' ? (d as any).toJSON() : d)));
+        const missingMcoDocs: Array<{ field: string; message: string }> = [];
+        if (!latestMcoDocs.workCompleteReportImageUrl) {
+          missingMcoDocs.push({ field: 'workCompleteReportImage', message: 'workCompleteReportImage is required' });
+        }
+        if (!latestMcoDocs.meterInstalledPhotoUrl) {
+          missingMcoDocs.push({ field: 'meterInstalledPhoto', message: 'meterInstalledPhoto is required' });
+        }
+        if (!latestMcoDocs.completeDcrReportImageUrl) {
+          missingMcoDocs.push({ field: 'completeDcrReportImage', message: 'completeDcrReportImage is required' });
+        }
+        if (missingMcoDocs.length > 0) {
+          res.status(400).json({
+            success: false,
+            error: {
+              code: 'WF_002',
+              message: 'Required MCO documents are missing before completion.',
+              details: missingMcoDocs
+            }
+          });
+          return;
+        }
+        patch.installationStatus = 'pending_baldev';
       }
       if (action === 'move_back') {
         patch.installationStatus = current === 'mco' ? 'metering_approved' : 'pending_metering';
@@ -938,6 +1036,82 @@ export const saveMeteringDetails = async (req: Request, res: Response): Promise<
       success: false,
       error: { code: 'SYS_001', message: 'Internal server error' }
     });
+  }
+};
+
+export const saveMeteringMcoDocuments = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { quotationId } = req.params;
+    const quotation = await Quotation.findByPk(quotationId);
+    if (!quotation) {
+      res.status(404).json({ success: false, error: { code: 'RES_001', message: 'Quotation not found' } });
+      return;
+    }
+
+    const files = flattenMulterFiles(req);
+    const acceptedFields = new Set<string>(MCO_DOC_FIELDS);
+    const relevantFiles = files.filter((f) => acceptedFields.has(f.fieldname as any));
+    if (relevantFiles.length === 0) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'At least one MCO document file is required',
+          details: MCO_DOC_FIELDS.map((field) => ({ field, message: 'Upload one or more MCO document images' }))
+        }
+      });
+      return;
+    }
+
+    for (const file of relevantFiles) {
+      const fileUrl = await uploadFileToS3(file, quotationId, 'mco_doc');
+      await QuotationInstallationDoc.create({
+        id: uuidv4(),
+        quotationId,
+        docType: 'other',
+        fileUrl,
+        uploadedByUserId: req.user?.id || 'unknown',
+        uploadedByRole: req.user?.role || 'unknown',
+        remarks: parseTrimmedString((req.body as any)?.remarks) || 'metering_mco_document',
+        metadata: {
+          mcoField: file.fieldname,
+          originalName: file.originalname,
+          mimeType: file.mimetype,
+          size: file.size
+        },
+        uploadedAt: new Date()
+      });
+    }
+
+    const docs = await QuotationInstallationDoc.findAll({
+      where: { quotationId, docType: 'other' },
+      order: [['uploadedAt', 'DESC'], ['createdAt', 'DESC']]
+    });
+    const latestMcoDocs = getLatestMcoDocMeta(docs.map((d) => (typeof (d as any).toJSON === 'function' ? (d as any).toJSON() : d)));
+
+    res.json({
+      success: true,
+      data: {
+        id: quotation.id,
+        quotationId: quotation.id,
+        workCompleteReportImageUrl: latestMcoDocs.workCompleteReportImageUrl,
+        work_complete_report_image_url: latestMcoDocs.workCompleteReportImageUrl,
+        meterInstalledPhotoUrl: latestMcoDocs.meterInstalledPhotoUrl,
+        meter_installed_photo_url: latestMcoDocs.meterInstalledPhotoUrl,
+        completeDcrReportImageUrl: latestMcoDocs.completeDcrReportImageUrl,
+        complete_dcr_report_image_url: latestMcoDocs.completeDcrReportImageUrl,
+        workCompleteReportImageName: latestMcoDocs.workCompleteReportImageName,
+        work_complete_report_image_name: latestMcoDocs.workCompleteReportImageName,
+        meterInstalledPhotoName: latestMcoDocs.meterInstalledPhotoName,
+        meter_installed_photo_name: latestMcoDocs.meterInstalledPhotoName,
+        completeDcrReportImageName: latestMcoDocs.completeDcrReportImageName,
+        complete_dcr_report_image_name: latestMcoDocs.completeDcrReportImageName,
+        updatedAt: quotation.updatedAt
+      }
+    });
+  } catch (error) {
+    logError('Save metering MCO documents error', error, { quotationId: req.params.quotationId });
+    res.status(500).json({ success: false, error: { code: 'SYS_001', message: 'Internal server error' } });
   }
 };
 

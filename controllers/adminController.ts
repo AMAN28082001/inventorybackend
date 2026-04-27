@@ -5,6 +5,7 @@ import { logError, logInfo } from '../utils/loggerHelper';
 import { normalizePaymentModeInput } from '../utils/paymentMode';
 import { quotationPaymentApiFields, quotationAdminMetadataFields, readStatusHistoryFromRow } from '../utils/quotationApiJson';
 import { emitRealtime, realtimeEvents } from '../utils/realtime';
+import { INSTALLER_RELEASE_STATUSES } from '../constants/workflowQueues';
 
 const sumPhasePaidAmounts = (phases: { paidAmount?: number }[]): number =>
   phases.reduce((sum, p) => sum + Number((p as any).paidAmount || 0), 0);
@@ -80,15 +81,87 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
     const limitParam = req.query.limit as string | undefined;
     const limit = limitParam ? Math.min(parseInt(limitParam) || 20, 1000) : undefined;
     const offset = limit ? (page - 1) * limit : undefined;
+    const scope = String(req.query.scope || '').toLowerCase();
     const status = req.query.status as string;
+    const installationStatusQuery = req.query.installationStatus as string;
+    const operationalView = String(req.query.operationalView || '').toLowerCase();
     const dealerId = req.query.dealerId as string;
     const startDate = req.query.startDate as string;
     const endDate = req.query.endDate as string;
 
     const where: any = {};
 
-    if (status) where.status = status;
+    if (status && scope !== 'installer_queue') where.status = status;
     if (dealerId) where.dealerId = dealerId;
+    if (installationStatusQuery) {
+      const statuses = installationStatusQuery
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (statuses.length > 1) {
+        where.installationStatus = { [Op.in]: statuses };
+      } else if (statuses.length === 1) {
+        where.installationStatus = statuses[0];
+      }
+    }
+
+    const installerForwardStates = [...INSTALLER_RELEASE_STATUSES];
+    const meteringStates = ['pending_metering', 'metering_in_progress', 'metering_approved', 'mco'];
+    const baldevStates = ['installer_approved', 'pending_baldev', 'baldev_approved', 'completed'];
+    if (operationalView === 'installer') {
+      where.status = 'approved';
+      where[Op.and] = [
+        ...(where[Op.and] || []),
+        {
+          [Op.or]: [
+            { installationReadyForInstaller: true },
+            { installationStatus: { [Op.in]: installerForwardStates } }
+          ]
+        }
+      ];
+    } else if (operationalView === 'metering') {
+      where.status = 'approved';
+      where[Op.and] = [
+        ...(where[Op.and] || []),
+        {
+          [Op.or]: [
+            { installationReadyForInstaller: true },
+            { installationStatus: { [Op.in]: meteringStates } }
+          ]
+        }
+      ];
+    } else if (operationalView === 'baldev') {
+      where[Op.and] = [
+        ...(where[Op.and] || []),
+        { installationStatus: { [Op.in]: baldevStates } }
+      ];
+    }
+
+    if (scope === 'installer_queue') {
+      const installerStatusRaw = String(status || '').trim().toLowerCase();
+      let installerStatuses: string[] = installerForwardStates;
+      if (installerStatusRaw === 'pending_installer') {
+        installerStatuses = ['pending_installer'];
+      } else if (installerStatusRaw === 'approved') {
+        installerStatuses = ['installer_approved', 'pending_baldev', 'baldev_approved', 'completed'];
+      } else if (installerStatusRaw) {
+        installerStatuses = installerStatusRaw
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean);
+      }
+
+      where.status = 'approved';
+      where[Op.and] = [
+        ...(where[Op.and] || []),
+        {
+          [Op.or]: [
+            { installationReadyForInstaller: true },
+            { installationStatus: { [Op.in]: installerStatuses } }
+          ]
+        }
+      ];
+    }
 
     if (isQuotationDealer && req.dealer) {
       where.dealerId = req.dealer.id;
@@ -202,12 +275,19 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
             finalAmount: subtotalNum,
             status: q.status,
             installationStatus: (q as any).installationStatus || 'pending_installer',
+            installation_status: (q as any).installationStatus || 'pending_installer',
+            installationReadyForInstaller: Boolean((q as any).installationReadyForInstaller),
+            installation_ready_for_installer: Boolean((q as any).installationReadyForInstaller),
             approvedAt: (q as any).approvedAt || null,
             installerApprovedAt: (q as any).installerApprovedAt || null,
             meteringApprovedAt: (q as any).meteringApprovedAt || null,
             mcoAt: (q as any).mcoAt || null,
+            completionAt: (q as any).completionAt || null,
             meteringStatus: (q as any).installationStatus || null,
+            metering_status: (q as any).installationStatus || null,
             meteringStage: (q as any).installationStatus || null,
+            mcoStatus: (q as any).installationStatus === 'mco' ? 'mco' : null,
+            mco_status: (q as any).installationStatus === 'mco' ? 'mco' : null,
             createdAt: q.createdAt
           };
         }),
@@ -377,6 +457,95 @@ export const updateQuotationStatus = async (req: Request, res: Response): Promis
     });
   } catch (error) {
     logError('Update quotation status error', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal error' }
+    });
+  }
+};
+
+export const updateQuotationInstallationStatus = async (req: Request, res: Response): Promise<void> => {
+  try {
+    if (!req.dealer || req.dealer.role !== 'admin') {
+      res.status(401).json({
+        success: false,
+        error: { code: 'AUTH_003', message: 'Admin required' }
+      });
+      return;
+    }
+
+    const { quotationId } = req.params;
+    if (!quotationId) {
+      res.status(400).json({
+        success: false,
+        error: { code: 'VAL_001', message: 'Quotation ID required' }
+      });
+      return;
+    }
+
+    const body = req.body as Record<string, unknown>;
+    const requested =
+      (typeof body.installationStatus === 'string' && body.installationStatus.trim()) ||
+      (typeof body.installation_status === 'string' && body.installation_status.trim()) ||
+      (typeof body.meteringStatus === 'string' && body.meteringStatus.trim()) ||
+      (typeof body.status === 'string' && body.status.trim()) ||
+      null;
+
+    if (!requested) {
+      res.status(400).json({
+        success: false,
+        error: { code: 'VAL_001', message: 'installationStatus is required' }
+      });
+      return;
+    }
+
+    const quotation = await Quotation.findByPk(quotationId);
+    if (!quotation) {
+      res.status(404).json({
+        success: false,
+        error: { code: 'RES_001', message: 'Quotation not found' }
+      });
+      return;
+    }
+
+    const nextStatus = requested as any;
+    const now = new Date();
+    const patch: Record<string, unknown> = {
+      installationStatus: nextStatus
+    };
+
+    if (nextStatus === 'metering_approved' && !quotation.meteringApprovedAt) {
+      patch.meteringApprovedAt = now;
+    }
+    if (nextStatus === 'mco' && !quotation.mcoAt) {
+      patch.mcoAt = now;
+    }
+    if (nextStatus === 'completed' && !quotation.completionAt) {
+      patch.completionAt = now;
+    }
+    if (nextStatus === 'pending_baldev') {
+      patch.baldevActionAt = now;
+    }
+
+    await quotation.update(patch as any);
+    await quotation.reload();
+
+    res.json({
+      success: true,
+      data: {
+        id: quotation.id,
+        installationStatus: quotation.installationStatus || null,
+        installation_status: quotation.installationStatus || null,
+        meteringStatus: quotation.installationStatus || null,
+        mcoStatus: quotation.installationStatus === 'mco' ? 'mco' : null,
+        meteringApprovedAt: quotation.meteringApprovedAt || null,
+        mcoAt: quotation.mcoAt || null,
+        completionAt: quotation.completionAt || null,
+        updatedAt: quotation.updatedAt
+      }
+    });
+  } catch (error) {
+    logError('Update quotation installation status error', error);
     res.status(500).json({
       success: false,
       error: { code: 'SYS_001', message: 'Internal error' }
@@ -618,6 +787,18 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
         finalAmount: subtotalNum,
         createdAt: quotation.createdAt,
         approvedAt: quotationAny.approvedAt || null,
+        installationStatus: quotationAny.installationStatus || 'pending_installer',
+        installation_status: quotationAny.installationStatus || 'pending_installer',
+        meteringStatus: quotationAny.installationStatus || null,
+        metering_status: quotationAny.installationStatus || null,
+        meteringStage: quotationAny.installationStatus || null,
+        meteringApprovedAt: quotationAny.meteringApprovedAt || null,
+        mcoAt: quotationAny.mcoAt || null,
+        completionAt: quotationAny.completionAt || null,
+        installationReadyForInstaller: Boolean(quotationAny.installationReadyForInstaller),
+        installation_ready_for_installer: Boolean(quotationAny.installationReadyForInstaller),
+        mcoStatus: quotationAny.installationStatus === 'mco' ? 'mco' : null,
+        mco_status: quotationAny.installationStatus === 'mco' ? 'mco' : null,
         updatedAt: quotation.updatedAt
       }
     });

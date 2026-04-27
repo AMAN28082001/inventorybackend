@@ -33,6 +33,10 @@ interface QuotationDocumentAttributes {
   compliantBankName?: string | null;
   compliantBankBranch?: string | null;
   compliantBankPassbookImage?: string | null;
+  customerFinalBillFile?: string | null;
+  panelWarrantyFile?: string | null;
+  inverterWarrantyFile?: string | null;
+  workCompletionWarrantyFile?: string | null;
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -69,6 +73,10 @@ interface QuotationDocumentCreationAttributes extends Optional<
   | 'compliantBankName'
   | 'compliantBankBranch'
   | 'compliantBankPassbookImage'
+  | 'customerFinalBillFile'
+  | 'panelWarrantyFile'
+  | 'inverterWarrantyFile'
+  | 'workCompletionWarrantyFile'
   | 'createdAt'
   | 'updatedAt'
 > {}
@@ -108,6 +116,10 @@ class QuotationDocument
   public compliantBankName!: string | null;
   public compliantBankBranch!: string | null;
   public compliantBankPassbookImage!: string | null;
+  public customerFinalBillFile!: string | null;
+  public panelWarrantyFile!: string | null;
+  public inverterWarrantyFile!: string | null;
+  public workCompletionWarrantyFile!: string | null;
   public readonly createdAt!: Date;
   public readonly updatedAt!: Date;
 }
@@ -151,7 +163,11 @@ QuotationDocument.init(
     compliantBankIfsc: { type: DataTypes.STRING(20), allowNull: true },
     compliantBankName: { type: DataTypes.STRING(100), allowNull: true },
     compliantBankBranch: { type: DataTypes.STRING(100), allowNull: true },
-    compliantBankPassbookImage: { type: DataTypes.STRING(255), allowNull: true }
+    compliantBankPassbookImage: { type: DataTypes.STRING(255), allowNull: true },
+    customerFinalBillFile: { type: DataTypes.STRING(255), allowNull: true },
+    panelWarrantyFile: { type: DataTypes.STRING(255), allowNull: true },
+    inverterWarrantyFile: { type: DataTypes.STRING(255), allowNull: true },
+    workCompletionWarrantyFile: { type: DataTypes.STRING(255), allowNull: true }
   },
   {
     sequelize,

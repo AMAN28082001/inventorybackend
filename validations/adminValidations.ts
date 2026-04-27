@@ -22,6 +22,33 @@ export const updateStatusSchema = z
     }
   );
 
+const installationStatusEnum = z.enum([
+  'pending_installer',
+  'installer_in_progress',
+  'installer_approved',
+  'installer_rejected',
+  'pending_baldev',
+  'baldev_approved',
+  'baldev_rejected',
+  'pending_metering',
+  'metering_in_progress',
+  'metering_approved',
+  'mco',
+  'completed'
+]);
+
+export const updateInstallationStatusSchema = z.object({
+  installationStatus: installationStatusEnum.optional(),
+  installation_status: installationStatusEnum.optional(),
+  meteringStatus: installationStatusEnum.optional(),
+  status: installationStatusEnum.optional(),
+  remarks: z.string().max(5000).optional()
+}).refine((data) => {
+  return Boolean(data.installationStatus || data.installation_status || data.meteringStatus || data.status);
+}, {
+  message: 'One of installationStatus, installation_status, meteringStatus, or status is required'
+});
+
 /** PATCH /admin/quotations/:id/file-login — body validated loosely; controller enforces rules. */
 export const fileLoginSchema = z
   .object({
