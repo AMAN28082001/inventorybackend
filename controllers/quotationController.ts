@@ -627,6 +627,31 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
       return;
     }
 
+    // Source-of-truth duplicate guard: prevent creating another active quotation
+    // for the same customer mobile/customer record.
+    const duplicateWhere: any = {
+      customerId: customerRecord.id,
+      status: { [Op.notIn]: ['rejected', 'completed'] }
+    };
+    if (req.dealer.role !== 'admin') {
+      duplicateWhere.dealerId = req.dealer.id;
+    }
+    const duplicateQuotation = await Quotation.findOne({
+      where: duplicateWhere,
+      attributes: ['id', 'status']
+    });
+    if (duplicateQuotation) {
+      res.status(409).json({
+        success: false,
+        error: {
+          code: 'CONFLICT_001',
+          message: 'An active quotation already exists for this customer mobile',
+          details: [{ field: 'customer.mobile', message: `Existing quotation: ${duplicateQuotation.id}` }]
+        }
+      });
+      return;
+    }
+
     // Validate product selection against catalog
     const catalog = await getProductCatalogData();
     const validation = validateProductSelection(products, catalog);
@@ -1298,12 +1323,16 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         payment_phases: phaseRows,
         finalAmount: subtotalNum,
         installationStatus: (q as any).installationStatus || 'pending_installer',
+        installation_status: (q as any).installationStatus || 'pending_installer',
         approvedAt: (q as any).approvedAt || null,
         installerApprovedAt: (q as any).installerApprovedAt || null,
         meteringApprovedAt: (q as any).meteringApprovedAt || null,
         mcoAt: (q as any).mcoAt || null,
         meteringStatus: (q as any).installationStatus || null,
+        metering_status: (q as any).installationStatus || null,
         meteringStage: (q as any).installationStatus || null,
+        mcoStatus: (q as any).installationStatus === 'mco' ? 'mco' : null,
+        mco_status: (q as any).installationStatus === 'mco' ? 'mco' : null,
         installationDocuments: groupInstallationDocsByType(
           installationDocs.map((doc: any) => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc))
         ),
@@ -1702,12 +1731,16 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
         pricing: finalPricing,
         status: quotation.status,
         installationStatus: quotationAny.installationStatus || 'pending_installer',
+        installation_status: quotationAny.installationStatus || 'pending_installer',
         approvedAt: quotationAny.approvedAt || null,
         installerApprovedAt: quotationAny.installerApprovedAt || null,
         meteringApprovedAt: quotationAny.meteringApprovedAt || null,
         mcoAt: quotationAny.mcoAt || null,
         meteringStatus: quotationAny.installationStatus || null,
+        metering_status: quotationAny.installationStatus || null,
         meteringStage: quotationAny.installationStatus || null,
+        mcoStatus: quotationAny.installationStatus === 'mco' ? 'mco' : null,
+        mco_status: quotationAny.installationStatus === 'mco' ? 'mco' : null,
         discomName: quotationAny.discomName || null,
         meterType: quotationAny.meterType || null,
         meterNo: quotationAny.meterNo || null,
@@ -2651,10 +2684,22 @@ const resolveQuotationDocumentUrls = async (documents: any) => {
   for (const field of mediaFields) {
     const value = json[field] ?? null;
     const urlKey = `${field}Url`;
+    const nameKey = `${field}Name`;
     const snakeField = field.replace(/[A-Z]/g, (m) => `_${m.toLowerCase()}`);
     const snakeUrlKey = `${snakeField}_url`;
+    const snakeNameKey = `${snakeField}_name`;
+    const resolvedName =
+      typeof value === 'string' && value.trim()
+        ? (() => {
+            const clean = value.split('?')[0];
+            const base = clean.split('/').pop() || null;
+            return base || null;
+          })()
+        : null;
     json[urlKey] = value;
     json[snakeUrlKey] = value;
+    json[nameKey] = resolvedName;
+    json[snakeNameKey] = resolvedName;
   }
 
   return json;
