@@ -918,110 +918,92 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
   }
 };
 
-const buildCurrentLeadResponse = async (dealerId: string) => {
+const CALLABLE_QUEUE_STATUSES = ['queued', 'assigned', 'active', 'in_progress'] as const;
+
+const buildCallableQueue = async (dealerId: string, limit = 500) => {
   const now = new Date();
-  const sharedInclude = [{ model: CallingLead, as: 'lead' }] as any;
+  let rows = await DealerLeadAssignment.findAll({
+    where: {
+      [Op.and]: [
+        {
+          dealerId,
+          [Op.or]: [
+            { status: { [Op.in]: [...CALLABLE_QUEUE_STATUSES] } },
+            { status: 'rescheduled', nextFollowUpAt: { [Op.lte]: now } }
+          ]
+        },
+        LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE
+      ]
+    },
+    include: [{ model: CallingLead, as: 'lead' }],
+    order: [
+      [Sequelize.literal('COALESCE("DealerLeadAssignment"."assignedAt", "DealerLeadAssignment"."createdAt")'), 'ASC'],
+      ['createdAt', 'ASC'],
+      ['id', 'ASC']
+    ],
+    limit
+  });
 
-  const pickCurrentAssignment = async (transaction?: any) => (
-    await DealerLeadAssignment.findOne({
-      where: {
-        [Op.and]: [
-          {
-            dealerId,
-            status: 'rescheduled',
-            nextFollowUpAt: { [Op.lte]: now }
-          },
-          LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE
-        ]
-      },
-      include: sharedInclude,
-      order: [['nextFollowUpAt', 'ASC'], ['assignedAt', 'ASC']],
-      transaction
-    }) ||
-    await DealerLeadAssignment.findOne({
-      where: {
-        [Op.and]: [
-          {
-            dealerId,
-            status: 'in_progress'
-          },
-          LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE
-        ]
-      },
-      include: sharedInclude,
-      order: [['assignedAt', 'ASC']],
-      transaction
-    }) ||
-    await DealerLeadAssignment.findOne({
-      where: {
-        [Op.and]: [
-          {
-            dealerId,
-            status: 'active'
-          },
-          LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE
-        ]
-      },
-      include: sharedInclude,
-      order: [['assignedAt', 'ASC']],
-      transaction
-    }) ||
-    await DealerLeadAssignment.findOne({
-      where: {
-        [Op.and]: [
-          {
-            dealerId,
-            status: 'assigned'
-          },
-          LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE
-        ]
-      },
-      include: sharedInclude,
-      order: [['assignedAt', 'ASC']],
-      transaction
-    })
-  );
-
-  // Priority order:
-  // 1) due rescheduled leads, 2) in-progress, 3) active, 4) assigned (legacy).
-  let assignment = await pickCurrentAssignment();
-
-  // Safety fallback:
-  // If dealer has queued work but no active card, promote one queued lead
-  // immediately so newly uploaded batches become visible without manual refresh loops.
-  if (!assignment) {
+  // Promote from queued pool when no callable rows are present.
+  if (!rows.length) {
     await sequelize.transaction(async (transaction) => {
       await promoteQueuedLeadIfSlotAvailable(dealerId, DEFAULT_ACTIVE_LIMIT_PER_DEALER, transaction);
-      assignment = await pickCurrentAssignment(transaction);
+    });
+    rows = await DealerLeadAssignment.findAll({
+      where: {
+        [Op.and]: [
+          {
+            dealerId,
+            [Op.or]: [
+              { status: { [Op.in]: [...CALLABLE_QUEUE_STATUSES] } },
+              { status: 'rescheduled', nextFollowUpAt: { [Op.lte]: now } }
+            ]
+          },
+          LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE
+        ]
+      },
+      include: [{ model: CallingLead, as: 'lead' }],
+      order: [
+        [Sequelize.literal('COALESCE("DealerLeadAssignment"."assignedAt", "DealerLeadAssignment"."createdAt")'), 'ASC'],
+        ['createdAt', 'ASC'],
+        ['id', 'ASC']
+      ],
+      limit
     });
   }
 
-  const lead = assignment ? (assignment as any).lead : null;
-  if (!assignment || !lead) return null;
-  const latestStatusMap = await buildLatestStatusMetaMap(dealerId, [lead.id]);
-  const latestStatus = latestStatusMap.get(lead.id);
+  const leadIds = rows.map((row: any) => String(row.leadId)).filter(Boolean);
+  const latestStatusMap = await buildLatestStatusMetaMap(dealerId, leadIds);
 
-  return {
-    id: lead.id,
-    name: lead.name,
-    mobile: lead.mobile,
-    altMobile: lead.altMobile,
-    kNumber: lead.kNumber,
-    address: lead.address,
-    city: lead.city,
-    state: lead.state,
-    customerNote: lead.customerNote,
-    status: assignment.status,
-    callRemark: assignment.callRemark,
-    statusCategory: latestStatus?.statusCategory || null,
-    statusLabel: latestStatus?.statusLabel || null,
-    statusReason: latestStatus?.statusReason || null,
-    isCustomReason: latestStatus?.isCustomReason || false,
-    statusCategoryKey: latestStatus?.statusCategory || null,
-    statusCategoryLabel: latestStatus?.statusLabel || null,
-    nextFollowUpAt: assignment.nextFollowUpAt,
-    actionAt: assignment.actionAt
-  };
+  return rows
+    .map((row: any) => {
+      const lead = row.lead;
+      if (!lead) return null;
+      const latestStatus = latestStatusMap.get(String(row.leadId));
+      return {
+        id: lead.id,
+        leadId: lead.id,
+        name: lead.name,
+        mobile: lead.mobile,
+        altMobile: lead.altMobile,
+        kNumber: lead.kNumber,
+        address: lead.address,
+        city: lead.city,
+        state: lead.state,
+        customerNote: lead.customerNote,
+        status: row.status,
+        callRemark: row.callRemark,
+        statusCategory: latestStatus?.statusCategory || null,
+        statusLabel: latestStatus?.statusLabel || null,
+        statusReason: latestStatus?.statusReason || null,
+        isCustomReason: latestStatus?.isCustomReason || false,
+        statusCategoryKey: latestStatus?.statusCategory || null,
+        statusCategoryLabel: latestStatus?.statusLabel || null,
+        nextFollowUpAt: row.nextFollowUpAt,
+        actionAt: row.actionAt
+      };
+    })
+    .filter(Boolean) as any[];
 };
 
 const buildDealerQueueCounts = async (dealerId: string) => {
@@ -1134,12 +1116,13 @@ const normalizeAssignmentLifecycleStatus = (status: string | null | undefined): 
 };
 
 const buildDealerQueueSnapshot = async (dealerId: string, recentActionsLimit = 1000) => {
-  const [lead, counts, scheduledLeads, recentActions] = await Promise.all([
-    buildCurrentLeadResponse(dealerId),
+  const [queue, counts, scheduledLeads, recentActions] = await Promise.all([
+    buildCallableQueue(dealerId),
     buildDealerQueueCounts(dealerId),
     buildScheduledLeads(dealerId),
     buildRecentActions(dealerId, recentActionsLimit)
   ]);
+  const lead = queue.length ? queue[0] : null;
 
   const dialledActions = recentActions.filter((row: any) =>
     ['called', 'follow_up', 'not_interested', 'rescheduled'].includes(String(row.action || ''))
@@ -1151,6 +1134,7 @@ const buildDealerQueueSnapshot = async (dealerId: string, recentActionsLimit = 1
     lead,
     currentLead: lead,
     nextLead: lead,
+    queue,
     ...counts,
     counts: {
       pending: counts.pendingCount,
