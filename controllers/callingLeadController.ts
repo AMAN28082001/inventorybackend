@@ -23,8 +23,9 @@ const ADDRESS_KEYS = ['address'];
 const CITY_KEYS = ['city'];
 const STATE_KEYS = ['state', 'data ref. / state', 'data ref/state', 'data ref state'];
 const NOTE_KEYS = ['customernote', 'customer note', 'note', 'notes', 'remark', 'remarks'];
-const ACTIVE_STATUSES = ['assigned', 'in_progress'];
-// Keep 'active' as backward-compatible read-only support for old rows.
+// Include legacy "active" so old assignments still surface in Current Lead.
+const ACTIVE_STATUSES = ['active', 'assigned', 'in_progress'];
+// Keep 'active' as backward-compatible read/write support for old rows.
 const ACTIONABLE_STATUSES = ['active', 'assigned', 'in_progress', 'rescheduled'];
 const DEFAULT_ACTIVE_LIMIT_PER_DEALER = Number(process.env.ACTIVE_LIMIT_PER_DEALER || 1);
 const CALLING_ACTION_FILTER_RANGES = ['daily', 'weekly', 'monthly', 'last_month', 'all'] as const;
@@ -57,6 +58,21 @@ type CallingActionType = 'called' | 'follow_up' | 'not_interested' | 'reschedule
 type CallingActionFilterRange = (typeof CALLING_ACTION_FILTER_RANGES)[number];
 type ReasonCategory = 'interested' | 'follow_up' | 'not_interested' | 'others';
 type UploadRowStatus = 'created' | 'duplicate' | 'invalid';
+
+const LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE = Sequelize.literal(`
+  NOT EXISTS (
+    SELECT 1
+    FROM "dealer_lead_assignments" AS newer
+    WHERE newer."leadId" = "DealerLeadAssignment"."leadId"
+      AND (
+        newer."assignedAt" > "DealerLeadAssignment"."assignedAt"
+        OR (
+          newer."assignedAt" = "DealerLeadAssignment"."assignedAt"
+          AND newer."createdAt" > "DealerLeadAssignment"."createdAt"
+        )
+      )
+  )
+`);
 
 const normalizeMobile = (value: unknown): string | null => {
   if (value === undefined || value === null) return null;
@@ -142,7 +158,7 @@ const callingActionToApiJson = (row: any) => {
     statusCategoryLabel: row.statusLabel,
     // explicit fields required by frontend
     statusCategory: normalizedCategory,
-    status: row.statusLabel || parsed.status || row.status || null,
+    status: row.statusLabel || parsed.status || row.action || row.status || null,
     remark: row.statusReason || parsed.remark || null,
     // Required by Calling Data > Recent Actions card
     kNumber: row.kNumber ?? row.k_number ?? row.lead?.kNumber ?? row.lead?.k_number ?? null,
@@ -772,8 +788,7 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
     let created = 0;
     let assigned = 0;
     let queued = 0;
-    let activeDealerPointer = 0;
-    let queuedDealerPointer = 0;
+    let roundRobinPointer = 0;
 
     await sequelize.transaction(async (transaction) => {
       await CallingLeadUploadBatch.create({
@@ -786,21 +801,6 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
       }, { transaction });
 
       const assignedByUserId = await resolveAssignedByUserId(req, transaction);
-
-      const dealerActiveCount: Record<string, number> = {};
-      const counts = await DealerLeadAssignment.findAll({
-        attributes: ['dealerId', [Sequelize.fn('COUNT', Sequelize.col('id')), 'count']],
-        where: {
-          dealerId: { [Op.in]: dealerIds },
-          status: { [Op.in]: ACTIVE_STATUSES }
-        },
-        group: ['dealerId'],
-        transaction
-      });
-      for (const dealerId of dealerIds) dealerActiveCount[dealerId] = 0;
-      for (const row of counts as any[]) {
-        dealerActiveCount[row.dealerId] = Number(row.get('count') || 0);
-      }
 
       for (const row of rowsToCreate) {
         const lead = await CallingLead.create(
@@ -822,26 +822,10 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
         );
         created += 1;
 
-        // Scheduler-style assignment:
-        // 1) Fill active slots dealer-by-dealer (non-interleaved),
-        // 2) Then place overflow into queued pool.
-        let dealerId = dealerIds[queuedDealerPointer % dealerIds.length];
-        let nextStatus: 'assigned' | 'queued' = 'queued';
-
-        const dealerWithCapacityIdx = dealerIds.findIndex((id) => dealerActiveCount[id] < activeLimitPerDealer);
-        if (dealerWithCapacityIdx !== -1) {
-          while (activeDealerPointer < dealerIds.length && dealerActiveCount[dealerIds[activeDealerPointer]] >= activeLimitPerDealer) {
-            activeDealerPointer += 1;
-          }
-          if (activeDealerPointer >= dealerIds.length) {
-            activeDealerPointer = dealerWithCapacityIdx;
-          }
-          dealerId = dealerIds[activeDealerPointer];
-          nextStatus = 'assigned';
-        } else {
-          queuedDealerPointer += 1;
-          nextStatus = 'queued';
-        }
+        // Fair dealer-wise assignment: strict round-robin across selected dealers.
+        const dealerId = dealerIds[roundRobinPointer % dealerIds.length];
+        roundRobinPointer += 1;
+        const nextStatus: 'assigned' | 'queued' = 'assigned';
 
         await DealerLeadAssignment.create(
           {
@@ -854,15 +838,8 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
           },
           { transaction }
         );
-        if (nextStatus === 'assigned') {
-          assigned += 1;
-          dealerActiveCount[dealerId] += 1;
-          if (dealerActiveCount[dealerId] >= activeLimitPerDealer && dealerIds[activeDealerPointer] === dealerId) {
-            activeDealerPointer += 1;
-          }
-        } else {
-          queued += 1;
-        }
+        if (nextStatus === 'assigned') assigned += 1;
+        else queued += 1;
 
         rowAudit.push({
           rowIndex: row.rowIndex,
@@ -948,9 +925,14 @@ const buildCurrentLeadResponse = async (dealerId: string) => {
   const pickCurrentAssignment = async (transaction?: any) => (
     await DealerLeadAssignment.findOne({
       where: {
-        dealerId,
-        status: 'rescheduled',
-        nextFollowUpAt: { [Op.lte]: now }
+        [Op.and]: [
+          {
+            dealerId,
+            status: 'rescheduled',
+            nextFollowUpAt: { [Op.lte]: now }
+          },
+          LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE
+        ]
       },
       include: sharedInclude,
       order: [['nextFollowUpAt', 'ASC'], ['assignedAt', 'ASC']],
@@ -958,8 +940,13 @@ const buildCurrentLeadResponse = async (dealerId: string) => {
     }) ||
     await DealerLeadAssignment.findOne({
       where: {
-        dealerId,
-        status: 'in_progress'
+        [Op.and]: [
+          {
+            dealerId,
+            status: 'in_progress'
+          },
+          LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE
+        ]
       },
       include: sharedInclude,
       order: [['assignedAt', 'ASC']],
@@ -967,8 +954,27 @@ const buildCurrentLeadResponse = async (dealerId: string) => {
     }) ||
     await DealerLeadAssignment.findOne({
       where: {
-        dealerId,
-        status: 'assigned'
+        [Op.and]: [
+          {
+            dealerId,
+            status: 'active'
+          },
+          LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE
+        ]
+      },
+      include: sharedInclude,
+      order: [['assignedAt', 'ASC']],
+      transaction
+    }) ||
+    await DealerLeadAssignment.findOne({
+      where: {
+        [Op.and]: [
+          {
+            dealerId,
+            status: 'assigned'
+          },
+          LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE
+        ]
       },
       include: sharedInclude,
       order: [['assignedAt', 'ASC']],
@@ -1022,18 +1028,29 @@ const buildDealerQueueCounts = async (dealerId: string) => {
   const [pendingCount, queuedCount, scheduledCount, completedCount] = await Promise.all([
     DealerLeadAssignment.count({
       where: {
-        dealerId,
-        status: { [Op.in]: ['assigned', 'in_progress'] }
+        [Op.and]: [
+          {
+            dealerId,
+            status: { [Op.in]: ['active', 'assigned', 'in_progress'] }
+          },
+          LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE
+        ]
       }
     }),
     DealerLeadAssignment.count({
-      where: { dealerId, status: 'queued' }
+      where: {
+        [Op.and]: [{ dealerId, status: 'queued' }, LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE]
+      }
     }),
     DealerLeadAssignment.count({
-      where: { dealerId, status: 'rescheduled' }
+      where: {
+        [Op.and]: [{ dealerId, status: 'rescheduled' }, LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE]
+      }
     }),
     DealerLeadAssignment.count({
-      where: { dealerId, status: 'completed' }
+      where: {
+        [Op.and]: [{ dealerId, status: 'completed' }, LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE]
+      }
     })
   ]);
 
@@ -1044,9 +1061,14 @@ const buildScheduledLeads = async (dealerId: string) => {
   const now = new Date();
   const rows = await DealerLeadAssignment.findAll({
     where: {
-      dealerId,
-      status: 'rescheduled',
-      nextFollowUpAt: { [Op.gt]: now }
+      [Op.and]: [
+        {
+          dealerId,
+          status: 'rescheduled',
+          nextFollowUpAt: { [Op.gt]: now }
+        },
+        LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE
+      ]
     },
     include: [{ model: CallingLead, as: 'lead' }],
     order: [['nextFollowUpAt', 'ASC'], ['assignedAt', 'ASC']],
@@ -1104,6 +1126,13 @@ const buildRecentActions = async (dealerId: string, limit = 1000) => {
   return out;
 };
 
+const normalizeAssignmentLifecycleStatus = (status: string | null | undefined): string => {
+  if (!status) return 'pending';
+  if (status === 'queued') return 'pending';
+  if (status === 'active') return 'assigned';
+  return status;
+};
+
 const buildDealerQueueSnapshot = async (dealerId: string, recentActionsLimit = 1000) => {
   const [lead, counts, scheduledLeads, recentActions] = await Promise.all([
     buildCurrentLeadResponse(dealerId),
@@ -1120,8 +1149,15 @@ const buildDealerQueueSnapshot = async (dealerId: string, recentActionsLimit = 1
 
   return {
     lead,
+    currentLead: lead,
     nextLead: lead,
     ...counts,
+    counts: {
+      pending: counts.pendingCount,
+      queued: counts.queuedCount,
+      scheduled: counts.scheduledCount,
+      completed: counts.completedCount
+    },
     scheduledLeads,
     recentActions,
     dialledActions,
@@ -1133,9 +1169,39 @@ const buildDealerQueueSnapshot = async (dealerId: string, recentActionsLimit = 1
   };
 };
 
+const applyNoCacheHeaders = (res: Response) => {
+  // Calling queue changes frequently; always return fresh payload.
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+};
+
+const resolveDealerIdForQueue = async (req: Request): Promise<string | null> => {
+  if (req.dealer?.id) return req.dealer.id;
+
+  const username = (req.user as any)?.username;
+  const email = (req.user as any)?.email;
+  const mobile = (req.user as any)?.mobile;
+  if (!username && !email && !mobile) return null;
+
+  const dealer = await Dealer.findOne({
+    attributes: ['id'],
+    where: {
+      [Op.or]: [
+        ...(username ? [{ username }] : []),
+        ...(email ? [{ email }] : []),
+        ...(mobile ? [{ mobile }] : [])
+      ]
+    }
+  });
+
+  return dealer?.id || null;
+};
+
 export const getDealerCallingQueueCurrent = async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!req.dealer) {
+    const dealerId = await resolveDealerIdForQueue(req);
+    if (!dealerId) {
       res.status(401).json({
         success: false,
         error: { code: 'AUTH_003', message: 'User not authenticated' }
@@ -1148,7 +1214,8 @@ export const getDealerCallingQueueCurrent = async (req: Request, res: Response):
       Number.isFinite(requestedLimit) && requestedLimit > 0
         ? Math.min(5000, Math.floor(requestedLimit))
         : 1000;
-    const snapshot = await buildDealerQueueSnapshot(req.dealer.id, recentActionsLimit);
+    const snapshot = await buildDealerQueueSnapshot(dealerId, recentActionsLimit);
+    applyNoCacheHeaders(res);
 
     res.json({
       success: true,
@@ -1168,7 +1235,8 @@ export const getDealerCallingQueueNext = getDealerCallingQueueCurrent;
 
 export const updateDealerCallingQueueAction = async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!req.dealer) {
+    const dealerId = await resolveDealerIdForQueue(req);
+    if (!dealerId) {
       res.status(401).json({
         success: false,
         error: { code: 'AUTH_003', message: 'User not authenticated' }
@@ -1289,8 +1357,13 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
     await sequelize.transaction(async (transaction) => {
       const assignment = await DealerLeadAssignment.findOne({
         where: {
-          leadId,
-          dealerId: req.dealer!.id
+          [Op.and]: [
+            {
+              leadId,
+              dealerId
+            },
+            LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE
+          ]
         },
         transaction,
         lock: transaction.LOCK.UPDATE
@@ -1441,12 +1514,13 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
       // Rescheduled leads stay with the same dealer and keep occupying an active slot.
       // Use persisted status check so behavior stays correct even if action labels evolve.
       if (!canEditCompleted && assignment.status === 'completed') {
-        await promoteQueuedLeadIfSlotAvailable(req.dealer!.id, DEFAULT_ACTIVE_LIMIT_PER_DEALER, transaction);
+        await promoteQueuedLeadIfSlotAvailable(dealerId, DEFAULT_ACTIVE_LIMIT_PER_DEALER, transaction);
       }
 
       updatedData = {
         leadId: assignment.leadId,
-        status: assignment.status,
+        status: action === 'start' ? assignment.status : action,
+        assignmentStatus: assignment.status,
         action: assignment.action,
         callRemark: assignment.callRemark,
         nextFollowUpAt: assignment.nextFollowUpAt,
@@ -1454,17 +1528,18 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
       };
     });
 
+    applyNoCacheHeaders(res);
     res.json({
       success: true,
       data: {
         ...updatedData,
-        ...(await buildDealerQueueSnapshot(req.dealer.id, 1000))
+        ...(await buildDealerQueueSnapshot(dealerId, 1000))
       }
     });
 
     if (action !== 'start') {
       emitRealtime(realtimeEvents.callingActionsUpdated, {
-        dealerId: req.dealer.id,
+        dealerId,
         leadId,
         action,
         actionAt: (updatedData?.actionAt || new Date()).toISOString?.() || new Date().toISOString()
@@ -1481,7 +1556,7 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
       return;
     }
     logError('Update dealer calling queue action error', error, {
-      dealerId: req.dealer?.id,
+      dealerId: req.dealer?.id ?? (req.user as any)?.id ?? null,
       leadId: req.params.leadId
     });
     res.status(500).json({
@@ -1593,6 +1668,30 @@ export const getHrLeadUploadBatches = async (req: Request, res: Response): Promi
       offset
     });
 
+    const batchIds = batches.rows.map((batch) => batch.id);
+    const uploadRows = batchIds.length
+      ? await CallingLeadUploadRow.findAll({
+        where: { batchId: { [Op.in]: batchIds } },
+        order: [['rowIndex', 'ASC']]
+      })
+      : [];
+    const leadIds = uploadRows
+      .map((row) => row.leadId)
+      .filter((leadId): leadId is string => Boolean(leadId));
+    const assignments = leadIds.length
+      ? await DealerLeadAssignment.findAll({
+        where: {
+          leadId: { [Op.in]: leadIds },
+          [Op.and]: [LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE]
+        },
+        attributes: ['leadId', 'dealerId', 'status']
+      })
+      : [];
+    const assignmentByLeadId = new Map<string, DealerLeadAssignment>();
+    for (const assignment of assignments) {
+      assignmentByLeadId.set(assignment.leadId, assignment);
+    }
+
     const dealerIds = new Set<string>();
     for (const batch of batches.rows) {
       const assignedDealers = Array.isArray(batch.assignedDealers) ? batch.assignedDealers : [];
@@ -1600,7 +1699,9 @@ export const getHrLeadUploadBatches = async (req: Request, res: Response): Promi
         dealerIds.add(String(dealerId));
       }
     }
-
+    for (const assignment of assignments) {
+      dealerIds.add(String(assignment.dealerId));
+    }
     const dealerList = dealerIds.size
       ? await Dealer.findAll({
         where: { id: { [Op.in]: Array.from(dealerIds) } },
@@ -1612,13 +1713,6 @@ export const getHrLeadUploadBatches = async (req: Request, res: Response): Promi
       dealerNameMap.set(dealer.id, `${dealer.firstName || ''} ${dealer.lastName || ''}`.trim());
     }
 
-    const batchIds = batches.rows.map((batch) => batch.id);
-    const uploadRows = batchIds.length
-      ? await CallingLeadUploadRow.findAll({
-        where: { batchId: { [Op.in]: batchIds } },
-        order: [['rowIndex', 'ASC']]
-      })
-      : [];
     const rowsByBatch = new Map<string, CallingLeadUploadRow[]>();
     for (const row of uploadRows) {
       const list = rowsByBatch.get(row.batchId) || [];
@@ -1637,6 +1731,10 @@ export const getHrLeadUploadBatches = async (req: Request, res: Response): Promi
         dealerIds: assignedDealers,
         rows: (rowsByBatch.get(batch.id) || []).map((row) => {
           const rawPayload = (row.rawPayload || {}) as Record<string, unknown>;
+          const assignment = row.leadId ? assignmentByLeadId.get(row.leadId) : null;
+          const assignedDealerId = assignment?.dealerId || null;
+          const assignedDealerName = assignedDealerId ? (dealerNameMap.get(String(assignedDealerId)) || null) : null;
+          const assignmentStatus = normalizeAssignmentLifecycleStatus(assignment?.status || null);
           return {
             id: row.id,
             name: row.customerName || '',
@@ -1647,8 +1745,13 @@ export const getHrLeadUploadBatches = async (req: Request, res: Response): Promi
             city: String(extractCell(rawPayload, CITY_KEYS) || '').trim() || null,
             state: String(extractCell(rawPayload, STATE_KEYS) || '').trim() || null,
             customerNote: String(extractCell(rawPayload, NOTE_KEYS) || '').trim() || null,
-            assignedDealerId: null,
-            status: row.status
+            assignedDealerId,
+            assignedDealerName,
+            assignmentStatus,
+            assigned_dealer_id: assignedDealerId,
+            assigned_dealer_name: assignedDealerName,
+            assignment_status: assignmentStatus,
+            status: assignmentStatus
           };
         })
       };
@@ -1663,6 +1766,10 @@ export const getHrLeadUploadBatches = async (req: Request, res: Response): Promi
           const rows = (rowsByBatch.get(batch.id) || []).map((row) => {
             const rawPayload = (row.rawPayload || {}) as Record<string, unknown>;
             const kNumber = String(extractCell(rawPayload, K_NUMBER_KEYS) || '').trim() || null;
+            const assignment = row.leadId ? assignmentByLeadId.get(row.leadId) : null;
+            const assignedDealerId = assignment?.dealerId || null;
+            const assignedDealerName = assignedDealerId ? (dealerNameMap.get(String(assignedDealerId)) || null) : null;
+            const assignmentStatus = normalizeAssignmentLifecycleStatus(assignment?.status || null);
             return {
               id: row.id,
               rowIndex: row.rowIndex,
@@ -1675,7 +1782,13 @@ export const getHrLeadUploadBatches = async (req: Request, res: Response): Promi
               customerName: row.customerName,
               customerMobile: row.customerMobile,
               customerAddress: row.customerAddress,
-              status: row.status,
+              status: assignmentStatus,
+              assignedDealerId,
+              assignedDealerName,
+              assignmentStatus,
+              assigned_dealer_id: assignedDealerId,
+              assigned_dealer_name: assignedDealerName,
+              assignment_status: assignmentStatus,
               leadId: row.leadId,
               rawPayload: row.rawPayload
             };
@@ -1737,6 +1850,33 @@ export const getHrLeadUploadBatchRows = async (req: Request, res: Response): Pro
       limit,
       offset
     });
+    const leadIds = rows.rows
+      .map((row) => row.leadId)
+      .filter((leadId): leadId is string => Boolean(leadId));
+    const assignments = leadIds.length
+      ? await DealerLeadAssignment.findAll({
+        where: {
+          leadId: { [Op.in]: leadIds },
+          [Op.and]: [LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE]
+        },
+        attributes: ['leadId', 'dealerId', 'status']
+      })
+      : [];
+    const assignmentByLeadId = new Map<string, DealerLeadAssignment>();
+    for (const assignment of assignments) {
+      assignmentByLeadId.set(assignment.leadId, assignment);
+    }
+    const dealerIds = Array.from(new Set(assignments.map((assignment) => String(assignment.dealerId))));
+    const dealers = dealerIds.length
+      ? await Dealer.findAll({
+        where: { id: { [Op.in]: dealerIds } },
+        attributes: ['id', 'firstName', 'lastName']
+      })
+      : [];
+    const dealerNameMap = new Map<string, string>();
+    for (const dealer of dealers) {
+      dealerNameMap.set(dealer.id, `${dealer.firstName || ''} ${dealer.lastName || ''}`.trim());
+    }
 
     const total = rows.count;
     res.json({
@@ -1752,14 +1892,28 @@ export const getHrLeadUploadBatchRows = async (req: Request, res: Response): Pro
           assignedDealers: batch.assignedDealers
         },
         rows: rows.rows.map((row) => ({
-          id: row.id,
-          rowIndex: row.rowIndex,
-          customerName: row.customerName,
-          customerMobile: row.customerMobile,
-          customerAddress: row.customerAddress,
-          status: row.status,
-          leadId: row.leadId,
-          rawPayload: row.rawPayload
+          ...(() => {
+            const assignment = row.leadId ? assignmentByLeadId.get(row.leadId) : null;
+            const assignedDealerId = assignment?.dealerId || null;
+            const assignedDealerName = assignedDealerId ? (dealerNameMap.get(String(assignedDealerId)) || null) : null;
+            const assignmentStatus = normalizeAssignmentLifecycleStatus(assignment?.status || null);
+            return {
+              id: row.id,
+              rowIndex: row.rowIndex,
+              customerName: row.customerName,
+              customerMobile: row.customerMobile,
+              customerAddress: row.customerAddress,
+              status: assignmentStatus,
+              assignedDealerId,
+              assignedDealerName,
+              assignmentStatus,
+              assigned_dealer_id: assignedDealerId,
+              assigned_dealer_name: assignedDealerName,
+              assignment_status: assignmentStatus,
+              leadId: row.leadId,
+              rawPayload: row.rawPayload
+            };
+          })()
         })),
         pagination: {
           page,
