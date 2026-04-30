@@ -25,8 +25,6 @@ const STATE_KEYS = ['state', 'data ref. / state', 'data ref/state', 'data ref st
 const NOTE_KEYS = ['customernote', 'customer note', 'note', 'notes', 'remark', 'remarks'];
 // Include legacy "active" so old assignments still surface in Current Lead.
 const ACTIVE_STATUSES = ['active', 'assigned', 'in_progress'];
-// Keep 'active' as backward-compatible read/write support for old rows.
-const ACTIONABLE_STATUSES = ['active', 'assigned', 'in_progress', 'rescheduled'];
 const DEFAULT_ACTIVE_LIMIT_PER_DEALER = Number(process.env.ACTIVE_LIMIT_PER_DEALER || 1);
 const CALLING_ACTION_FILTER_RANGES = ['daily', 'weekly', 'monthly', 'last_month', 'all'] as const;
 const REPORT_ACTIONS = ['called', 'follow_up', 'not_interested', 'rescheduled'] as const;
@@ -936,9 +934,9 @@ const buildCallableQueue = async (dealerId: string, limit = 500) => {
       ]
     },
     include: [{ model: CallingLead, as: 'lead' }],
+    // Stable FIFO: one sort key (no status-based reorder). queued_at N/A — use assignedAt then createdAt.
     order: [
       [Sequelize.literal('COALESCE("DealerLeadAssignment"."assignedAt", "DealerLeadAssignment"."createdAt")'), 'ASC'],
-      ['createdAt', 'ASC'],
       ['id', 'ASC']
     ],
     limit
@@ -965,7 +963,6 @@ const buildCallableQueue = async (dealerId: string, limit = 500) => {
       include: [{ model: CallingLead, as: 'lead' }],
       order: [
         [Sequelize.literal('COALESCE("DealerLeadAssignment"."assignedAt", "DealerLeadAssignment"."createdAt")'), 'ASC'],
-        ['createdAt', 'ASC'],
         ['id', 'ASC']
       ],
       limit
@@ -1240,7 +1237,9 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
       isCustomReason,
       statusCategoryKey,
       statusCategoryLabel,
-      editMode
+      editMode,
+      status_category,
+      status_text
     } = req.body as {
       action: 'start' | 'called' | 'follow_up' | 'not_interested' | 'rescheduled';
       callRemark?: string;
@@ -1253,6 +1252,8 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
       statusCategoryKey?: string;
       statusCategoryLabel?: string;
       editMode?: boolean;
+      status_category?: string;
+      status_text?: string;
     };
 
     const parsed = parseTaggedCallRemark(callRemark ?? null);
@@ -1260,11 +1261,13 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
 
     const effectiveStatusCategory =
       normalizeStatusCategory(statusCategoryKey) ||
+      normalizeStatusCategory(status_category) ||
       normalizeStatusCategory(statusCategory) ||
       normalizeStatusCategory(parsed.statusCategory) ||
       inferStatusCategoryFromRemark(callRemark) ||
       null;
-    const effectiveStatusLabel = statusCategoryLabel || statusLabel || parsed.status || null;
+    const effectiveStatusLabel =
+      statusCategoryLabel || statusLabel || status_text || parsed.status || null;
     const effectiveStatusReason = (hasParsedTags ? parsed.remark : null) || statusReason || null;
     const legacyCallRemark =
       effectiveStatusCategory && effectiveStatusLabel
@@ -1337,6 +1340,18 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
       return;
     }
 
+    const OUTCOME_ACTIONS: Array<'called' | 'follow_up' | 'not_interested' | 'rescheduled'> = [
+      'called',
+      'follow_up',
+      'not_interested',
+      'rescheduled'
+    ];
+
+    const isRescheduledDue = (row: { status: string; nextFollowUpAt?: Date | null }, now: Date) =>
+      row.status === 'rescheduled' &&
+      Boolean(row.nextFollowUpAt) &&
+      new Date(row.nextFollowUpAt as Date).getTime() <= now.getTime();
+
     let updatedData: any = null;
     await sequelize.transaction(async (transaction) => {
       const assignment = await DealerLeadAssignment.findOne({
@@ -1360,53 +1375,30 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
       }
 
       const hasStatusUpdatePayload = Boolean(
-        callRemark || statusCategory || statusCategoryKey || statusLabel || statusCategoryLabel || statusReason || isCustomReason
+        callRemark ||
+          statusCategory ||
+          statusCategoryKey ||
+          status_category ||
+          statusLabel ||
+          statusCategoryLabel ||
+          status_text ||
+          statusReason ||
+          isCustomReason
       );
       const isEditMode = Boolean(editMode) || hasStatusUpdatePayload;
       const canEditCompleted = isEditMode && assignment.status === 'completed' && action !== 'start';
 
-      if (!ACTIONABLE_STATUSES.includes(assignment.status) && !canEditCompleted) {
-        const error: any = new Error('INVALID_TRANSITION');
-        error.code = 'LEAD_005';
-        throw error;
-      }
-
       const effectiveActionAt = actionDate || new Date();
-      const effectiveCallRemark = action === 'start'
-        ? (callRemark ?? assignment.callRemark ?? legacyCallRemark ?? null)
-        : (callRemark ?? legacyCallRemark ?? null);
+      const effectiveCallRemarkForStart =
+        callRemark ?? assignment.callRemark ?? legacyCallRemark ?? null;
+      const effectiveCallRemarkForOutcome = callRemark ?? legacyCallRemark ?? null;
       const effectiveNextFollowUpAt = action === 'rescheduled' ? followUpDate : null;
-      if (action === 'start') {
-        if (!(assignment.status === 'assigned' || assignment.status === 'active')) {
-          const error: any = new Error('INVALID_TRANSITION');
-          error.code = 'LEAD_005';
-          throw error;
-        }
 
-        await assignment.update({
-          status: 'in_progress',
-          action: null,
-          callRemark: effectiveCallRemark,
-          actionAt: effectiveActionAt
-        }, { transaction });
-      } else if (action === 'rescheduled') {
-        await assignment.update({
-          status: 'rescheduled',
-          action,
-          callRemark: effectiveCallRemark,
-          nextFollowUpAt: effectiveNextFollowUpAt,
-          actionAt: effectiveActionAt
-        }, { transaction });
-      } else {
-        await assignment.update({
-          status: 'completed',
-          action,
-          callRemark: effectiveCallRemark,
-          actionAt: effectiveActionAt
-        }, { transaction });
-      }
-
-      if (action !== 'start') {
+      const upsertActionHistory = async (opts: {
+        isEditLatest: boolean;
+        historyAction: CallingActionType;
+      }) => {
+        const { historyAction } = opts;
         const [dealer, lead] = await Promise.all([
           Dealer.findByPk(assignment.dealerId, {
             attributes: ['firstName', 'lastName'],
@@ -1429,8 +1421,22 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
           })
           : null;
 
-        if (canEditCompleted) {
-          // Recent Actions edit path: update latest history row for this lead/dealer.
+        const historyPayload = {
+          action: historyAction,
+          reasonCategory: getReasonCategoryFromAction(historyAction),
+          callRemark: effectiveCallRemarkForOutcome,
+          statusCategory: effectiveStatusCategory,
+          statusLabel: effectiveStatusLabel,
+          statusReason: effectiveStatusReason || null,
+          isCustomReason: Boolean(isCustomReason),
+          actionAt: effectiveActionAt,
+          nextFollowUpAt: effectiveNextFollowUpAt,
+          customerName,
+          customerMobile,
+          customerAddress
+        };
+
+        if (opts.isEditLatest) {
           const latest = await CallingActionHistory.findOne({
             where: { leadId: assignment.leadId, dealerId: assignment.dealerId },
             order: [['actionAt', 'DESC'], ['createdAt', 'DESC']],
@@ -1438,72 +1444,160 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
             lock: transaction.LOCK.UPDATE
           });
           if (latest) {
-            await latest.update({
-              action,
-              reasonCategory: getReasonCategoryFromAction(action),
-              callRemark: effectiveCallRemark,
-              statusCategory: effectiveStatusCategory,
-              statusLabel: effectiveStatusLabel,
-              statusReason: effectiveStatusReason || null,
-              isCustomReason: Boolean(isCustomReason),
-              actionAt: effectiveActionAt,
-              nextFollowUpAt: effectiveNextFollowUpAt,
-              customerName,
-              customerMobile,
-              customerAddress
-            }, { transaction });
+            await latest.update(historyPayload, { transaction });
           } else {
-            await CallingActionHistory.create({
+            await CallingActionHistory.create(
+              {
+                id: uuidv4(),
+                leadId: assignment.leadId,
+                dealerId: assignment.dealerId,
+                dealerName,
+                ...historyPayload
+              },
+              { transaction }
+            );
+          }
+        } else {
+          await CallingActionHistory.create(
+            {
               id: uuidv4(),
               leadId: assignment.leadId,
               dealerId: assignment.dealerId,
               dealerName,
-              action,
-              reasonCategory: getReasonCategoryFromAction(action),
-              callRemark: effectiveCallRemark,
-              statusCategory: effectiveStatusCategory,
-              statusLabel: effectiveStatusLabel,
-              statusReason: effectiveStatusReason || null,
-              isCustomReason: Boolean(isCustomReason),
-              actionAt: effectiveActionAt,
-              nextFollowUpAt: effectiveNextFollowUpAt,
-              customerName,
-              customerMobile,
-              customerAddress
-            }, { transaction });
-          }
-        } else {
-          await CallingActionHistory.create({
-            id: uuidv4(),
-            leadId: assignment.leadId,
-            dealerId: assignment.dealerId,
-            dealerName,
-            action,
-            reasonCategory: getReasonCategoryFromAction(action),
-            callRemark: effectiveCallRemark,
-            statusCategory: effectiveStatusCategory,
-            statusLabel: effectiveStatusLabel,
-            statusReason: effectiveStatusReason || null,
-            isCustomReason: Boolean(isCustomReason),
-            actionAt: effectiveActionAt,
-            nextFollowUpAt: effectiveNextFollowUpAt,
-            customerName,
-            customerMobile,
-            customerAddress
-          }, { transaction });
+              ...historyPayload
+            },
+            { transaction }
+          );
         }
+      };
+
+      // --- Completed assignment: history-only edit (no assignment transition guard) ---
+      if (canEditCompleted) {
+        if (!OUTCOME_ACTIONS.includes(action as (typeof OUTCOME_ACTIONS)[number])) {
+          const error: any = new Error('INVALID_TRANSITION');
+          error.code = 'LEAD_005';
+          throw error;
+        }
+        const historyAction = action as CallingActionType;
+        await upsertActionHistory({ isEditLatest: true, historyAction });
+        await assignment.reload({ transaction });
+        updatedData = {
+          leadId: assignment.leadId,
+          status: historyAction,
+          assignmentStatus: assignment.status,
+          action: assignment.action,
+          callRemark: assignment.callRemark,
+          nextFollowUpAt: assignment.nextFollowUpAt,
+          actionAt: assignment.actionAt
+        };
+        return;
       }
-        
-      // Refill active slot only when work is completed.
-      // Rescheduled leads stay with the same dealer and keep occupying an active slot.
-      // Use persisted status check so behavior stays correct even if action labels evolve.
-      if (!canEditCompleted && assignment.status === 'completed') {
+
+      const now = new Date();
+
+      // --- start: idempotent when already in_progress; allow queued | assigned | active ---
+      if (action === 'start') {
+        if (assignment.status === 'in_progress') {
+          await assignment.reload({ transaction });
+          updatedData = {
+            leadId: assignment.leadId,
+            status: assignment.status,
+            assignmentStatus: assignment.status,
+            action: assignment.action,
+            callRemark: assignment.callRemark,
+            nextFollowUpAt: assignment.nextFollowUpAt,
+            actionAt: assignment.actionAt
+          };
+          return;
+        }
+        if (['queued', 'assigned', 'active'].includes(assignment.status)) {
+          await assignment.update(
+            {
+              status: 'in_progress',
+              action: null,
+              callRemark: effectiveCallRemarkForStart,
+              actionAt: effectiveActionAt
+            },
+            { transaction }
+          );
+          await assignment.reload({ transaction });
+          updatedData = {
+            leadId: assignment.leadId,
+            status: assignment.status,
+            assignmentStatus: assignment.status,
+            action: assignment.action,
+            callRemark: assignment.callRemark,
+            nextFollowUpAt: assignment.nextFollowUpAt,
+            actionAt: assignment.actionAt
+          };
+          return;
+        }
+        const error: any = new Error('INVALID_TRANSITION');
+        error.code = 'LEAD_005';
+        throw error;
+      }
+
+      // --- Outcomes: coalesce implicit start from queued | assigned | active ---
+      const coalesceImplicitStart =
+        OUTCOME_ACTIONS.includes(action) && ['queued', 'assigned', 'active'].includes(assignment.status);
+      if (coalesceImplicitStart) {
+        await assignment.update(
+          {
+            status: 'in_progress',
+            action: null,
+            callRemark: assignment.callRemark,
+            actionAt: effectiveActionAt
+          },
+          { transaction }
+        );
+        await assignment.reload({ transaction });
+      }
+
+      const rescheduledDue = isRescheduledDue(assignment, now);
+      const canApplyOutcome =
+        assignment.status === 'in_progress' ||
+        (assignment.status === 'rescheduled' && (rescheduledDue || action === 'rescheduled'));
+
+      if (!canApplyOutcome) {
+        const error: any = new Error('INVALID_TRANSITION');
+        error.code = 'LEAD_005';
+        throw error;
+      }
+
+      if (action === 'rescheduled') {
+        await assignment.update(
+          {
+            status: 'rescheduled',
+            action,
+            callRemark: effectiveCallRemarkForOutcome,
+            nextFollowUpAt: effectiveNextFollowUpAt,
+            actionAt: effectiveActionAt
+          },
+          { transaction }
+        );
+      } else {
+        await assignment.update(
+          {
+            status: 'completed',
+            action,
+            callRemark: effectiveCallRemarkForOutcome,
+            actionAt: effectiveActionAt
+          },
+          { transaction }
+        );
+      }
+
+      await upsertActionHistory({ isEditLatest: false, historyAction: action as CallingActionType });
+
+      await assignment.reload({ transaction });
+
+      if (assignment.status === 'completed') {
         await promoteQueuedLeadIfSlotAvailable(dealerId, DEFAULT_ACTIVE_LIMIT_PER_DEALER, transaction);
       }
 
       updatedData = {
         leadId: assignment.leadId,
-        status: action === 'start' ? assignment.status : action,
+        status: action,
         assignmentStatus: assignment.status,
         action: assignment.action,
         callRemark: assignment.callRemark,

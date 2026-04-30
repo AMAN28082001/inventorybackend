@@ -16,9 +16,15 @@ export const uploadCallingLeadsSchema = z.object({
   }, z.coerce.number().int().min(1).max(50).optional())
 });
 
-export const dealerLeadActionSchema = z.object({
+export const dealerLeadActionSchema = z
+  .object({
   action: z.enum(['start', 'called', 'follow_up', 'not_interested', 'rescheduled']),
   callRemark: z.string().max(5000).optional(),
+  /** Explicit history edit (PATCH) — relax assignment transition guards for completed rows */
+  editMode: z.coerce.boolean().optional(),
+  /** API / contract aliases (snake_case) */
+  status_category: z.string().max(64).optional(),
+  status_text: z.string().max(128).optional(),
   statusCategory: z.enum([
     'call_connectivity',
     'lead_validity',
@@ -43,7 +49,9 @@ export const dealerLeadActionSchema = z.object({
   isCustomReason: z.boolean().optional(),
   nextFollowUpAt: z.string().datetime().optional(),
   actionAt: z.string().datetime().optional()
-}).refine((value) => {
+})
+  .passthrough()
+  .refine((value) => {
   if (value.action === 'rescheduled') {
     return !!value.nextFollowUpAt;
   }
@@ -65,7 +73,7 @@ export const dealerLeadActionSchema = z.object({
   message: 'Manual reason is required when statusReason is Others or custom mode is used',
   path: ['callRemark']
 }).refine((value) => {
-  const cat = value.statusCategory || value.statusCategoryKey;
+  const cat = value.statusCategory || value.statusCategoryKey || value.status_category;
   if (!cat) return true;
   return ([
     'call_connectivity',
