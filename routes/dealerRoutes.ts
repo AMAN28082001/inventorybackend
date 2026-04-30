@@ -1,6 +1,14 @@
 import express, { Router } from 'express';
 import { registerDealer, getDealerProfile, updateDealerProfile, getDealerStatistics, getVisitors } from '../controllers/dealerController';
-import { getDealerCallingQueueCurrent, getDealerCallingQueueNext, updateDealerCallingQueueAction } from '../controllers/callingLeadController';
+import {
+  getDealerCallingQueueCurrent,
+  getDealerCallingQueueNext,
+  updateDealerCallingQueueAction,
+  getDealerScheduledQueue,
+  getDealerDialledActions,
+  getDealerConnectedActions,
+  getDealerNotConnectedActions
+} from '../controllers/callingLeadController';
 import { authenticate, authorizeDealer } from '../middleware/authQuotation';
 import { validate } from '../middleware/validate';
 import { registerDealerSchema, updateDealerSchema } from '../validations/dealerValidations';
@@ -284,6 +292,10 @@ router.get('/visitors', getVisitors);
 
 router.get('/me/calling-queue/next', getDealerCallingQueueNext);
 router.get('/me/calling-queue/current', getDealerCallingQueueCurrent);
+router.get('/me/calling-queue/scheduled', getDealerScheduledQueue);
+router.get('/me/calling-actions/dialled', getDealerDialledActions);
+router.get('/me/calling-actions/connected', getDealerConnectedActions);
+router.get('/me/calling-actions/not-connected', getDealerNotConnectedActions);
 router.patch('/me/calling-queue/:leadId/action', validate(dealerLeadActionSchema), updateDealerCallingQueueAction);
 
 export default router;

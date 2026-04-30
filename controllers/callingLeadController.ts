@@ -1081,6 +1081,299 @@ const buildScheduledLeads = async (dealerId: string) => {
   }));
 };
 
+const getPaginationFromQuery = (req: Request, defaultLimit = 20, maxLimit = 100) => {
+  const page = parsePositiveInt(req.query.page, 1);
+  const limit = Math.min(parsePositiveInt(req.query.limit, defaultLimit), maxLimit);
+  const offset = (page - 1) * limit;
+  return { page, limit, offset };
+};
+
+const buildActionSearchWhere = (searchRaw: unknown) => {
+  const search = String(searchRaw || '').trim();
+  if (!search) return null;
+  return {
+    [Op.or]: [
+      { customerName: { [Op.iLike]: `%${search}%` } },
+      { customerMobile: { [Op.iLike]: `%${search}%` } },
+      { customerAddress: { [Op.iLike]: `%${search}%` } },
+      { statusLabel: { [Op.iLike]: `%${search}%` } },
+      { statusReason: { [Op.iLike]: `%${search}%` } },
+      { callRemark: { [Op.iLike]: `%${search}%` } }
+    ]
+  };
+};
+
+const buildPagination = (page: number, limit: number, total: number) => ({
+  page,
+  limit,
+  total,
+  totalPages: Math.ceil(total / limit),
+  hasNext: page < Math.ceil(total / limit),
+  hasPrev: page > 1
+});
+
+export const getDealerScheduledQueue = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const dealerId = await resolveDealerIdForQueue(req);
+    if (!dealerId) {
+      res.status(401).json({
+        success: false,
+        error: { code: 'AUTH_003', message: 'User not authenticated' }
+      });
+      return;
+    }
+
+    const { page, limit, offset } = getPaginationFromQuery(req, 20, 100);
+    const search = String(req.query.search || '').trim();
+    const timeFilter = String(req.query.timeFilter || 'all').trim().toLowerCase();
+    const now = new Date();
+    const startOfToday = new Date(now);
+    startOfToday.setHours(0, 0, 0, 0);
+    const endOfToday = new Date(now);
+    endOfToday.setHours(23, 59, 59, 999);
+    const next7 = new Date(now);
+    next7.setDate(next7.getDate() + 7);
+    const next30 = new Date(now);
+    next30.setDate(next30.getDate() + 30);
+
+    const whereAnd: any[] = [{ dealerId, status: 'rescheduled' }, LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE];
+    if (timeFilter === 'today') {
+      whereAnd.push({ nextFollowUpAt: { [Op.gte]: startOfToday, [Op.lte]: endOfToday } });
+    } else if (timeFilter === 'next7') {
+      whereAnd.push({ nextFollowUpAt: { [Op.gte]: now, [Op.lte]: next7 } });
+    } else if (timeFilter === 'next30') {
+      whereAnd.push({ nextFollowUpAt: { [Op.gte]: now, [Op.lte]: next30 } });
+    }
+
+    const searchOr = search
+      ? {
+        [Op.or]: [
+          { '$lead.name$': { [Op.iLike]: `%${search}%` } },
+          { '$lead.mobile$': { [Op.iLike]: `%${search}%` } },
+          { '$lead.kNumber$': { [Op.iLike]: `%${search}%` } },
+          { '$lead.address$': { [Op.iLike]: `%${search}%` } }
+        ]
+      }
+      : null;
+    if (searchOr) whereAnd.push(searchOr);
+
+    const rows = await DealerLeadAssignment.findAndCountAll({
+      where: { [Op.and]: whereAnd },
+      include: [{ model: CallingLead, as: 'lead' }],
+      order: [['nextFollowUpAt', 'ASC'], ['id', 'ASC']],
+      limit,
+      offset
+    });
+    const leadIds = rows.rows.map((row: any) => String(row.leadId)).filter(Boolean);
+    const latestStatusMap = await buildLatestStatusMetaMap(dealerId, leadIds);
+    const items = rows.rows.map((row: any) => ({
+      leadId: row.leadId,
+      id: row.leadId,
+      name: row.lead?.name || '',
+      mobile: row.lead?.mobile || '',
+      kNumber: row.lead?.kNumber || null,
+      address: row.lead?.address || null,
+      city: row.lead?.city || null,
+      state: row.lead?.state || null,
+      nextFollowUpAt: row.nextFollowUpAt,
+      actionAt: row.actionAt,
+      status: row.status,
+      callRemark: row.callRemark,
+      statusCategory: latestStatusMap.get(String(row.leadId))?.statusCategory || null,
+      statusLabel: latestStatusMap.get(String(row.leadId))?.statusLabel || null,
+      statusReason: latestStatusMap.get(String(row.leadId))?.statusReason || null
+    }));
+
+    applyNoCacheHeaders(res);
+    res.json({
+      success: true,
+      data: {
+        items,
+        pagination: buildPagination(page, limit, Number(rows.count || 0))
+      }
+    });
+  } catch (error) {
+    logError('Get dealer scheduled queue error', error, { dealerId: req.dealer?.id });
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
+};
+
+export const getDealerDialledActions = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const dealerId = await resolveDealerIdForQueue(req);
+    if (!dealerId) {
+      res.status(401).json({
+        success: false,
+        error: { code: 'AUTH_003', message: 'User not authenticated' }
+      });
+      return;
+    }
+
+    const { page, limit, offset } = getPaginationFromQuery(req, 20, 100);
+    const actionFilter = String(req.query.action || 'all').trim().toLowerCase();
+    const whereAnd: any[] = [{ dealerId }, { action: { [Op.in]: REPORT_ACTIONS } }];
+    if (actionFilter !== 'all' && (REPORT_ACTIONS as readonly string[]).includes(actionFilter)) {
+      whereAnd.push({ action: actionFilter });
+    }
+    const searchWhere = buildActionSearchWhere(req.query.search);
+    if (searchWhere) whereAnd.push(searchWhere);
+
+    const rows = await CallingActionHistory.findAndCountAll({
+      where: { [Op.and]: whereAnd },
+      include: [{ model: CallingLead, as: 'lead' }],
+      order: [['actionAt', 'DESC'], ['id', 'DESC']],
+      limit,
+      offset
+    });
+
+    const items = rows.rows.map((row: any) => callingActionToApiJson(row));
+    applyNoCacheHeaders(res);
+    res.json({
+      success: true,
+      data: {
+        items,
+        pagination: buildPagination(page, limit, Number(rows.count || 0))
+      }
+    });
+  } catch (error) {
+    logError('Get dealer dialled actions error', error, { dealerId: req.dealer?.id });
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
+};
+
+const NOT_CONNECTED_MATCHERS = [
+  'call unanswered',
+  'switched off',
+  'not reachable',
+  'busy',
+  'line busy',
+  'call disconnected',
+  'wrong number',
+  'invalid number',
+  'number does not exist'
+];
+
+const buildNotConnectedWhere = () => ({
+  [Op.or]: [
+    ...NOT_CONNECTED_MATCHERS.map((text) => ({ statusLabel: { [Op.iLike]: `%${text}%` } })),
+    ...NOT_CONNECTED_MATCHERS.map((text) => ({ statusReason: { [Op.iLike]: `%${text}%` } })),
+    ...NOT_CONNECTED_MATCHERS.map((text) => ({ callRemark: { [Op.iLike]: `%${text}%` } }))
+  ]
+});
+
+export const getDealerConnectedActions = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const dealerId = await resolveDealerIdForQueue(req);
+    if (!dealerId) {
+      res.status(401).json({
+        success: false,
+        error: { code: 'AUTH_003', message: 'User not authenticated' }
+      });
+      return;
+    }
+
+    const { page, limit, offset } = getPaginationFromQuery(req, 20, 100);
+    const outcome = String(req.query.outcome || 'all').trim().toLowerCase();
+
+    const whereAnd: any[] = [
+      { dealerId },
+      { action: { [Op.in]: REPORT_ACTIONS } },
+      { [Op.not]: buildNotConnectedWhere() }
+    ];
+    if (outcome === 'interested') whereAnd.push({ action: 'called' });
+    else if (outcome === 'not_interested') whereAnd.push({ action: 'not_interested' });
+    else if (outcome === 'decision_pending') whereAnd.push({ action: { [Op.in]: ['follow_up', 'rescheduled'] } });
+    const searchWhere = buildActionSearchWhere(req.query.search);
+    if (searchWhere) whereAnd.push(searchWhere);
+
+    const rows = await CallingActionHistory.findAndCountAll({
+      where: { [Op.and]: whereAnd },
+      include: [{ model: CallingLead, as: 'lead' }],
+      order: [['actionAt', 'DESC'], ['id', 'DESC']],
+      limit,
+      offset
+    });
+    const items = rows.rows.map((row: any) => callingActionToApiJson(row));
+
+    applyNoCacheHeaders(res);
+    res.json({
+      success: true,
+      data: {
+        items,
+        pagination: buildPagination(page, limit, Number(rows.count || 0))
+      }
+    });
+  } catch (error) {
+    logError('Get dealer connected actions error', error, { dealerId: req.dealer?.id });
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
+};
+
+export const getDealerNotConnectedActions = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const dealerId = await resolveDealerIdForQueue(req);
+    if (!dealerId) {
+      res.status(401).json({
+        success: false,
+        error: { code: 'AUTH_003', message: 'User not authenticated' }
+      });
+      return;
+    }
+
+    const { page, limit, offset } = getPaginationFromQuery(req, 20, 100);
+    const reason = String(req.query.reason || 'all').trim();
+    const whereAnd: any[] = [
+      { dealerId },
+      { action: { [Op.in]: REPORT_ACTIONS } },
+      buildNotConnectedWhere()
+    ];
+    if (reason && reason.toLowerCase() !== 'all') {
+      whereAnd.push({
+        [Op.or]: [
+          { statusLabel: { [Op.iLike]: `%${reason}%` } },
+          { statusReason: { [Op.iLike]: `%${reason}%` } },
+          { callRemark: { [Op.iLike]: `%${reason}%` } }
+        ]
+      });
+    }
+    const searchWhere = buildActionSearchWhere(req.query.search);
+    if (searchWhere) whereAnd.push(searchWhere);
+
+    const rows = await CallingActionHistory.findAndCountAll({
+      where: { [Op.and]: whereAnd },
+      include: [{ model: CallingLead, as: 'lead' }],
+      order: [['actionAt', 'DESC'], ['id', 'DESC']],
+      limit,
+      offset
+    });
+    const items = rows.rows.map((row: any) => callingActionToApiJson(row));
+
+    applyNoCacheHeaders(res);
+    res.json({
+      success: true,
+      data: {
+        items,
+        pagination: buildPagination(page, limit, Number(rows.count || 0))
+      }
+    });
+  } catch (error) {
+    logError('Get dealer not-connected actions error', error, { dealerId: req.dealer?.id });
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
+};
+
 const buildRecentActions = async (dealerId: string, limit = 1000) => {
   const rows = await CallingActionHistory.findAll({
     where: {
@@ -1801,11 +2094,19 @@ export const getHrLeadUploadBatches = async (req: Request, res: Response): Promi
     const total = batches.count;
     const hrUploadsList = batches.rows.map((batch) => {
       const assignedDealers = Array.isArray(batch.assignedDealers) ? batch.assignedDealers : [];
+      const batchRows = rowsByBatch.get(batch.id) || [];
+      const assignedCount = batchRows.reduce((count, row) => {
+        if (!row.leadId) return count;
+        return assignmentByLeadId.get(row.leadId) ? count + 1 : count;
+      }, 0);
+      const unassignedCount = Math.max(0, batchRows.length - assignedCount);
       return {
         id: batch.id,
         uploadedAt: batch.uploadedAt,
         fileName: batch.fileName,
         rowCount: batch.rowCount,
+        assignedCount,
+        unassignedCount,
         dealerIds: assignedDealers,
         rows: (rowsByBatch.get(batch.id) || []).map((row) => {
           const rawPayload = (row.rawPayload || {}) as Record<string, unknown>;
@@ -1835,6 +2136,7 @@ export const getHrLeadUploadBatches = async (req: Request, res: Response): Promi
       };
     });
 
+    applyNoCacheHeaders(res);
     res.json({
       success: true,
       uploads: hrUploadsList,
@@ -1878,6 +2180,8 @@ export const getHrLeadUploadBatches = async (req: Request, res: Response): Promi
             uploadedBy: batch.uploadedBy,
             uploadedAt: batch.uploadedAt,
             rowCount: batch.rowCount,
+            assignedCount: (hrUploadsList.find((upload) => upload.id === batch.id)?.assignedCount) || 0,
+            unassignedCount: (hrUploadsList.find((upload) => upload.id === batch.id)?.unassignedCount) || 0,
             assignedDealers,
             assignedDealerDetails: assignedDealers.map((dealerId) => ({
               dealerId,
@@ -1910,7 +2214,7 @@ export const getHrLeadUploadBatchRows = async (req: Request, res: Response): Pro
   try {
     const { batchId } = req.params;
     const page = parsePositiveInt(req.query.page, 1);
-    const limit = Math.min(parsePositiveInt(req.query.limit, 100), 500);
+    const limit = Math.min(parsePositiveInt(req.query.limit, 50), 100);
     const offset = (page - 1) * limit;
 
     const batch = await CallingLeadUploadBatch.findByPk(batchId);
@@ -1924,13 +2228,42 @@ export const getHrLeadUploadBatchRows = async (req: Request, res: Response): Pro
 
     const rows = await CallingLeadUploadRow.findAndCountAll({
       where: { batchId },
-      order: [['rowIndex', 'ASC']],
+      order: [['createdAt', 'ASC'], ['id', 'ASC']],
       limit,
       offset
     });
-    const leadIds = rows.rows
-      .map((row) => row.leadId)
-      .filter((leadId): leadId is string => Boolean(leadId));
+    const fallbackMobiles = Array.from(new Set(
+      rows.rows
+        .filter((row) => !row.leadId)
+        .map((row) => normalizeMobile(row.customerMobile))
+        .filter((mobile): mobile is string => Boolean(mobile))
+    ));
+    const fallbackLeads = fallbackMobiles.length
+      ? await CallingLead.findAll({
+        where: {
+          batchId,
+          mobileNormalized: { [Op.in]: fallbackMobiles }
+        },
+        attributes: ['id', 'mobileNormalized']
+      })
+      : [];
+    const fallbackLeadIdByMobile = new Map<string, string>();
+    for (const lead of fallbackLeads as any[]) {
+      fallbackLeadIdByMobile.set(String(lead.mobileNormalized), String(lead.id));
+    }
+
+    const resolvedLeadIdForRow = (row: CallingLeadUploadRow): string | null => {
+      if (row.leadId) return String(row.leadId);
+      const mobile = normalizeMobile(row.customerMobile);
+      if (!mobile) return null;
+      return fallbackLeadIdByMobile.get(mobile) || null;
+    };
+
+    const leadIds = Array.from(new Set(
+      rows.rows
+        .map((row) => resolvedLeadIdForRow(row))
+        .filter((leadId): leadId is string => Boolean(leadId))
+    ));
     const assignments = leadIds.length
       ? await DealerLeadAssignment.findAll({
         where: {
@@ -1955,8 +2288,64 @@ export const getHrLeadUploadBatchRows = async (req: Request, res: Response): Pro
     for (const dealer of dealers) {
       dealerNameMap.set(dealer.id, `${dealer.firstName || ''} ${dealer.lastName || ''}`.trim());
     }
+    const [totalRowsInBatch, allBatchLeadIds] = await Promise.all([
+      CallingLeadUploadRow.count({ where: { batchId } }),
+      CallingLeadUploadRow.findAll({
+      where: { batchId, leadId: { [Op.not]: null } },
+      attributes: ['leadId'],
+      raw: true
+      })
+    ]);
+    const allLeadIds = allBatchLeadIds
+      .map((row: any) => String(row.leadId))
+      .filter(Boolean);
+    const assignedCount = allLeadIds.length
+      ? await DealerLeadAssignment.count({
+        where: {
+          leadId: { [Op.in]: allLeadIds },
+          [Op.and]: [LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE]
+        }
+      })
+      : 0;
+    const unassignedCount = Math.max(0, Number(totalRowsInBatch || 0) - assignedCount);
 
     const total = rows.count;
+    const normalizedRows = rows.rows.map((row) => {
+      const resolvedLeadId = resolvedLeadIdForRow(row);
+      const assignment = resolvedLeadId ? assignmentByLeadId.get(resolvedLeadId) : null;
+      const assignedDealerId = assignment?.dealerId || null;
+      const assignedDealerName = assignedDealerId ? (dealerNameMap.get(String(assignedDealerId)) || null) : null;
+      const assignmentStatus = normalizeAssignmentLifecycleStatus(assignment?.status || null);
+      const rawPayload = (row.rawPayload || {}) as Record<string, unknown>;
+      return {
+        id: row.id,
+        rowIndex: row.rowIndex,
+        name: row.customerName || '',
+        mobile: row.customerMobile || '',
+        kNumber: String(extractCell(rawPayload, K_NUMBER_KEYS) || '').trim() || null,
+        address: row.customerAddress || '',
+        city: String(extractCell(rawPayload, CITY_KEYS) || '').trim() || null,
+        state: String(extractCell(rawPayload, STATE_KEYS) || '').trim() || null,
+        customerName: row.customerName,
+        customerMobile: row.customerMobile,
+        customerAddress: row.customerAddress,
+        status: assignmentStatus,
+        assignedDealerId,
+        assignedDealerName,
+        assignmentStatus,
+        assigned_dealer_id: assignedDealerId,
+        assigned_dealer_name: assignedDealerName,
+        assignment_status: assignmentStatus,
+        leadId: resolvedLeadId || row.leadId,
+        rawPayload: row.rawPayload
+      };
+    });
+    const assignedDealers = Array.isArray(batch.assignedDealers) ? batch.assignedDealers : [];
+    const assignedDealerNames = assignedDealers
+      .map((dealerId) => dealerNameMap.get(String(dealerId)))
+      .filter((dealerName): dealerName is string => Boolean(dealerName));
+
+    applyNoCacheHeaders(res);
     res.json({
       success: true,
       data: {
@@ -1966,33 +2355,14 @@ export const getHrLeadUploadBatchRows = async (req: Request, res: Response): Pro
           fileName: batch.fileName,
           uploadedBy: batch.uploadedBy,
           uploadedAt: batch.uploadedAt,
-          rowCount: batch.rowCount,
-          assignedDealers: batch.assignedDealers
+          rowCount: totalRowsInBatch,
+          assignedCount,
+          unassignedCount,
+          assignedDealers,
+          dealers: assignedDealerNames,
+          rows: normalizedRows
         },
-        rows: rows.rows.map((row) => ({
-          ...(() => {
-            const assignment = row.leadId ? assignmentByLeadId.get(row.leadId) : null;
-            const assignedDealerId = assignment?.dealerId || null;
-            const assignedDealerName = assignedDealerId ? (dealerNameMap.get(String(assignedDealerId)) || null) : null;
-            const assignmentStatus = normalizeAssignmentLifecycleStatus(assignment?.status || null);
-            return {
-              id: row.id,
-              rowIndex: row.rowIndex,
-              customerName: row.customerName,
-              customerMobile: row.customerMobile,
-              customerAddress: row.customerAddress,
-              status: assignmentStatus,
-              assignedDealerId,
-              assignedDealerName,
-              assignmentStatus,
-              assigned_dealer_id: assignedDealerId,
-              assigned_dealer_name: assignedDealerName,
-              assignment_status: assignmentStatus,
-              leadId: row.leadId,
-              rawPayload: row.rawPayload
-            };
-          })()
-        })),
+        rows: normalizedRows,
         pagination: {
           page,
           limit,

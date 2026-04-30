@@ -18,7 +18,7 @@ import {
   updateVisitorPassword,
   deleteVisitor
 } from '../controllers/adminVisitorController';
-import { getAdminCallingActions } from '../controllers/callingLeadController';
+import { getAdminCallingActions, getHrLeadUploadBatchRows } from '../controllers/callingLeadController';
 import { authenticate, authorizeAdmin } from '../middleware/authQuotation';
 import { validate } from '../middleware/validate';
 import {
@@ -64,6 +64,7 @@ router.patch('/quotations/:quotationId/status', validate(updateStatusSchema), up
 router.patch('/quotations/:quotationId/installation-status', validate(updateInstallationStatusSchema), updateQuotationInstallationStatus);
 router.patch('/quotations/:quotationId/workflow-status', validate(updateInstallationStatusSchema), updateQuotationInstallationStatus);
 router.patch('/quotations/:quotationId/file-login', validate(fileLoginSchema), updateQuotationFileLogin);
+router.get('/leads/uploads/:batchId', getHrLeadUploadBatchRows);
 
 /**
  * @swagger

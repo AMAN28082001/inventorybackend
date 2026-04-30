@@ -41,6 +41,9 @@ router.get('/dealers/assignment-stats', getHrDealerAssignmentStats);
 router.get('/calling-actions', getHrCallingActions);
 router.get('/leads/uploads', getHrLeadUploadBatches);
 router.get('/leads/uploads/:batchId', getHrLeadUploadBatchRows);
+// Alias routes used by different frontend builds
+router.get('/calling-uploads/:batchId', getHrLeadUploadBatchRows);
+router.get('/uploads/:batchId', getHrLeadUploadBatchRows);
 router.post('/leads/upload-csv', upload.fields([{ name: 'file', maxCount: 1 }, { name: 'csvFile', maxCount: 1 }]), validate(uploadCallingLeadsSchema), uploadCallingLeadsCsv);
 
 export default router;
