@@ -1112,6 +1112,15 @@ const buildPagination = (page: number, limit: number, total: number) => ({
   hasPrev: page > 1
 });
 
+const resolveOutcomeCategory = (action?: string | null, status?: string | null): 'decision_pending' | 'interested' | 'not_interested' | null => {
+  const normalizedAction = String(action || '').trim().toLowerCase();
+  const normalizedStatus = String(status || '').trim().toLowerCase();
+  if (normalizedAction === 'not_interested') return 'not_interested';
+  if (normalizedAction === 'called') return 'interested';
+  if (normalizedStatus === 'rescheduled' || normalizedAction === 'rescheduled' || normalizedAction === 'follow_up') return 'decision_pending';
+  return null;
+};
+
 export const getDealerScheduledQueue = async (req: Request, res: Response): Promise<void> => {
   try {
     const dealerId = await resolveDealerIdForQueue(req);
@@ -1136,9 +1145,14 @@ export const getDealerScheduledQueue = async (req: Request, res: Response): Prom
     const next30 = new Date(now);
     next30.setDate(next30.getDate() + 30);
 
-    const whereAnd: any[] = [{ dealerId, status: 'rescheduled' }, LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE];
+    const whereAnd: any[] = [
+      { dealerId, status: 'rescheduled' },
+      { nextFollowUpAt: { [Op.ne]: null, [Op.gt]: now } },
+      { [Op.or]: [{ action: null }, { action: 'rescheduled' }, { action: 'follow_up' }] },
+      LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE
+    ];
     if (timeFilter === 'today') {
-      whereAnd.push({ nextFollowUpAt: { [Op.gte]: startOfToday, [Op.lte]: endOfToday } });
+      whereAnd.push({ nextFollowUpAt: { [Op.gte]: now, [Op.lte]: endOfToday } });
     } else if (timeFilter === 'next7') {
       whereAnd.push({ nextFollowUpAt: { [Op.gte]: now, [Op.lte]: next7 } });
     } else if (timeFilter === 'next30') {
@@ -1179,6 +1193,7 @@ export const getDealerScheduledQueue = async (req: Request, res: Response): Prom
       actionAt: row.actionAt,
       status: row.status,
       callRemark: row.callRemark,
+      outcomeCategory: resolveOutcomeCategory(row.action, row.status),
       statusCategory: latestStatusMap.get(String(row.leadId))?.statusCategory || null,
       statusLabel: latestStatusMap.get(String(row.leadId))?.statusLabel || null,
       statusReason: latestStatusMap.get(String(row.leadId))?.statusReason || null
@@ -1874,6 +1889,7 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
             status: 'completed',
             action,
             callRemark: effectiveCallRemarkForOutcome,
+            nextFollowUpAt: null,
             actionAt: effectiveActionAt
           },
           { transaction }
@@ -1893,6 +1909,7 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
         status: action,
         assignmentStatus: assignment.status,
         action: assignment.action,
+        outcomeCategory: resolveOutcomeCategory(assignment.action, assignment.status),
         callRemark: assignment.callRemark,
         nextFollowUpAt: assignment.nextFollowUpAt,
         actionAt: assignment.actionAt
