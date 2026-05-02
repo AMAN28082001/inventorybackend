@@ -361,6 +361,40 @@ export const updateInstallationReleaseSchema = z.object({
     })
 });
 
+const yyyyMmDd = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Planned installation calendar date; camelCase or snake_case (frontend fallbacks). */
+export const updateInstallationScheduledAtSchema = z
+  .object({
+    installationScheduledAt: z.union([z.string(), z.null()]).optional(),
+    installation_scheduled_at: z.union([z.string(), z.null()]).optional()
+  })
+  .superRefine((data, ctx) => {
+    const hasCamel = data.installationScheduledAt !== undefined;
+    const hasSnake = data.installation_scheduled_at !== undefined;
+    if (!hasCamel && !hasSnake) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'installationScheduledAt or installation_scheduled_at is required',
+        path: ['installationScheduledAt']
+      });
+      return;
+    }
+    const val = hasCamel ? data.installationScheduledAt : data.installation_scheduled_at;
+    if (val !== null && val !== undefined && (typeof val !== 'string' || !yyyyMmDd.test(val))) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Must be YYYY-MM-DD or null',
+        path: hasCamel ? ['installationScheduledAt'] : ['installation_scheduled_at']
+      });
+    }
+  })
+  .transform((data) => {
+    const hasCamel = data.installationScheduledAt !== undefined;
+    const val = hasCamel ? data.installationScheduledAt : data.installation_scheduled_at;
+    return { installationScheduledAt: val === undefined ? null : val };
+  });
+
 const aadharRegex = /^\d{12}$/;
 const phoneRegex = /^\d{10}$/;
 const panRegex = /^[A-Z]{5}\d{4}[A-Z]$/;

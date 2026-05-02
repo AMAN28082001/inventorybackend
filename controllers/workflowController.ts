@@ -7,6 +7,7 @@ import { Op } from 'sequelize';
 import { Quotation, QuotationInstallationDoc, Dealer, Customer, QuotationProduct, Visit, VisitAssignment, Visitor, CustomPanel } from '../models/index-quotation';
 import { logError, logInfo } from '../utils/loggerHelper';
 import { INSTALLER_RELEASE_STATUSES, resolveInstallerQueueStatuses } from '../constants/workflowQueues';
+import { toDateOnlyStringOrNull } from '../utils/quotationApiJson';
 
 const getS3Client = () => {
   const region = process.env.AWS_REGION;
@@ -352,6 +353,8 @@ const getWorkflowQueue = async (
             installationReadyForInstaller: Boolean(q.installationReadyForInstaller),
             installation_ready_for_installer: Boolean(q.installationReadyForInstaller),
             installationReleasedAt: q.installationReleasedAt || null,
+            installationScheduledAt: toDateOnlyStringOrNull(q.installationScheduledAt ?? (q as any).installation_scheduled_at),
+            installation_scheduled_at: toDateOnlyStringOrNull(q.installationScheduledAt ?? (q as any).installation_scheduled_at),
             meteringId: q.meteringId || null,
             meteringActionAt: q.meteringActionAt || null,
             meteringApprovedAt: q.meteringApprovedAt || null,

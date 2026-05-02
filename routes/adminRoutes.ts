@@ -10,6 +10,7 @@ import {
   activateDealer,
   getSystemStatistics
 } from '../controllers/adminController';
+import { updateQuotationInstallationScheduledAt } from '../controllers/quotationController';
 import {
   createVisitor,
   getAllVisitors,
@@ -29,6 +30,7 @@ import {
   updateVisitorSchema,
   updateVisitorPasswordSchema
 } from '../validations/adminValidations';
+import { updateInstallationScheduledAtSchema } from '../validations/quotationValidations';
 import { adminUpdateDealerSchema } from '../validations/dealerValidations';
 
 const router: Router = express.Router();
@@ -63,6 +65,8 @@ router.use(authorizeAdmin);
 router.patch('/quotations/:quotationId/status', validate(updateStatusSchema), updateQuotationStatus);
 router.patch('/quotations/:quotationId/installation-status', validate(updateInstallationStatusSchema), updateQuotationInstallationStatus);
 router.patch('/quotations/:quotationId/workflow-status', validate(updateInstallationStatusSchema), updateQuotationInstallationStatus);
+router.patch('/quotations/:quotationId/installation-scheduled-at', validate(updateInstallationScheduledAtSchema), updateQuotationInstallationScheduledAt);
+router.patch('/quotations/:quotationId/installation-schedule', validate(updateInstallationScheduledAtSchema), updateQuotationInstallationScheduledAt);
 router.patch('/quotations/:quotationId/file-login', validate(fileLoginSchema), updateQuotationFileLogin);
 router.get('/leads/uploads/:batchId', getHrLeadUploadBatchRows);
 

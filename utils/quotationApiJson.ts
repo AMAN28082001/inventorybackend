@@ -30,6 +30,17 @@ function toIsoStringOrNull(v: unknown): string | null {
   return null;
 }
 
+/** DATEONLY / YYYY-MM-DD for API responses (camelCase + snake_case consumers). */
+export function toDateOnlyStringOrNull(v: unknown): string | null {
+  if (v === null || v === undefined) return null;
+  if (typeof v === 'string') {
+    const s = v.trim();
+    return s.length >= 10 ? s.slice(0, 10) : s;
+  }
+  if (v instanceof Date) return v.toISOString().slice(0, 10);
+  return null;
+}
+
 /**
  * Mirrors BACKEND_ADMIN_QUOTATION_STATUS.ts → quotationToApiJson (payment/bank slice).
  * Use on Sequelize instances or plain row objects.
@@ -76,6 +87,9 @@ export function quotationAdminMetadataFields(q: Record<string, unknown>) {
   const installationReleasedAt = toIsoStringOrNull(
     q.installationReleasedAt ?? q.installation_released_at
   );
+  const installationScheduledAt = toDateOnlyStringOrNull(
+    q.installationScheduledAt ?? q.installation_scheduled_at
+  );
   const statusHistory = readStatusHistoryFromRow(q);
   const subsidyCheques = readSubsidyChequesFromRow(q);
   return {
@@ -101,6 +115,8 @@ export function quotationAdminMetadataFields(q: Record<string, unknown>) {
     installation_ready_for_installer: installationReadyForInstaller,
     installationReleasedAt,
     installation_released_at: installationReleasedAt,
+    installationScheduledAt,
+    installation_scheduled_at: installationScheduledAt,
     statusHistory,
     status_history: statusHistory
   };

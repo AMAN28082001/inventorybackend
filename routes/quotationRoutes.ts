@@ -9,6 +9,7 @@ import {
   updateQuotationPricing,
   updateQuotationPaymentDetails,
   updateQuotationInstallationRelease,
+  updateQuotationInstallationScheduledAt,
   downloadQuotationsExcel,
   downloadQuotationPDF,
   downloadQuotationDocumentsZip,
@@ -29,11 +30,12 @@ import {
   authorizeDealerOrAccountManager,
   authorizeQuotationDocumentsEditor,
   authorizeMeteringOrAdmin,
+  authorizeAdmin,
   rejectAccountManager
 } from '../middleware/authQuotation';
 import { validate } from '../middleware/validate';
 import { logRequestBeforeValidation, logRequestAfterValidation } from '../middleware/requestLogger';
-import { createQuotationSchema, updateDiscountSchema, updateProductsSchema, updatePricingSchema, updatePaymentDetailsSchema, updatePaymentModeSchema, updateInstallationReleaseSchema } from '../validations/quotationValidations';
+import { createQuotationSchema, updateDiscountSchema, updateProductsSchema, updatePricingSchema, updatePaymentDetailsSchema, updatePaymentModeSchema, updateInstallationReleaseSchema, updateInstallationScheduledAtSchema } from '../validations/quotationValidations';
 import { meteringDetailsSchema, meteringMcoDocumentsSchema, meteringStatusSchema } from '../validations/workflowValidations';
 
 const router: Router = express.Router();
@@ -690,6 +692,8 @@ router.put('/:quotationId/installments', authorizeDealerOrAccountManager, valida
 router.patch('/:quotationId/payment-mode', authorizeDealerOrAccountManager, validate(updatePaymentModeSchema), updateQuotationPaymentDetails);
 router.patch('/:quotationId/installation-release', authorizeDealerOrAccountManager, validate(updateInstallationReleaseSchema), updateQuotationInstallationRelease);
 router.patch('/:quotationId/installation/ready', authorizeDealerOrAccountManager, validate(updateInstallationReleaseSchema), updateQuotationInstallationRelease);
+router.patch('/:quotationId/installation-scheduled-at', authorizeAdmin, validate(updateInstallationScheduledAtSchema), updateQuotationInstallationScheduledAt);
+router.patch('/:quotationId/installation-schedule', authorizeAdmin, validate(updateInstallationScheduledAtSchema), updateQuotationInstallationScheduledAt);
 
 /** Fallback for stricter gateways: same handler as `PATCH /api/metering/quotations/:id/status`. */
 router.patch(

@@ -16,6 +16,44 @@ const normalizeVisitTime = (value: unknown): string => {
   return raw;
 };
 
+type CanonicalVisitStatus = 'pending' | 'approved' | 'completed' | 'incomplete' | 'rescheduled' | 'rejected';
+
+const normalizeVisitStatus = (raw?: unknown): CanonicalVisitStatus => {
+  const value = String(raw || '').trim().toLowerCase();
+  if (value === 'approve' || value === 'approved') return 'approved';
+  if (value === 'complete' || value === 'completed') return 'completed';
+  if (value === 'incomplete') return 'incomplete';
+  if (value === 'reschedule' || value === 'rescheduled') return 'rescheduled';
+  if (value === 'reject' || value === 'rejected') return 'rejected';
+  return 'pending';
+};
+
+const normalizeStatusQueryValue = (raw?: unknown): CanonicalVisitStatus | 'all' => {
+  const value = String(raw || '').trim().toLowerCase();
+  if (!value || value === 'all') return 'all';
+  if (value === 'approve' || value === 'approved') return 'approved';
+  if (value === 'complete' || value === 'completed') return 'completed';
+  if (value === 'incomplete') return 'incomplete';
+  if (value === 'reschedule' || value === 'rescheduled') return 'rescheduled';
+  if (value === 'reject' || value === 'rejected') return 'rejected';
+  if (value === 'pending') return 'pending';
+  return 'all';
+};
+
+const getStatusDbVariants = (status: CanonicalVisitStatus): string[] => {
+  if (status === 'approved') return ['approved', 'approve'];
+  if (status === 'completed') return ['completed', 'complete'];
+  if (status === 'rescheduled') return ['rescheduled', 'reschedule'];
+  if (status === 'rejected') return ['rejected', 'reject'];
+  return [status];
+};
+
+const applyNoCacheHeaders = (res: Response) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+};
+
 const resolveMediaUrl = async (url: unknown): Promise<string | null> => {
   if (typeof url !== 'string' || !url.trim()) return null;
   const key = extractS3Key(url);
@@ -45,14 +83,25 @@ export const getAssignedVisits = async (req: Request, res: Response): Promise<vo
     }
 
     const status = req.query.status as string;
+    const statusTab = req.query.statusTab ?? req.query.tab ?? req.query.activeTab ?? req.query.visitTab;
+    const statusFilter = req.query.statusFilter ?? req.query.filterStatus ?? req.query.visitStatus;
     const startDate = req.query.startDate as string;
     const endDate = req.query.endDate as string;
     const search = req.query.search as string;
 
     const where: any = {};
 
-    if (status) {
-      where.status = status;
+    const normalizedStatus = normalizeStatusQueryValue(status);
+    const normalizedStatusFilter = normalizeStatusQueryValue(statusFilter);
+    const normalizedStatusTab = normalizeStatusQueryValue(statusTab);
+    const selectedStatus = normalizedStatus !== 'all'
+      ? normalizedStatus
+      : (normalizedStatusFilter !== 'all'
+        ? normalizedStatusFilter
+        : normalizedStatusTab);
+
+    if (selectedStatus !== 'all') {
+      where.status = { [Op.in]: getStatusDbVariants(selectedStatus) };
     }
 
     if (startDate || endDate) {
@@ -166,7 +215,7 @@ export const getAssignedVisits = async (req: Request, res: Response): Promise<vo
         location: toSafeString(v.location),
         locationLink: toSafeString(v.locationLink),
         notes: toSafeString(v.notes),
-        status: v.status,
+        status: normalizeVisitStatus(v.status),
         length: v.length ?? null,
         width: v.width ?? null,
         height: v.height ?? null,
@@ -222,10 +271,12 @@ export const getAssignedVisits = async (req: Request, res: Response): Promise<vo
       };
     }));
 
+    applyNoCacheHeaders(res);
     res.json({
       success: true,
       visits: formattedVisits,
       data: {
+        items: formattedVisits,
         visits: formattedVisits,
         count: formattedVisits.length
       }
@@ -272,12 +323,21 @@ export const getVisitorStatistics = async (req: Request, res: Response): Promise
     });
 
     const totalVisits = visits.length;
-    const pendingVisits = visits.filter(v => v.status === 'pending').length;
-    const approvedVisits = visits.filter(v => v.status === 'approved').length;
-    const completedVisits = visits.filter(v => v.status === 'completed').length;
-    const incompleteVisits = visits.filter(v => v.status === 'incomplete').length;
-    const rejectedVisits = visits.filter(v => v.status === 'rejected').length;
-    const rescheduledVisits = visits.filter(v => v.status === 'rescheduled').length;
+    let pendingVisits = 0;
+    let approvedVisits = 0;
+    let completedVisits = 0;
+    let incompleteVisits = 0;
+    let rejectedVisits = 0;
+    let rescheduledVisits = 0;
+    for (const v of visits) {
+      const s = normalizeVisitStatus(v.status);
+      if (s === 'pending') pendingVisits++;
+      else if (s === 'approved') approvedVisits++;
+      else if (s === 'completed') completedVisits++;
+      else if (s === 'incomplete') incompleteVisits++;
+      else if (s === 'rejected') rejectedVisits++;
+      else if (s === 'rescheduled') rescheduledVisits++;
+    }
 
     // Get upcoming visits with customer names
     const today = new Date();
@@ -286,7 +346,8 @@ export const getVisitorStatistics = async (req: Request, res: Response): Promise
       .filter(v => {
         const visitDate = new Date(v.visitDate);
         visitDate.setHours(0, 0, 0, 0);
-        return visitDate >= today && (v.status === 'pending' || v.status === 'approved');
+        const s = normalizeVisitStatus(v.status);
+        return visitDate >= today && (s === 'pending' || s === 'approved');
       })
       .slice(0, 5);
 

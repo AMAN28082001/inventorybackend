@@ -2461,6 +2461,43 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
   }
 };
 
+export const updateQuotationInstallationScheduledAt = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { quotationId } = req.params;
+    const { installationScheduledAt } = req.body as { installationScheduledAt: string | null };
+
+    const quotation = await Quotation.findByPk(quotationId);
+    if (!quotation) {
+      res.status(404).json({
+        success: false,
+        error: { code: 'RES_001', message: 'Quotation not found' }
+      });
+      return;
+    }
+
+    await quotation.update({
+      installationScheduledAt
+    });
+
+    const rowPlain = quotation.get({ plain: true }) as unknown as Record<string, unknown>;
+    res.json({
+      success: true,
+      data: {
+        id: quotation.id,
+        quotationId: quotation.id,
+        ...quotationAdminMetadataFields(rowPlain),
+        updatedAt: quotation.updatedAt
+      }
+    });
+  } catch (error) {
+    logError('Update quotation installation scheduled date error', error, { quotationId: req.params.quotationId });
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
+};
+
 export const updateQuotationInstallationRelease = async (req: Request, res: Response): Promise<void> => {
   try {
     const { quotationId } = req.params;

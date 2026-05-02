@@ -64,6 +64,8 @@ interface QuotationAttributes {
   installerRemarks?: string | null;
   installationReadyForInstaller?: boolean;
   installationReleasedAt?: Date | null;
+  /** Admin-planned installation date (calendar day, YYYY-MM-DD) */
+  installationScheduledAt?: string | null;
   baldevId?: string | null;
   baldevActionAt?: Date | null;
   baldevRemarks?: string | null;
@@ -96,7 +98,7 @@ interface QuotationAttributes {
 
 interface QuotationCreationAttributes extends Optional<
   QuotationAttributes,
-  'id' | 'status' | 'discount' | 'createdAt' | 'updatedAt' | 'centralSubsidy' | 'stateSubsidy' | 'totalSubsidy' | 'amountAfterSubsidy' | 'discountAmount' |   'paymentMode' | 'paymentType' | 'bankName' | 'bankIfsc' | 'subsidyChequeDetails' | 'fileLoginStatus' | 'filePaymentType' | 'fileBankName' | 'fileBankIfsc' | 'fileSubsidyChequeDetails' | 'fileLoginAt' | 'statusApprovedAt'   | 'statusHistory' | 'subsidyCheques' | 'remainingAmount' | 'paidAmount' | 'paymentDate' | 'paymentStatus' | 'paymentPhases' | 'paymentPlanUpdatedBy' | 'paymentPlanUpdatedAt' | 'approvedAt' | 'installationStatus' | 'installerId' | 'installerActionAt' | 'installerInProgressAt' | 'installerApprovedAt' | 'installerRemarks' | 'installationReadyForInstaller' | 'installationReleasedAt' |   'baldevId' | 'baldevActionAt' | 'baldevRemarks' | 'meteringId' | 'meteringActionAt' | 'meteringApprovedAt' | 'meteringRemarks' | 'discomName' | 'meterType' | 'meterNo' | 'solarMeterNo' | 'netMeterNo' | 'meterDocumentImageUrl' | 'mcoAt' | 'completionAt' | 'siteLengthCm' | 'siteWidthCm' | 'siteHeightCm' | 'backLegFt' | 'midLegFt' | 'frontLegFt' | 'extraExpensesTotal' | 'extraExpensesJson'
+  'id' | 'status' | 'discount' | 'createdAt' | 'updatedAt' | 'centralSubsidy' | 'stateSubsidy' | 'totalSubsidy' | 'amountAfterSubsidy' | 'discountAmount' |   'paymentMode' | 'paymentType' | 'bankName' | 'bankIfsc' | 'subsidyChequeDetails' | 'fileLoginStatus' | 'filePaymentType' | 'fileBankName' | 'fileBankIfsc' | 'fileSubsidyChequeDetails' | 'fileLoginAt' | 'statusApprovedAt'   | 'statusHistory' | 'subsidyCheques' | 'remainingAmount' | 'paidAmount' | 'paymentDate' | 'paymentStatus' | 'paymentPhases' | 'paymentPlanUpdatedBy' | 'paymentPlanUpdatedAt' | 'approvedAt' | 'installationStatus' | 'installerId' | 'installerActionAt' | 'installerInProgressAt' |   'installerApprovedAt' | 'installerRemarks' | 'installationReadyForInstaller' | 'installationReleasedAt' | 'installationScheduledAt' |   'baldevId' | 'baldevActionAt' | 'baldevRemarks' | 'meteringId' | 'meteringActionAt' | 'meteringApprovedAt' | 'meteringRemarks' | 'discomName' | 'meterType' | 'meterNo' | 'solarMeterNo' | 'netMeterNo' | 'meterDocumentImageUrl' | 'mcoAt' | 'completionAt' | 'siteLengthCm' | 'siteWidthCm' | 'siteHeightCm' | 'backLegFt' | 'midLegFt' | 'frontLegFt' | 'extraExpensesTotal' | 'extraExpensesJson'
 > {}
 
 class Quotation extends Model<QuotationAttributes, QuotationCreationAttributes> implements QuotationAttributes {
@@ -162,6 +164,7 @@ class Quotation extends Model<QuotationAttributes, QuotationCreationAttributes> 
   public installerRemarks!: string | null;
   public installationReadyForInstaller!: boolean;
   public installationReleasedAt!: Date | null;
+  public installationScheduledAt!: string | null;
   public baldevId!: string | null;
   public baldevActionAt!: Date | null;
   public baldevRemarks!: string | null;
@@ -391,6 +394,10 @@ Quotation.init(
     },
     installationReleasedAt: {
       type: DataTypes.DATE,
+      allowNull: true
+    },
+    installationScheduledAt: {
+      type: DataTypes.DATEONLY,
       allowNull: true
     },
     baldevId: {
