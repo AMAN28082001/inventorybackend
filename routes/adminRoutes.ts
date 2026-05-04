@@ -20,6 +20,13 @@ import {
   deleteVisitor
 } from '../controllers/adminVisitorController';
 import { getAdminCallingActions, getHrLeadUploadBatchRows } from '../controllers/callingLeadController';
+import {
+  listInstallationTeams,
+  createInstallationTeam,
+  patchInstallationTeam,
+  deleteInstallationTeam,
+  patchQuotationInstallationTeam
+} from '../controllers/installationTeamController';
 import { authenticate, authorizeAdmin } from '../middleware/authQuotation';
 import { validate } from '../middleware/validate';
 import {
@@ -28,7 +35,10 @@ import {
   fileLoginSchema,
   createVisitorSchema,
   updateVisitorSchema,
-  updateVisitorPasswordSchema
+  updateVisitorPasswordSchema,
+  createInstallationTeamSchema,
+  patchInstallationTeamSchema,
+  patchQuotationInstallationTeamSchema
 } from '../validations/adminValidations';
 import { updateInstallationScheduledAtSchema } from '../validations/quotationValidations';
 import { adminUpdateDealerSchema } from '../validations/dealerValidations';
@@ -68,6 +78,15 @@ router.patch('/quotations/:quotationId/workflow-status', validate(updateInstalla
 router.patch('/quotations/:quotationId/installation-scheduled-at', validate(updateInstallationScheduledAtSchema), updateQuotationInstallationScheduledAt);
 router.patch('/quotations/:quotationId/installation-schedule', validate(updateInstallationScheduledAtSchema), updateQuotationInstallationScheduledAt);
 router.patch('/quotations/:quotationId/file-login', validate(fileLoginSchema), updateQuotationFileLogin);
+router.patch(
+  '/quotations/:quotationId/installation-team',
+  validate(patchQuotationInstallationTeamSchema),
+  patchQuotationInstallationTeam
+);
+router.get('/installation-teams', listInstallationTeams);
+router.post('/installation-teams', validate(createInstallationTeamSchema), createInstallationTeam);
+router.patch('/installation-teams/:teamId', validate(patchInstallationTeamSchema), patchInstallationTeam);
+router.delete('/installation-teams/:teamId', deleteInstallationTeam);
 router.get('/leads/uploads/:batchId', getHrLeadUploadBatchRows);
 
 /**

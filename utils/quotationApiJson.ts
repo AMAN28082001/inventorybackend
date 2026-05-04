@@ -90,6 +90,7 @@ export function quotationAdminMetadataFields(q: Record<string, unknown>) {
   const installationScheduledAt = toDateOnlyStringOrNull(
     q.installationScheduledAt ?? q.installation_scheduled_at
   );
+  const installationTeamId = (q.installationTeamId ?? q.installation_team_id ?? null) as string | null;
   const statusHistory = readStatusHistoryFromRow(q);
   const subsidyCheques = readSubsidyChequesFromRow(q);
   return {
@@ -117,6 +118,8 @@ export function quotationAdminMetadataFields(q: Record<string, unknown>) {
     installation_released_at: installationReleasedAt,
     installationScheduledAt,
     installation_scheduled_at: installationScheduledAt,
+    installationTeamId,
+    installation_team_id: installationTeamId,
     statusHistory,
     status_history: statusHistory
   };

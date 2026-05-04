@@ -13,6 +13,29 @@ const ensureInstallationScheduledAtColumn = async (): Promise<void> => {
   }
 };
 
+const ensureInstallationTeamsSchema = async (): Promise<void> => {
+  try {
+    await sequelize.query(`
+      CREATE TABLE IF NOT EXISTS "installation_teams" (
+        "id" VARCHAR(50) PRIMARY KEY,
+        "name" VARCHAR(255) NOT NULL,
+        "username" VARCHAR(50) NOT NULL UNIQUE,
+        "password" VARCHAR(255) NOT NULL,
+        "isActive" BOOLEAN NOT NULL DEFAULT true,
+        "createdBy" VARCHAR(50) NULL,
+        "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await sequelize.query(
+      'ALTER TABLE quotations ADD COLUMN IF NOT EXISTS "installationTeamId" VARCHAR(50) NULL;'
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.warn('Could not ensure installation_teams / quotations.installationTeamId', { message });
+  }
+};
+
 /**
  * Resolves after DB auth + lightweight schema fixes. Server should await this before binding the port
  * so the first request never hits a missing-column error.
@@ -21,6 +44,7 @@ export const sequelizeBootstrap = (async (): Promise<void> => {
   try {
     await sequelize.authenticate();
     await ensureInstallationScheduledAtColumn();
+    await ensureInstallationTeamsSchema();
     logger.info('PostgreSQL database connected successfully');
     console.log('✅ PostgreSQL database connected successfully');
   } catch (error) {

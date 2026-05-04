@@ -1817,10 +1817,6 @@ export const updateQuotationDiscount = async (req: Request, res: Response): Prom
     const discountAmount = req.body.discountAmount !== undefined && req.body.discountAmount !== null && req.body.discountAmount !== ''
       ? Number(req.body.discountAmount)
       : null;
-    // Handle both number and string inputs (frontend may send string)
-    const discount = typeof req.body.discount === 'string' 
-      ? parseFloat(req.body.discount) 
-      : req.body.discount;
 
     if (discountAmount !== null && (isNaN(discountAmount) || discountAmount < 0)) {
       res.status(400).json({
@@ -1829,18 +1825,6 @@ export const updateQuotationDiscount = async (req: Request, res: Response): Prom
           code: 'VAL_001',
           message: 'Discount amount must be a non-negative number',
           details: [{ field: 'discountAmount', message: 'Discount amount must be a non-negative number' }]
-        }
-      });
-      return;
-    }
-
-    if (discountAmount === null && (isNaN(discount) || discount < 0 || discount > 100)) {
-      res.status(400).json({
-        success: false,
-        error: {
-          code: 'VAL_001',
-          message: 'Discount must be between 0 and 100',
-          details: [{ field: 'discount', message: 'Discount must be between 0 and 100' }]
         }
       });
       return;
@@ -1860,6 +1844,41 @@ export const updateQuotationDiscount = async (req: Request, res: Response): Prom
       res.status(404).json({
         success: false,
         error: { code: 'RES_001', message: 'Quotation not found' }
+      });
+      return;
+    }
+
+    // Handle both number and string inputs (frontend may send string); when only discountAmount is sent, keep saved %.
+    const rawDiscount = req.body.discount;
+    let discount: number =
+      typeof rawDiscount === 'string'
+        ? parseFloat(rawDiscount)
+        : typeof rawDiscount === 'number'
+          ? rawDiscount
+          : NaN;
+    if (discountAmount !== null && (rawDiscount === undefined || rawDiscount === null || rawDiscount === '')) {
+      discount = Number(quotation.discount ?? 0);
+    }
+    if (discountAmount === null) {
+      if (isNaN(discount) || discount < 0 || discount > 100) {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'VAL_001',
+            message: 'Discount must be between 0 and 100',
+            details: [{ field: 'discount', message: 'Discount must be between 0 and 100' }]
+          }
+        });
+        return;
+      }
+    } else if (!isNaN(discount) && (discount < 0 || discount > 100)) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VAL_001',
+          message: 'Discount must be between 0 and 100',
+          details: [{ field: 'discount', message: 'Discount must be between 0 and 100' }]
+        }
       });
       return;
     }
@@ -2774,8 +2793,15 @@ const groupInstallationDocsByType = (docs: any[]) => {
 // Save quotation documents (upsert)
 export const saveQuotationDocuments = async (req: Request, res: Response): Promise<void> => {
   try {
-    const isAccountManager = req.user && (req.user.role === 'account-management' || req.user.role === 'hr');
-    if (!req.dealer && !isAccountManager) {
+    const role = req.user?.role;
+    const isAccountManager = role === 'account-management' || role === 'hr';
+    const isOperationalDocumentsEditor =
+      role === 'baldev' ||
+      role === 'confirmation' ||
+      role === 'admin' ||
+      role === 'super-admin' ||
+      role === 'super-admin-manager';
+    if (!req.dealer && !isAccountManager && !isOperationalDocumentsEditor) {
       res.status(401).json({
         success: false,
         error: { code: 'AUTH_003', message: 'User not authenticated' }
@@ -3215,15 +3241,31 @@ export const downloadQuotationDocumentsZip = async (req: Request, res: Response)
       ]
     });
 
-    if (!quotation || !(quotation as any).documents) {
+    if (!quotation) {
       res.status(404).json({
         success: false,
-        error: { code: 'RES_001', message: 'Quotation/documents not found' }
+        error: { code: 'RES_001', message: 'Quotation not found' }
       });
       return;
     }
 
-    const doc = (quotation as any).documents;
+    // No QuotationDocument row yet: still stream a ZIP (manifest only + empty slots) per product contract.
+    const doc =
+      (quotation as any).documents ||
+      ({
+        aadharFront: null,
+        aadharBack: null,
+        compliantAadharFront: null,
+        compliantAadharBack: null,
+        panImage: null,
+        compliantPanImage: null,
+        electricityBillImage: null,
+        bankPassbookImage: null,
+        compliantBankPassbookImage: null,
+        geotagRoofPhoto: null,
+        customerWithHousePhoto: null,
+        propertyDocumentPdf: null
+      } as Record<string, string | null>);
     const fields: Array<{ source: string; outputBase: string; fallbackExt?: string }> = [
       { source: 'aadharFront', outputBase: 'aadhar-front' },
       { source: 'aadharBack', outputBase: 'aadhar-back' },
@@ -3263,9 +3305,15 @@ export const downloadQuotationDocumentsZip = async (req: Request, res: Response)
       `Quotation ID: ${quotation.id}`,
       `Customer: ${(quotation as any).customer?.firstName || ''} ${(quotation as any).customer?.lastName || ''}`.trim(),
       `Generated At: ${new Date().toISOString()}`,
-      '',
-      'Documents:'
+      ''
     ];
+    if (!(quotation as any).documents) {
+      detailsLines.push(
+        'Note: No quotation_documents row on file yet; slots appear as MISSING until KYC documents are saved.',
+        ''
+      );
+    }
+    detailsLines.push('Documents:');
 
     for (const field of fields) {
       const rawValue = doc[field.source] as string | null | undefined;

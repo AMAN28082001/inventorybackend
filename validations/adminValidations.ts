@@ -95,3 +95,32 @@ export const updateVisitorPasswordSchema = z.object({
   newPassword: z.string().min(6, 'Password must be at least 6 characters long')
 });
 
+export const createInstallationTeamSchema = z.object({
+  name: z.string().min(1).max(255),
+  username: z.string().min(2).max(50),
+  password: z.string().min(6).max(200)
+});
+
+export const patchInstallationTeamSchema = z
+  .object({
+    name: z.string().min(1).max(255).optional(),
+    username: z.string().min(2).max(50).optional(),
+    password: z.string().min(6).max(200).optional(),
+    isActive: z.boolean().optional()
+  })
+  .refine((data) => Object.keys(data).length > 0, {
+    message: 'At least one field is required'
+  });
+
+export const patchQuotationInstallationTeamSchema = z
+  .object({
+    installationTeamId: z.union([z.string().max(50), z.null()]).optional(),
+    installation_team_id: z.union([z.string().max(50), z.null()]).optional()
+  })
+  .refine(
+    (data) =>
+      Object.prototype.hasOwnProperty.call(data, 'installationTeamId') ||
+      Object.prototype.hasOwnProperty.call(data, 'installation_team_id'),
+    { message: 'installationTeamId or installation_team_id is required' }
+  );
+

@@ -16,6 +16,7 @@ import ProductCatalog from './ProductCatalog';
 import PricingRule from './PricingRule';
 import SystemConfig from './SystemConfig';
 import DealerRequest from './DealerRequest';
+import InstallationTeam from './InstallationTeam';
 
 // ================================================================================
 // DEALER ASSOCIATIONS
@@ -114,6 +115,7 @@ export {
   ProductCatalog,
   PricingRule,
   SystemConfig,
-  DealerRequest
+  DealerRequest,
+  InstallationTeam
 };
 

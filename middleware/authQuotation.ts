@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import { Dealer, Visitor } from '../models/index-quotation';
+import { Dealer, Visitor, InstallationTeam } from '../models/index-quotation';
+import { isInstallationTeamJwtRole } from '../utils/installationTeamRole';
 import { AccountManager, User } from '../models';
 
 // Authenticate dealer or admin
@@ -87,6 +88,35 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
           username: visitor.username,
           role: 'visitor'
         };
+        next();
+        return;
+      }
+
+      // Installation field team (JWT; table login issues role installation-team + team id)
+      if (isInstallationTeamJwtRole(decoded.role)) {
+        const payload = decoded as { id: string; installationTeamId?: string };
+        const teamId = (payload.installationTeamId || payload.id || '').trim();
+        const team = teamId ? await InstallationTeam.findByPk(teamId) : null;
+        if (!team || !team.isActive) {
+          res.status(401).json({
+            success: false,
+            error: {
+              code: 'AUTH_005',
+              message: 'Account suspended'
+            }
+          });
+          return;
+        }
+
+        req.user = {
+          id: team.id,
+          username: team.username,
+          role: 'installation-team',
+          installationTeamId: team.id,
+          teamName: team.name,
+          firstName: team.name,
+          lastName: ''
+        } as any;
         next();
         return;
       }
@@ -343,8 +373,9 @@ export const authorizeDealerAdminOrVisitor = (req: Request, res: Response, next:
   next();
 };
 
-export const authorizeInstaller = (req: Request, res: Response, next: NextFunction): void => {
-  if (req.user && req.user.role === 'installer') {
+/** Account-manager installer or installation field team (not dealer admin). */
+export const authorizeInstallerOrInstallationTeam = (req: Request, res: Response, next: NextFunction): void => {
+  if (req.user && (req.user.role === 'installer' || isInstallationTeamJwtRole(req.user.role))) {
     next();
     return;
   }
@@ -354,8 +385,16 @@ export const authorizeInstaller = (req: Request, res: Response, next: NextFuncti
   });
 };
 
+/** @deprecated Use authorizeInstallerOrInstallationTeam */
+export const authorizeInstaller = authorizeInstallerOrInstallationTeam;
+
 export const authorizeInstallerOrAdmin = (req: Request, res: Response, next: NextFunction): void => {
-  if (req.user && (req.user.role === 'installer' || req.user.role === 'admin')) {
+  if (
+    req.user &&
+    (req.user.role === 'installer' ||
+      req.user.role === 'admin' ||
+      isInstallationTeamJwtRole(req.user.role))
+  ) {
     next();
     return;
   }

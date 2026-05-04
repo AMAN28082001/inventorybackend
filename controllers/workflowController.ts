@@ -8,6 +8,21 @@ import { Quotation, QuotationInstallationDoc, Dealer, Customer, QuotationProduct
 import { logError, logInfo } from '../utils/loggerHelper';
 import { INSTALLER_RELEASE_STATUSES, resolveInstallerQueueStatuses } from '../constants/workflowQueues';
 import { toDateOnlyStringOrNull } from '../utils/quotationApiJson';
+import { getInstallationTeamIdFromRequest } from '../utils/installationTeamRole';
+
+const assertInstallationTeamQuotationScope = (req: Request, quotation: Quotation, res: Response): boolean => {
+  const tid = getInstallationTeamIdFromRequest(req);
+  if (!tid) return true;
+  const qtid = quotation.installationTeamId ?? null;
+  if (qtid !== tid) {
+    res.status(403).json({
+      success: false,
+      error: { code: 'AUTH_004', message: 'Insufficient permissions' }
+    });
+    return false;
+  }
+  return true;
+};
 
 const getS3Client = () => {
   const region = process.env.AWS_REGION;
@@ -224,6 +239,10 @@ const getWorkflowQueue = async (
     const sanitizedExtraWhere = { ...extraWhere };
     delete (sanitizedExtraWhere as any).installationReadyForInstaller;
     Object.assign(where, sanitizedExtraWhere);
+    const scopedTeamId = getInstallationTeamIdFromRequest(req);
+    if (scopedTeamId) {
+      where.installationTeamId = scopedTeamId;
+    }
     if (search) {
       where[Op.or] = [
         { id: { [Op.iLike]: `%${search}%` } },
@@ -355,6 +374,8 @@ const getWorkflowQueue = async (
             installationReleasedAt: q.installationReleasedAt || null,
             installationScheduledAt: toDateOnlyStringOrNull(q.installationScheduledAt ?? (q as any).installation_scheduled_at),
             installation_scheduled_at: toDateOnlyStringOrNull(q.installationScheduledAt ?? (q as any).installation_scheduled_at),
+            installationTeamId: q.installationTeamId ?? null,
+            installation_team_id: q.installationTeamId ?? null,
             meteringId: q.meteringId || null,
             meteringActionAt: q.meteringActionAt || null,
             meteringApprovedAt: q.meteringApprovedAt || null,
@@ -688,6 +709,10 @@ export const installerDecision = async (req: Request, res: Response): Promise<vo
     const quotation = await Quotation.findByPk(quotationId);
     if (!quotation) {
       res.status(404).json({ success: false, error: { code: 'RES_001', message: 'Quotation not found' } });
+      return;
+    }
+
+    if (!assertInstallationTeamQuotationScope(req, quotation, res)) {
       return;
     }
 
@@ -1124,6 +1149,10 @@ export const installerUploadDocuments = async (req: Request, res: Response): Pro
     const quotation = await Quotation.findByPk(quotationId);
     if (!quotation) {
       res.status(404).json({ success: false, error: { code: 'RES_001', message: 'Quotation not found' } });
+      return;
+    }
+
+    if (!assertInstallationTeamQuotationScope(req, quotation, res)) {
       return;
     }
 

@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt, { SignOptions } from 'jsonwebtoken';
-import { Dealer, Visitor } from '../models/index-quotation';
+import { Dealer, Visitor, InstallationTeam } from '../models/index-quotation';
 import { User, AccountManager, AccountManagerHistory } from '../models';
 import { logError, logInfo } from '../utils/loggerHelper';
 import { v4 as uuidv4 } from 'uuid';
@@ -146,6 +146,76 @@ export const login = async (req: Request, res: Response): Promise<void> => {
             lastName: visitor.lastName,
             email: visitor.email,
             role: 'visitor'
+          },
+          expiresIn: 3600
+        }
+      });
+      return;
+    }
+
+    // Installation field team (username/password on installation_teams)
+    const installationTeam = await InstallationTeam.findOne({ where: { username } });
+    if (installationTeam) {
+      if (!installationTeam.isActive) {
+        res.status(401).json({
+          success: false,
+          error: {
+            code: 'AUTH_005',
+            message: 'Account is inactive'
+          }
+        });
+        return;
+      }
+
+      const isValidTeamPassword = await bcrypt.compare(password, installationTeam.password);
+      if (!isValidTeamPassword) {
+        logError('Login attempt - invalid password', new Error('Invalid password'), { username, installationTeamId: installationTeam.id });
+        res.status(401).json({
+          success: false,
+          error: {
+            code: 'AUTH_001',
+            message: 'Invalid username or password'
+          }
+        });
+        return;
+      }
+
+      const expiresIn: string = process.env.JWT_EXPIRE || '7d';
+      const token = jwt.sign(
+        {
+          id: installationTeam.id,
+          role: 'installation-team',
+          installationTeamId: installationTeam.id
+        },
+        jwtSecret,
+        { expiresIn } as SignOptions
+      );
+
+      const refreshToken = jwt.sign(
+        {
+          id: installationTeam.id,
+          role: 'installation-team',
+          installationTeamId: installationTeam.id,
+          type: 'refresh'
+        },
+        jwtSecret,
+        { expiresIn: '30d' } as SignOptions
+      );
+
+      res.json({
+        success: true,
+        data: {
+          token,
+          refreshToken,
+          user: {
+            id: installationTeam.id,
+            username: installationTeam.username,
+            role: 'installation-team',
+            installationTeamId: installationTeam.id,
+            teamName: installationTeam.name,
+            firstName: installationTeam.name,
+            lastName: '',
+            isActive: installationTeam.isActive
           },
           expiresIn: 3600
         }
@@ -312,7 +382,11 @@ export const login = async (req: Request, res: Response): Promise<void> => {
     }
 
     // User not found in any system
-    logError('Login attempt - user not found', new Error('User not found in dealers, visitors, account managers, or users'), { username });
+    logError(
+      'Login attempt - user not found',
+      new Error('User not found in dealers, visitors, installation teams, account managers, or users'),
+      { username }
+    );
     res.status(401).json({
       success: false,
       error: {
@@ -362,7 +436,12 @@ export const refreshToken = async (req: Request, res: Response): Promise<void> =
     }
 
     try {
-      const decoded = jwt.verify(refreshToken, jwtSecret) as { id: string; role?: string; type?: string };
+      const decoded = jwt.verify(refreshToken, jwtSecret) as {
+        id: string;
+        role?: string;
+        type?: string;
+        installationTeamId?: string;
+      };
 
       if (decoded.type !== 'refresh') {
         res.status(401).json({
@@ -376,11 +455,14 @@ export const refreshToken = async (req: Request, res: Response): Promise<void> =
       }
 
       const expiresIn: string = process.env.JWT_EXPIRE || '7d';
-      const token = jwt.sign(
-        { id: decoded.id, role: decoded.role },
-        jwtSecret,
-        { expiresIn } as SignOptions
-      );
+      const accessPayload: Record<string, string> = {
+        id: decoded.id,
+        role: decoded.role || ''
+      };
+      if (decoded.installationTeamId) {
+        accessPayload.installationTeamId = decoded.installationTeamId;
+      }
+      const token = jwt.sign(accessPayload, jwtSecret, { expiresIn } as SignOptions);
 
       res.json({
         success: true,

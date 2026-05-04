@@ -18,7 +18,24 @@ interface UserAttributes {
 interface QuotationUserAttributes {
   id: string;
   username: string;
-  role: 'dealer' | 'admin' | 'visitor' | 'account-management' | 'installer' | 'baldev' | 'confirmation' | 'hr' | 'metering' | 'meter' | 'metering-team' | 'mco';
+  role:
+    | 'dealer'
+    | 'admin'
+    | 'visitor'
+    | 'account-management'
+    | 'installer'
+    | 'installation-team'
+    | 'baldev'
+    | 'confirmation'
+    | 'hr'
+    | 'metering'
+    | 'meter'
+    | 'metering-team'
+    | 'mco';
+  installationTeamId?: string;
+  teamName?: string;
+  firstName?: string;
+  lastName?: string;
 }
 
 declare global {
