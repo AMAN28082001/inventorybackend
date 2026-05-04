@@ -170,19 +170,38 @@ export const incompleteVisitSchema = z.object({
   reason: z.string().min(1, 'Reason is required')
 });
 
-export const rescheduleVisitSchema = z.object({
-  reason: z.string().min(1, 'Reason is required'),
-  visitDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'visitDate must be in YYYY-MM-DD format').optional(),
-  visitTime: z.string().optional(),
-  visitStartTime: z.string().optional(),
-  visitEndTime: z.string().optional(),
-  visitTimeRange: z.string().optional()
-}).superRefine((data, ctx) => {
-  normalizeVisitTimeFields(data, ctx, false);
-}).transform((data, ctx) => {
-  const normalized = normalizeVisitTimeFields(data, ctx, false);
-  return normalized ? { ...data, ...normalized } : data;
-});
+const mergeRescheduleBodySnakeCase = (raw: unknown): unknown => {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
+  const o = raw as Record<string, unknown>;
+  return {
+    ...o,
+    visitDate: o.visitDate ?? o.visit_date,
+    visitTime: o.visitTime ?? o.visit_time,
+    visitStartTime: o.visitStartTime ?? o.visit_start_time,
+    visitEndTime: o.visitEndTime ?? o.visit_end_time,
+    visitTimeRange: o.visitTimeRange ?? o.visit_time_range
+  };
+};
+
+export const rescheduleVisitSchema = z.preprocess(
+  mergeRescheduleBodySnakeCase,
+  z
+    .object({
+      reason: z.string().min(1, 'Reason is required'),
+      visitDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'visitDate must be in YYYY-MM-DD format').optional(),
+      visitTime: z.string().optional(),
+      visitStartTime: z.string().optional(),
+      visitEndTime: z.string().optional(),
+      visitTimeRange: z.string().optional()
+    })
+    .superRefine((data, ctx) => {
+      normalizeVisitTimeFields(data, ctx, false);
+    })
+    .transform((data, ctx) => {
+      const normalized = normalizeVisitTimeFields(data, ctx, false);
+      return normalized ? { ...data, ...normalized } : data;
+    })
+);
 
 export const rejectVisitSchema = z.object({
   rejectionReason: z.string().min(1, 'Rejection reason is required')

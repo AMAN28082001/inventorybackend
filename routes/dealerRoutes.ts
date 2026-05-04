@@ -1,5 +1,6 @@
 import express, { Router } from 'express';
 import { registerDealer, getDealerProfile, updateDealerProfile, getDealerStatistics, getVisitors } from '../controllers/dealerController';
+import { rescheduleVisit } from '../controllers/visitController';
 import {
   getDealerCallingQueueCurrent,
   getDealerCallingQueueNext,
@@ -13,6 +14,7 @@ import { authenticate, authorizeDealer } from '../middleware/authQuotation';
 import { validate } from '../middleware/validate';
 import { registerDealerSchema, updateDealerSchema } from '../validations/dealerValidations';
 import { dealerLeadActionSchema } from '../validations/callingLeadValidations';
+import { rescheduleVisitSchema } from '../validations/visitValidations';
 
 const router: Router = express.Router();
 
@@ -297,6 +299,10 @@ router.get('/me/calling-actions/dialled', getDealerDialledActions);
 router.get('/me/calling-actions/connected', getDealerConnectedActions);
 router.get('/me/calling-actions/not-connected', getDealerNotConnectedActions);
 router.patch('/me/calling-queue/:leadId/action', validate(dealerLeadActionSchema), updateDealerCallingQueueAction);
+
+/** Dealer dashboard: same behavior as `PATCH /api/visits/:visitId/reschedule` (frontend fallbacks). */
+router.patch('/visits/:visitId/reschedule', validate(rescheduleVisitSchema), rescheduleVisit);
+router.patch('/me/visits/:visitId/reschedule', validate(rescheduleVisitSchema), rescheduleVisit);
 
 export default router;
 

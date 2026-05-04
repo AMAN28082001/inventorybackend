@@ -22,7 +22,7 @@ import {
   saveMeteringDetails,
   saveMeteringMcoDocuments
 } from '../controllers/workflowController';
-import { getVisitsForQuotation } from '../controllers/visitController';
+import { getVisitsForQuotation, rescheduleVisit } from '../controllers/visitController';
 import {
   authenticate,
   authorizeDealer,
@@ -37,6 +37,7 @@ import { validate } from '../middleware/validate';
 import { logRequestBeforeValidation, logRequestAfterValidation } from '../middleware/requestLogger';
 import { createQuotationSchema, updateDiscountSchema, updateProductsSchema, updatePricingSchema, updatePaymentDetailsSchema, updatePaymentModeSchema, updateInstallationReleaseSchema, updateInstallationScheduledAtSchema } from '../validations/quotationValidations';
 import { meteringDetailsSchema, meteringMcoDocumentsSchema, meteringStatusSchema } from '../validations/workflowValidations';
+import { rescheduleVisitSchema } from '../validations/visitValidations';
 
 const router: Router = express.Router();
 
@@ -805,6 +806,13 @@ router.get('/:quotationId/documents/zip', authorizeDealerAdminOrVisitor, downloa
  *         description: Unauthorized
  */
 router.get('/:quotationId/visits', rejectAccountManager, authorizeDealerAdminOrVisitor, getVisitsForQuotation);
+router.patch(
+  '/:quotationId/visits/:visitId/reschedule',
+  rejectAccountManager,
+  authorizeDealer,
+  validate(rescheduleVisitSchema),
+  rescheduleVisit
+);
 router.get('/:quotationId/workflow-history', authorizeDealerAdminOrVisitor, getWorkflowHistory);
 
 export default router;

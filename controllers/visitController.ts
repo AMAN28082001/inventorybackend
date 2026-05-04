@@ -784,22 +784,30 @@ export const markVisitIncomplete = async (req: Request, res: Response): Promise<
   }
 };
 
-// Reschedule visit
+// Reschedule visit (visitor: must be assigned; dealer/admin: visit must belong to their quotation)
 export const rescheduleVisit = async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!req.visitor) {
-      res.status(401).json({
+    const isVisitor = !!req.visitor;
+    const isDealer =
+      !!req.dealer && (req.dealer.role === 'dealer' || req.dealer.role === 'admin');
+
+    if (!isVisitor && !isDealer) {
+      res.status(403).json({
         success: false,
-        error: { code: 'AUTH_003', message: 'User not authenticated' }
+        error: { code: 'AUTH_004', message: 'Insufficient permissions' }
       });
       return;
     }
 
     const { visitId } = req.params;
+    const quotationIdFromPath = (req.params as { quotationId?: string }).quotationId;
     const { reason, visitDate, visitTime } = req.body;
 
     const visit = await Visit.findByPk(visitId, {
-      include: [{ model: VisitAssignment, as: 'assignments' }]
+      include: [
+        { model: VisitAssignment, as: 'assignments', required: false },
+        { model: Quotation, as: 'quotation', required: false }
+      ]
     });
 
     if (!visit) {
@@ -810,14 +818,41 @@ export const rescheduleVisit = async (req: Request, res: Response): Promise<void
       return;
     }
 
-    const visitAny = visit as any;
-    const assignment = (visitAny.assignments || []).find((a: any) => a.visitorId === req.visitor!.id);
-    if (!assignment) {
-      res.status(403).json({
+    if (quotationIdFromPath && visit.quotationId !== quotationIdFromPath) {
+      res.status(404).json({
         success: false,
-        error: { code: 'AUTH_004', message: 'You are not assigned to this visit' }
+        error: { code: 'RES_001', message: 'Visit not found for this quotation' }
       });
       return;
+    }
+
+    if (isVisitor) {
+      const visitAny = visit as any;
+      const assignment = (visitAny.assignments || []).find((a: any) => a.visitorId === req.visitor!.id);
+      if (!assignment) {
+        res.status(403).json({
+          success: false,
+          error: { code: 'AUTH_004', message: 'You are not assigned to this visit' }
+        });
+        return;
+      }
+    } else if (isDealer) {
+      const q = (visit as any).quotation as Quotation | undefined;
+      const dealerId = q?.dealerId;
+      if (!dealerId) {
+        res.status(403).json({
+          success: false,
+          error: { code: 'AUTH_004', message: 'Visit has no associated quotation' }
+        });
+        return;
+      }
+      if (req.dealer!.role !== 'admin' && dealerId !== req.dealer!.id) {
+        res.status(403).json({
+          success: false,
+          error: { code: 'AUTH_004', message: 'You can only reschedule visits for your own quotations' }
+        });
+        return;
+      }
     }
 
     const updatePayload: any = {
@@ -828,11 +863,13 @@ export const rescheduleVisit = async (req: Request, res: Response): Promise<void
     if (visitTime !== undefined) updatePayload.visitTime = visitTime;
 
     await visit.update(updatePayload);
+    await visit.reload();
 
     res.json({
       success: true,
       data: {
         id: visit.id,
+        quotationId: visit.quotationId,
         status: visit.status,
         visitDate: visit.visitDate,
         ...getVisitTimeFields(visit.visitTime),

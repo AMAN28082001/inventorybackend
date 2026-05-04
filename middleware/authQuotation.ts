@@ -289,6 +289,25 @@ export const authorizeVisitor = (req: Request, res: Response, next: NextFunction
   next();
 };
 
+/** Visitor JWT or quotation-system dealer/admin (for visit reschedule from dealer dashboard). */
+export const authorizeVisitorOrQuotationsDealer = (req: Request, res: Response, next: NextFunction): void => {
+  if (req.visitor) {
+    next();
+    return;
+  }
+  if (req.dealer && (req.dealer.role === 'dealer' || req.dealer.role === 'admin')) {
+    next();
+    return;
+  }
+  res.status(403).json({
+    success: false,
+    error: {
+      code: 'AUTH_004',
+      message: 'Insufficient permissions. Visitor or dealer access required.'
+    }
+  });
+};
+
 // Authorize dealer, admin, visitor, or account manager (for read operations)
 export const authorizeDealerAdminOrVisitor = (req: Request, res: Response, next: NextFunction): void => {
   // Allow dealers/admins, visitors, or account managers

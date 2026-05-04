@@ -11,7 +11,7 @@ import {
   rejectVisit,
   deleteVisit
 } from '../controllers/visitController';
-import { authenticate, authorizeDealer, authorizeVisitor } from '../middleware/authQuotation';
+import { authenticate, authorizeDealer, authorizeVisitor, authorizeVisitorOrQuotationsDealer } from '../middleware/authQuotation';
 import { validate } from '../middleware/validate';
 import {
   createVisitSchema,
@@ -345,7 +345,13 @@ router.patch('/:visitId/incomplete', authenticate, authorizeVisitor, validate(in
  *     security:
  *       - bearerAuth: []
  */
-router.patch('/:visitId/reschedule', authenticate, authorizeVisitor, validate(rescheduleVisitSchema), rescheduleVisit);
+router.patch(
+  '/:visitId/reschedule',
+  authenticate,
+  authorizeVisitorOrQuotationsDealer,
+  validate(rescheduleVisitSchema),
+  rescheduleVisit
+);
 
 /**
  * @swagger
