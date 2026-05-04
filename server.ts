@@ -5,6 +5,7 @@ import dotenv from 'dotenv';
 import swaggerUi from 'swagger-ui-express';
 import { swaggerSpec } from './config/swagger';
 import logger from './config/logger';
+import { sequelizeBootstrap } from './config/sequelizeBootstrap';
 import { attachRealtimeServer, emitRealtime, realtimeEvents } from './utils/realtime';
 
 dotenv.config();
@@ -206,21 +207,23 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction): void =>
   });
 });
 
-// Start HTTP + WebSocket server
+// Start HTTP + WebSocket server after DB is ready (avoids 500s when schema lags the Sequelize model)
 const httpServer = attachRealtimeServer(app, allowedOrigins);
-httpServer.listen(PORT, () => {
-  logger.info('Server started', {
-    port: PORT,
-    environment: process.env.NODE_ENV || 'development',
-    apiBaseUrl: `http://localhost:${PORT}/api`,
-    swaggerUrl: `http://localhost:${PORT}/api-docs`,
-    websocketPath: `http://localhost:${PORT}/socket.io`
-  });
+void sequelizeBootstrap.then(() => {
+  httpServer.listen(PORT, () => {
+    logger.info('Server started', {
+      port: PORT,
+      environment: process.env.NODE_ENV || 'development',
+      apiBaseUrl: `http://localhost:${PORT}/api`,
+      swaggerUrl: `http://localhost:${PORT}/api-docs`,
+      websocketPath: `http://localhost:${PORT}/socket.io`
+    });
 
-  console.log(`🚀 Server is running on port ${PORT}`);
-  console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`🔗 API Base URL: http://localhost:${PORT}/api`);
-  console.log(`📚 Swagger UI: http://localhost:${PORT}/api-docs`);
+    console.log(`🚀 Server is running on port ${PORT}`);
+    console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`🔗 API Base URL: http://localhost:${PORT}/api`);
+    console.log(`📚 Swagger UI: http://localhost:${PORT}/api-docs`);
+  });
 });
 
 export default app;

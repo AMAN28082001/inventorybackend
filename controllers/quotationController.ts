@@ -1034,6 +1034,23 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
   }
 };
 
+/** Allowed ORDER BY columns for quotation lists (avoids invalid column SQL errors). */
+const QUOTATION_LIST_SORT_FIELDS = new Set([
+  'createdAt',
+  'updatedAt',
+  'id',
+  'status',
+  'validUntil',
+  'dealerId',
+  'subtotal',
+  'totalAmount',
+  'finalAmount',
+  'discount',
+  'approvedAt',
+  'installationStatus',
+  'installationReleasedAt'
+]);
+
 // Get quotations with pagination
 export const getQuotations = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -1048,8 +1065,10 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
     const endDate = req.query.endDate as string;
     const paymentType = (req.query.paymentType as string | undefined) || (req.query.paymentMode as string | undefined);
     const paymentStatus = req.query.paymentStatus as string | undefined;
-    const sortBy = (req.query.sortBy as string) || 'createdAt';
-    const sortOrder = (req.query.sortOrder as string) || 'desc';
+    const requestedSortBy = ((req.query.sortBy as string) || 'createdAt').trim();
+    const safeSortBy = QUOTATION_LIST_SORT_FIELDS.has(requestedSortBy) ? requestedSortBy : 'createdAt';
+    const sortDirRaw = ((req.query.sortOrder as string) || 'desc').toUpperCase();
+    const sortOrder = sortDirRaw === 'ASC' ? 'ASC' : 'DESC';
 
     // Check if user is account manager
     const isAccountManager = req.user && (req.user.role === 'account-management' || req.user.role === 'hr');
@@ -1220,7 +1239,7 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         ],
         limit,
         offset,
-        order: [[sortBy, sortOrder.toUpperCase()]]
+        order: [[safeSortBy, sortOrder]]
       });
     } else {
       quotations = await Quotation.findAndCountAll({
@@ -1255,7 +1274,7 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         ],
         limit,
         offset,
-        order: [[sortBy, sortOrder.toUpperCase()]]
+        order: [[safeSortBy, sortOrder]]
       });
     }
 
