@@ -24,6 +24,7 @@ import {
   listInstallationTeams,
   createInstallationTeam,
   patchInstallationTeam,
+  patchInstallationTeamPassword,
   deleteInstallationTeam,
   patchQuotationInstallationTeam
 } from '../controllers/installationTeamController';
@@ -38,7 +39,8 @@ import {
   updateVisitorPasswordSchema,
   createInstallationTeamSchema,
   patchInstallationTeamSchema,
-  patchQuotationInstallationTeamSchema
+  patchQuotationInstallationTeamSchema,
+  patchInstallationTeamPasswordSchema
 } from '../validations/adminValidations';
 import { updateInstallationScheduledAtSchema } from '../validations/quotationValidations';
 import { adminUpdateDealerSchema } from '../validations/dealerValidations';
@@ -83,10 +85,54 @@ router.patch(
   validate(patchQuotationInstallationTeamSchema),
   patchQuotationInstallationTeam
 );
+router.patch(
+  '/quotations/:quotationId/installation_team',
+  validate(patchQuotationInstallationTeamSchema),
+  patchQuotationInstallationTeam
+);
 router.get('/installation-teams', listInstallationTeams);
 router.post('/installation-teams', validate(createInstallationTeamSchema), createInstallationTeam);
 router.patch('/installation-teams/:teamId', validate(patchInstallationTeamSchema), patchInstallationTeam);
+router.patch(
+  '/installation-teams/:teamId/password',
+  validate(patchInstallationTeamPasswordSchema),
+  patchInstallationTeamPassword
+);
+router.patch(
+  '/installation-teams/:teamId/reset-password',
+  validate(patchInstallationTeamPasswordSchema),
+  patchInstallationTeamPassword
+);
 router.delete('/installation-teams/:teamId', deleteInstallationTeam);
+// Compatibility aliases used by some frontend builds.
+router.get('/installation/team-logins', listInstallationTeams);
+router.get('/installation-team-logins', listInstallationTeams);
+router.post('/installation/team-logins', validate(createInstallationTeamSchema), createInstallationTeam);
+router.post('/installation-team-logins', validate(createInstallationTeamSchema), createInstallationTeam);
+router.patch('/installation/team-logins/:teamId', validate(patchInstallationTeamSchema), patchInstallationTeam);
+router.patch('/installation-team-logins/:teamId', validate(patchInstallationTeamSchema), patchInstallationTeam);
+router.patch(
+  '/installation/team-logins/:teamId/password',
+  validate(patchInstallationTeamPasswordSchema),
+  patchInstallationTeamPassword
+);
+router.patch(
+  '/installation-team-logins/:teamId/password',
+  validate(patchInstallationTeamPasswordSchema),
+  patchInstallationTeamPassword
+);
+router.patch(
+  '/installation/team-logins/:teamId/reset-password',
+  validate(patchInstallationTeamPasswordSchema),
+  patchInstallationTeamPassword
+);
+router.patch(
+  '/installation-team-logins/:teamId/reset-password',
+  validate(patchInstallationTeamPasswordSchema),
+  patchInstallationTeamPassword
+);
+router.delete('/installation/team-logins/:teamId', deleteInstallationTeam);
+router.delete('/installation-team-logins/:teamId', deleteInstallationTeam);
 router.get('/leads/uploads/:batchId', getHrLeadUploadBatchRows);
 
 /**

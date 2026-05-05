@@ -451,7 +451,21 @@ const getWorkflowQueue = async (
             installerApprovedAt: q.installerApprovedAt || null,
             documents: mapWorkflowDocumentsForFrontend(rawInstallationDocs),
             createdAt: q.createdAt,
-            validUntil: q.validUntil
+            validUntil: q.validUntil,
+            // Nested alias for clients that read `row.quotation.*` (must echo team id for field-team portals).
+            quotation: {
+              id: q.id,
+              status: q.status,
+              installationStatus: q.installationStatus,
+              installation_status: q.installationStatus,
+              installationTeamId: q.installationTeamId ?? null,
+              installation_team_id: q.installationTeamId ?? null,
+              installationReadyForInstaller: Boolean(q.installationReadyForInstaller),
+              installation_ready_for_installer: Boolean(q.installationReadyForInstaller),
+              installationReleasedAt: q.installationReleasedAt || null,
+              installationScheduledAt: toDateOnlyStringOrNull(q.installationScheduledAt ?? (q as any).installation_scheduled_at),
+              installation_scheduled_at: toDateOnlyStringOrNull(q.installationScheduledAt ?? (q as any).installation_scheduled_at)
+            }
           };
         }),
         pagination: {

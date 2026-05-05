@@ -668,17 +668,20 @@ export const completeVisit = async (req: Request, res: Response): Promise<void> 
     const imageFiles = files.images || [];
     const rowDiagramFile = (files.rowDiagramImage || [])[0];
 
-    const existingImageUrls = parseExistingImages(existingImages);
+    const storedVisitImages = Array.isArray(visit.images) ? visit.images : [];
+    const existingImageUrls = existingImages !== undefined
+      ? parseExistingImages(existingImages)
+      : storedVisitImages;
     const uploadedImageUrls = imageFiles
       .map((file) => (file as any).s3Location || null)
       .filter((url): url is string => !!url);
-    const mergedImages = [...existingImageUrls, ...uploadedImageUrls];
+    const mergedImages = Array.from(new Set([...existingImageUrls, ...uploadedImageUrls]));
 
     const rowDiagramImageUrl =
       (rowDiagramFile && (rowDiagramFile as any).s3Location) ||
       (typeof existingRowDiagramImage === 'string' && existingRowDiagramImage.trim() !== ''
         ? existingRowDiagramImage.trim()
-        : null);
+        : ((visit as any).rowDiagramImage || null));
 
     await visit.update({
       status: 'completed',

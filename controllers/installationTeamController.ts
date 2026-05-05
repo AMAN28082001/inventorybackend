@@ -144,6 +144,40 @@ export const patchInstallationTeam = async (req: Request, res: Response): Promis
   }
 };
 
+export const patchInstallationTeamPassword = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { teamId } = req.params;
+    const team = await InstallationTeam.findByPk(teamId);
+    if (!team) {
+      res.status(404).json({ success: false, error: { code: 'RES_001', message: 'Team not found' } });
+      return;
+    }
+
+    const body = req.body as { newPassword?: string; password?: string };
+    const nextPassword = String(body.newPassword ?? body.password ?? '').trim();
+    if (!nextPassword) {
+      res.status(400).json({
+        success: false,
+        error: { code: 'VAL_001', message: 'newPassword or password is required' }
+      });
+      return;
+    }
+
+    await team.update({ password: await bcrypt.hash(nextPassword, 10) });
+    res.json({
+      success: true,
+      data: {
+        id: team.id,
+        passwordUpdated: true,
+        updatedAt: team.updatedAt
+      }
+    });
+  } catch (error) {
+    logError('Patch installation team password error', error, { teamId: req.params.teamId });
+    res.status(500).json({ success: false, error: { code: 'SYS_001', message: 'Internal server error' } });
+  }
+};
+
 export const deleteInstallationTeam = async (req: Request, res: Response): Promise<void> => {
   try {
     const { teamId } = req.params;

@@ -577,6 +577,24 @@ const promoteQueuedLeadIfSlotAvailable = async (
 
   if (activeCount >= activeLimitPerDealer) return;
 
+  const resolveSystemAssignedByUserId = async (): Promise<string> => {
+    const fallback = await User.findOne({
+      where: {
+        role: {
+          [Op.in]: ['super-admin', 'super-admin-manager', 'admin']
+        },
+        is_active: true
+      },
+      attributes: ['id'],
+      order: [['created_at', 'ASC']],
+      transaction
+    });
+    if (!fallback) {
+      throw new Error('No active admin user found for assignment fallback');
+    }
+    return fallback.id;
+  };
+
   const queued = await DealerLeadAssignment.findOne({
     where: {
       dealerId,
@@ -587,7 +605,69 @@ const promoteQueuedLeadIfSlotAvailable = async (
     lock: transaction.LOCK.UPDATE
   });
 
-  if (!queued) return;
+  if (!queued) {
+    // If this dealer has capacity but no dealer-specific queue, claim one oldest unassigned pool lead.
+    const unassignedLead = await CallingLead.findOne({
+      where: Sequelize.literal(`
+        NOT EXISTS (
+          SELECT 1 FROM "dealer_lead_assignments" AS da
+          WHERE da."leadId" = "CallingLead"."id"
+        )
+      `),
+      order: [['createdAt', 'ASC']],
+      transaction,
+      lock: transaction.LOCK.UPDATE
+    });
+
+    if (unassignedLead) {
+      const assignedBy = await resolveSystemAssignedByUserId();
+      await DealerLeadAssignment.create(
+        {
+          id: uuidv4(),
+          leadId: unassignedLead.id,
+          dealerId,
+          assignedBy,
+          assignedAt: new Date(),
+          status: 'assigned'
+        },
+        { transaction }
+      );
+      return;
+    }
+
+    // Rebalance fallback: if dealer has no own queued rows and no truly-unassigned leads,
+    // pull the oldest queued lead from global backlog so idle dealers are not starved.
+    const globalQueued = await DealerLeadAssignment.findOne({
+      where: {
+        [Op.and]: [
+          {
+            dealerId: { [Op.ne]: dealerId },
+            status: 'queued'
+          },
+          LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE
+        ]
+      },
+      order: [['assignedAt', 'ASC'], ['createdAt', 'ASC']],
+      transaction,
+      lock: transaction.LOCK.UPDATE
+    });
+
+    if (!globalQueued) return;
+
+    await globalQueued.update(
+      {
+        dealerId,
+        status: 'assigned',
+        assignedAt: new Date(),
+        action: null,
+        callRemark: null,
+        nextFollowUpAt: null,
+        actionAt: null
+      },
+      { transaction }
+    );
+    return;
+  }
 
   await queued.update(
     {

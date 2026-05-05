@@ -124,3 +124,12 @@ export const patchQuotationInstallationTeamSchema = z
     { message: 'installationTeamId or installation_team_id is required' }
   );
 
+export const patchInstallationTeamPasswordSchema = z
+  .object({
+    newPassword: z.string().min(6).max(200).optional(),
+    password: z.string().min(6).max(200).optional()
+  })
+  .refine((data) => Boolean(data.newPassword || data.password), {
+    message: 'newPassword or password is required'
+  });
+

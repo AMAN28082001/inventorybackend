@@ -16,6 +16,7 @@ import {
   getProductCatalog,
   saveQuotationDocuments
 } from '../controllers/quotationController';
+import { patchQuotationInstallationTeam } from '../controllers/installationTeamController';
 import {
   getWorkflowHistory,
   meteringStatusUpdate,
@@ -36,6 +37,7 @@ import {
 import { validate } from '../middleware/validate';
 import { logRequestBeforeValidation, logRequestAfterValidation } from '../middleware/requestLogger';
 import { createQuotationSchema, updateDiscountSchema, updateProductsSchema, updatePricingSchema, updatePaymentDetailsSchema, updatePaymentModeSchema, updateInstallationReleaseSchema, updateInstallationScheduledAtSchema } from '../validations/quotationValidations';
+import { patchQuotationInstallationTeamSchema } from '../validations/adminValidations';
 import { meteringDetailsSchema, meteringMcoDocumentsSchema, meteringStatusSchema } from '../validations/workflowValidations';
 import { rescheduleVisitSchema } from '../validations/visitValidations';
 
@@ -695,6 +697,18 @@ router.patch('/:quotationId/installation-release', authorizeDealerOrAccountManag
 router.patch('/:quotationId/installation/ready', authorizeDealerOrAccountManager, validate(updateInstallationReleaseSchema), updateQuotationInstallationRelease);
 router.patch('/:quotationId/installation-scheduled-at', authorizeAdmin, validate(updateInstallationScheduledAtSchema), updateQuotationInstallationScheduledAt);
 router.patch('/:quotationId/installation-schedule', authorizeAdmin, validate(updateInstallationScheduledAtSchema), updateQuotationInstallationScheduledAt);
+router.patch(
+  '/:quotationId/installation-team',
+  authorizeAdmin,
+  validate(patchQuotationInstallationTeamSchema),
+  patchQuotationInstallationTeam
+);
+router.patch(
+  '/:quotationId/installation_team',
+  authorizeAdmin,
+  validate(patchQuotationInstallationTeamSchema),
+  patchQuotationInstallationTeam
+);
 
 /** Fallback for stricter gateways: same handler as `PATCH /api/metering/quotations/:id/status`. */
 router.patch(
