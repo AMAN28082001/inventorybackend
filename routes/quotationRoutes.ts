@@ -91,7 +91,10 @@ const documentsUpload = multer({
     }
     cb(new Error('Only image or PDF uploads are allowed'));
   },
-  limits: { fileSize: 10 * 1024 * 1024 }
+  limits: {
+    fileSize: 10 * 1024 * 1024,
+    files: 25
+  }
 });
 
 const DOCUMENT_UPLOAD_FIELDS: multer.Field[] = [

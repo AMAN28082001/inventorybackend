@@ -23,8 +23,6 @@ const ADDRESS_KEYS = ['address'];
 const CITY_KEYS = ['city'];
 const STATE_KEYS = ['state', 'data ref. / state', 'data ref/state', 'data ref state'];
 const NOTE_KEYS = ['customernote', 'customer note', 'note', 'notes', 'remark', 'remarks'];
-// Include legacy "active" so old assignments still surface in Current Lead.
-const ACTIVE_STATUSES = ['active', 'assigned', 'in_progress'];
 const DEFAULT_ACTIVE_LIMIT_PER_DEALER = Number(process.env.ACTIVE_LIMIT_PER_DEALER || 1);
 const CALLING_ACTION_FILTER_RANGES = ['daily', 'weekly', 'monthly', 'last_month', 'all'] as const;
 const REPORT_ACTIONS = ['called', 'follow_up', 'not_interested', 'rescheduled'] as const;
@@ -71,6 +69,59 @@ const LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE = Sequelize.literal(`
       )
   )
 `);
+
+const escapeSqlString = (value: string) => value.replace(/'/g, "''");
+
+const batchDealerEligibilityPredicate = (dealerId: string, batchAlias: string) => {
+  const escapedDealerId = escapeSqlString(dealerId);
+  return `
+    EXISTS (
+      SELECT 1
+      FROM jsonb_array_elements(COALESCE(${batchAlias}."assignedDealers", '[]'::jsonb)) AS ad(value)
+      LEFT JOIN "dealers" AS d ON d."id" = '${escapedDealerId}'
+      WHERE (
+        -- Legacy: assignedDealers is array of strings (ids, usernames, names)
+        jsonb_typeof(ad.value) = 'string'
+        AND lower(trim(BOTH '"' FROM ad.value::text)) IN (
+          lower(trim('${escapedDealerId}')),
+          lower(trim(COALESCE(d."username", ''))),
+          lower(trim(COALESCE(d."firstName", ''))),
+          lower(trim(COALESCE(d."lastName", ''))),
+          lower(trim(concat_ws(' ', COALESCE(d."firstName", ''), COALESCE(d."lastName", ''))))
+        )
+      ) OR (
+        -- Historical/alternate format: assignedDealers is array of objects
+        jsonb_typeof(ad.value) = 'object'
+        AND (
+          lower(trim(COALESCE(ad.value->>'id', ''))) = lower(trim('${escapedDealerId}'))
+          OR lower(trim(COALESCE(ad.value->>'dealerId', ''))) = lower(trim('${escapedDealerId}'))
+          OR lower(trim(COALESCE(ad.value->>'dealer_id', ''))) = lower(trim('${escapedDealerId}'))
+          OR lower(trim(COALESCE(ad.value->>'username', ''))) = lower(trim(COALESCE(d."username", '')))
+          OR lower(trim(COALESCE(ad.value->>'name', ''))) IN (
+            lower(trim(COALESCE(d."firstName", ''))),
+            lower(trim(COALESCE(d."lastName", ''))),
+            lower(trim(concat_ws(' ', COALESCE(d."firstName", ''), COALESCE(d."lastName", ''))))
+          )
+        )
+      )
+    )
+  `;
+};
+
+const dealerBatchEligibilityClause = (dealerId: string) =>
+  Sequelize.literal(`
+    EXISTS (
+      SELECT 1
+      FROM "calling_leads" AS cl
+      LEFT JOIN "calling_lead_upload_batches" AS b
+        ON b."id" = cl."batchId"
+      WHERE cl."id" = "DealerLeadAssignment"."leadId"
+        AND (
+          cl."batchId" IS NULL
+          OR ${batchDealerEligibilityPredicate(dealerId, 'b')}
+        )
+    )
+  `);
 
 const normalizeMobile = (value: unknown): string | null => {
   if (value === undefined || value === null) return null;
@@ -563,19 +614,9 @@ const promoteQueuedLeadIfSlotAvailable = async (
   activeLimitPerDealer: number,
   transaction: any
 ): Promise<void> => {
-  const now = new Date();
-  const activeCount = await DealerLeadAssignment.count({
-    where: {
-      dealerId,
-      [Op.or]: [
-        { status: { [Op.in]: ACTIVE_STATUSES } },
-        { status: 'rescheduled', nextFollowUpAt: { [Op.lte]: now } }
-      ]
-    },
-    transaction
-  });
-
-  if (activeCount >= activeLimitPerDealer) return;
+  // No assignment cap: selected-batch leads should keep flowing to eligible dealers.
+  // Keep argument for backward compatibility with callers.
+  void activeLimitPerDealer;
 
   const resolveSystemAssignedByUserId = async (): Promise<string> => {
     const fallback = await User.findOne({
@@ -606,14 +647,30 @@ const promoteQueuedLeadIfSlotAvailable = async (
   });
 
   if (!queued) {
-    // If this dealer has capacity but no dealer-specific queue, claim one oldest unassigned pool lead.
+    // If this dealer has capacity but no dealer-specific queue, claim one oldest unassigned
+    // lead from a batch where this dealer is explicitly eligible.
     const unassignedLead = await CallingLead.findOne({
-      where: Sequelize.literal(`
-        NOT EXISTS (
-          SELECT 1 FROM "dealer_lead_assignments" AS da
-          WHERE da."leadId" = "CallingLead"."id"
-        )
-      `),
+      where: {
+        [Op.and]: [
+          Sequelize.literal(`
+            NOT EXISTS (
+              SELECT 1 FROM "dealer_lead_assignments" AS da
+              WHERE da."leadId" = "CallingLead"."id"
+            )
+          `),
+          Sequelize.literal(`
+            (
+              "CallingLead"."batchId" IS NULL
+              OR EXISTS (
+                SELECT 1
+                FROM "calling_lead_upload_batches" AS b
+                WHERE b."id" = "CallingLead"."batchId"
+                  AND ${batchDealerEligibilityPredicate(dealerId, 'b')}
+              )
+            )
+          `)
+        ]
+      },
       order: [['createdAt', 'ASC']],
       transaction,
       lock: transaction.LOCK.UPDATE
@@ -635,16 +692,17 @@ const promoteQueuedLeadIfSlotAvailable = async (
       return;
     }
 
-    // Rebalance fallback: if dealer has no own queued rows and no truly-unassigned leads,
-    // pull the oldest queued lead from global backlog so idle dealers are not starved.
-    const globalQueued = await DealerLeadAssignment.findOne({
+    // Rebalance within eligible selected batches only:
+    // if no unassigned lead exists, move the oldest pending eligible lead from another dealer.
+    const reassignable = await DealerLeadAssignment.findOne({
       where: {
         [Op.and]: [
           {
             dealerId: { [Op.ne]: dealerId },
-            status: 'queued'
+            status: { [Op.in]: ['queued', 'assigned', 'active'] }
           },
-          LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE
+          LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE,
+          dealerBatchEligibilityClause(dealerId)
         ]
       },
       order: [['assignedAt', 'ASC'], ['createdAt', 'ASC']],
@@ -652,20 +710,20 @@ const promoteQueuedLeadIfSlotAvailable = async (
       lock: transaction.LOCK.UPDATE
     });
 
-    if (!globalQueued) return;
-
-    await globalQueued.update(
-      {
-        dealerId,
-        status: 'assigned',
-        assignedAt: new Date(),
-        action: null,
-        callRemark: null,
-        nextFollowUpAt: null,
-        actionAt: null
-      },
-      { transaction }
-    );
+    if (reassignable) {
+      await reassignable.update(
+        {
+          dealerId,
+          status: 'assigned',
+          assignedAt: new Date(),
+          action: null,
+          callRemark: null,
+          nextFollowUpAt: null,
+          actionAt: null
+        },
+        { transaction }
+      );
+    }
     return;
   }
 
@@ -1010,7 +1068,8 @@ const buildCallableQueue = async (dealerId: string, limit = 500) => {
             { status: 'rescheduled', nextFollowUpAt: { [Op.lte]: now } }
           ]
         },
-        LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE
+        LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE,
+        dealerBatchEligibilityClause(dealerId)
       ]
     },
     include: [{ model: CallingLead, as: 'lead' }],
@@ -1037,7 +1096,8 @@ const buildCallableQueue = async (dealerId: string, limit = 500) => {
               { status: 'rescheduled', nextFollowUpAt: { [Op.lte]: now } }
             ]
           },
-          LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE
+          LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE,
+          dealerBatchEligibilityClause(dealerId)
         ]
       },
       include: [{ model: CallingLead, as: 'lead' }],
@@ -1097,23 +1157,24 @@ const buildDealerQueueCounts = async (dealerId: string) => {
             dealerId,
             status: { [Op.in]: ['active', 'assigned', 'in_progress'] }
           },
-          LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE
+          LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE,
+          dealerBatchEligibilityClause(dealerId)
         ]
       }
     }),
     DealerLeadAssignment.count({
       where: {
-        [Op.and]: [{ dealerId, status: 'queued' }, LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE]
+        [Op.and]: [{ dealerId, status: 'queued' }, LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE, dealerBatchEligibilityClause(dealerId)]
       }
     }),
     DealerLeadAssignment.count({
       where: {
-        [Op.and]: [{ dealerId, status: 'rescheduled' }, LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE]
+        [Op.and]: [{ dealerId, status: 'rescheduled' }, LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE, dealerBatchEligibilityClause(dealerId)]
       }
     }),
     DealerLeadAssignment.count({
       where: {
-        [Op.and]: [{ dealerId, status: 'completed' }, LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE]
+        [Op.and]: [{ dealerId, status: 'completed' }, LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE, dealerBatchEligibilityClause(dealerId)]
       }
     })
   ]);
@@ -1131,7 +1192,8 @@ const buildScheduledLeads = async (dealerId: string) => {
           status: 'rescheduled',
           nextFollowUpAt: { [Op.gt]: now }
         },
-        LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE
+        LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE,
+        dealerBatchEligibilityClause(dealerId)
       ]
     },
     include: [{ model: CallingLead, as: 'lead' }],

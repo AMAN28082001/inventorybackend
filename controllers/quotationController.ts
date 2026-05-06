@@ -3055,6 +3055,39 @@ export const saveQuotationDocuments = async (req: Request, res: Response): Promi
       )
     };
 
+    // KYC form validation (dealer/account-management upload flow). Final-confirmation-only uploads
+    // by operational roles should remain partial and not require base KYC fields.
+    const isKycEditor = Boolean(req.dealer) || isAccountManager;
+    if (isKycEditor) {
+      const details: Array<{ field: string; message: string }> = [];
+      if (!payload.phoneNumber || !String(payload.phoneNumber).trim()) {
+        details.push({ field: 'phoneNumber', message: 'phoneNumber is required' });
+      }
+      if (!payload.electricityKno || !String(payload.electricityKno).trim()) {
+        details.push({ field: 'electricityKno', message: 'electricityKno is required' });
+      }
+      if (!payload.emailId || !String(payload.emailId).trim()) {
+        details.push({ field: 'emailId', message: 'emailId is required' });
+      } else {
+        const email = String(payload.emailId).trim();
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(email)) {
+          details.push({ field: 'emailId', message: 'Invalid email format' });
+        }
+      }
+      if (details.length > 0) {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'Invalid quotation document payload',
+            details
+          }
+        });
+        return;
+      }
+    }
+
     if (payload.isCompliantSenior) {
       if (
         !payload.compliantAadharNumber ||
@@ -3072,8 +3105,11 @@ export const saveQuotationDocuments = async (req: Request, res: Response): Promi
         res.status(400).json({
           success: false,
           error: {
-            code: 'VAL_001',
-            message: 'Compliant documents are required when isCompliantSenior is true'
+            code: 'VALIDATION_ERROR',
+            message: 'Compliant documents are required when isCompliantSenior is true',
+            details: [
+              { field: 'isCompliantSenior', message: 'Set to true requires all compliant fields and files' }
+            ]
           }
         });
         return;
