@@ -1596,6 +1596,48 @@ const buildDealerQueueSnapshot = async (dealerId: string, recentActionsLimit = 1
   };
 };
 
+const buildDealerEligibilityDebugCounts = async (dealerId: string) => {
+  // Count eligible unassigned pool leads: no dealer_lead_assignments row,
+  // and batch (if any) must include this dealer.
+  const unassignedEligiblePoolCount = await CallingLead.count({
+    where: Sequelize.literal(`
+      NOT EXISTS (
+        SELECT 1
+        FROM "dealer_lead_assignments" AS da
+        WHERE da."leadId" = "CallingLead"."id"
+      )
+      AND (
+        "CallingLead"."batchId" IS NULL
+        OR EXISTS (
+          SELECT 1
+          FROM "calling_lead_upload_batches" AS b
+          WHERE b."id" = "CallingLead"."batchId"
+            AND ${batchDealerEligibilityPredicate(dealerId, 'b')}
+        )
+      )
+    `)
+  });
+
+  // Count eligible reassignable leads from other dealers (queued/assigned/active),
+  // so we can detect starvation.
+  const otherDealerReassignableCount = await DealerLeadAssignment.count({
+    where: {
+      [Op.and]: [
+        {
+          dealerId: { [Op.ne]: dealerId }
+        },
+        {
+          status: { [Op.in]: ['queued', 'assigned', 'active'] }
+        },
+        LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE,
+        dealerBatchEligibilityClause(dealerId)
+      ]
+    }
+  });
+
+  return { unassignedEligiblePoolCount, otherDealerReassignableCount };
+};
+
 const applyNoCacheHeaders = (res: Response) => {
   // Calling queue changes frequently; always return fresh payload.
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
@@ -1641,12 +1683,18 @@ export const getDealerCallingQueueCurrent = async (req: Request, res: Response):
       Number.isFinite(requestedLimit) && requestedLimit > 0
         ? Math.min(5000, Math.floor(requestedLimit))
         : 1000;
+
+    const debug = String(req.query.debug || '').toLowerCase() === 'true';
     const snapshot = await buildDealerQueueSnapshot(dealerId, recentActionsLimit);
+    const debugCounts = debug ? await buildDealerEligibilityDebugCounts(dealerId) : null;
     applyNoCacheHeaders(res);
 
     res.json({
       success: true,
-      data: snapshot
+      data: {
+        ...snapshot,
+        debugEligibility: debugCounts
+      }
     });
   } catch (error) {
     logError('Get dealer calling queue current error', error, { dealerId: req.dealer?.id });

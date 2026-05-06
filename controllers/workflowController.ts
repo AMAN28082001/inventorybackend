@@ -244,12 +244,13 @@ const getWorkflowQueue = async (
       where.installationTeamId = scopedTeamId;
     }
     if (search) {
-      where[Op.or] = [
+      const searchOr = [
         { id: { [Op.iLike]: `%${search}%` } },
         { '$customer.firstName$': { [Op.iLike]: `%${search}%` } },
         { '$customer.lastName$': { [Op.iLike]: `%${search}%` } },
         { '$customer.mobile$': { [Op.iLike]: `%${search}%` } }
       ];
+      where[Op.and] = [...(where[Op.and] || []), { [Op.or]: searchOr }];
     }
 
     const allowedSortFields = new Set(['createdAt', 'approvedAt', 'installerApprovedAt', 'updatedAt']);
@@ -490,7 +491,6 @@ const getWorkflowQueue = async (
 export const getInstallerQueue = async (req: Request, res: Response): Promise<void> => {
   req.query.status = resolveInstallerQueueStatuses(req.query.status as string | undefined) as any;
   await getWorkflowQueue(req, res, INSTALLER_RELEASE_STATUSES.join(','), {
-    status: 'approved',
     installationReadyForInstaller: true
   });
 };
@@ -513,7 +513,6 @@ export const getMeteringQueue = async (req: Request, res: Response): Promise<voi
     req.query.status = aliasMap[status] as any;
   }
   await getWorkflowQueue(req, res, 'pending_metering,metering_in_progress,metering_approved,mco', {
-    status: 'approved',
     installationReadyForInstaller: true
   });
 };

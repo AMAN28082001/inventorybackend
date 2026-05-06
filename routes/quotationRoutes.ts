@@ -57,7 +57,9 @@ const documentsUpload = multer({
       'compliantPanImage',
       'compliantBankPassbookImage',
       'geotagRoofPhoto',
-      'customerWithHousePhoto',
+      'customerWithHousePhoto'
+    ]);
+    const imageOrPdfFields = new Set([
       'customerFinalBillFile',
       'panelWarrantyFile',
       'inverterWarrantyFile',
@@ -73,6 +75,15 @@ const documentsUpload = multer({
         return;
       }
       cb(new Error(`${file.fieldname} must be jpeg/jpg/png/webp`));
+      return;
+    }
+
+    if (imageOrPdfFields.has(file.fieldname)) {
+      if (imageMimes.has(file.mimetype) || file.mimetype === 'application/pdf') {
+        cb(null, true);
+        return;
+      }
+      cb(new Error(`${file.fieldname} must be jpeg/jpg/png/webp/pdf`));
       return;
     }
 
