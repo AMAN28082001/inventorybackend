@@ -683,15 +683,39 @@ export const completeVisit = async (req: Request, res: Response): Promise<void> 
         ? existingRowDiagramImage.trim()
         : ((visit as any).rowDiagramImage || null));
 
+    const parsedBackLegFeet =
+      backLegFeet !== undefined && String(backLegFeet).trim() !== ''
+        ? Number(backLegFeet)
+        : (visit as any).backLegFeet;
+    const parsedMidLegFeet =
+      midLegFeet !== undefined && String(midLegFeet).trim() !== ''
+        ? Number(midLegFeet)
+        : (visit as any).midLegFeet;
+    const parsedFrontLegFeet =
+      frontLegFeet !== undefined && String(frontLegFeet).trim() !== ''
+        ? Number(frontLegFeet)
+        : (visit as any).frontLegFeet;
+
+    const compatibilityHeightFromLegs = [parsedBackLegFeet, parsedMidLegFeet, parsedFrontLegFeet]
+      .filter((v) => typeof v === 'number' && Number.isFinite(v))
+      .reduce((max, current) => Math.max(max, current as number), Number.NEGATIVE_INFINITY);
+
+    const computedHeight =
+      height !== undefined && String(height).trim() !== ''
+        ? Number(height)
+        : Number.isFinite(compatibilityHeightFromLegs)
+          ? compatibilityHeightFromLegs
+          : visit.height;
+
     await visit.update({
       status: 'completed',
       length: length !== undefined ? Number(length) : visit.length,
       width: width !== undefined ? Number(width) : visit.width,
-      height: height !== undefined ? Number(height) : visit.height,
+      height: computedHeight,
       unit: unit || (visit as any).unit || null,
-      backLegFeet: backLegFeet !== undefined ? Number(backLegFeet) : (visit as any).backLegFeet,
-      midLegFeet: midLegFeet !== undefined && String(midLegFeet) !== '' ? Number(midLegFeet) : (visit as any).midLegFeet,
-      frontLegFeet: frontLegFeet !== undefined ? Number(frontLegFeet) : (visit as any).frontLegFeet,
+      backLegFeet: parsedBackLegFeet,
+      midLegFeet: parsedMidLegFeet,
+      frontLegFeet: parsedFrontLegFeet,
       rowDiagramImage: rowDiagramImageUrl,
       images: mergedImages,
       feedback: notes,

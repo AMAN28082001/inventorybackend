@@ -219,19 +219,17 @@ const getWorkflowQueue = async (
       .split(',')
       .map((value) => value.trim())
       .filter(Boolean);
-    const releaseOrStatuses = extraWhere.installationReadyForInstaller === true;
+    const releaseRequired = extraWhere.installationReadyForInstaller === true;
     const where: any = {};
     const installationStatusFilter =
       requestedStatuses.length > 1
         ? { [Op.in]: requestedStatuses }
         : requestedStatuses[0] || targetStatus;
 
-    if (releaseOrStatuses) {
-      // Operational visibility contract: released records OR records already in operational stages.
-      where[Op.or] = [
-        { installationReadyForInstaller: true },
-        { installationStatus: installationStatusFilter }
-      ];
+    if (releaseRequired) {
+      // Source-of-truth contract: operational queues only include records released by account management.
+      where.installationReadyForInstaller = true;
+      where.installationStatus = installationStatusFilter;
     } else {
       where.installationStatus = installationStatusFilter;
     }
