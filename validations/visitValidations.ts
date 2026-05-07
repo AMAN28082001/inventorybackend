@@ -153,13 +153,19 @@ const positiveNumberFromBody = z
   .transform((value) => Number(value))
   .pipe(z.number().positive());
 
+const optionalPositiveNumberFromBody = z.preprocess((value) => {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === 'string' && value.trim() === '') return undefined;
+  return value;
+}, positiveNumberFromBody.optional());
+
 export const completeVisitSchema = z.object({
-  length: positiveNumberFromBody.optional(),
-  width: positiveNumberFromBody.optional(),
-  height: positiveNumberFromBody.optional(),
+  length: optionalPositiveNumberFromBody,
+  width: optionalPositiveNumberFromBody,
+  height: optionalPositiveNumberFromBody,
   unit: z.enum(['feet', 'cm']).optional(),
   backLegFeet: positiveNumberFromBody,
-  midLegFeet: positiveNumberFromBody.optional(),
+  midLegFeet: optionalPositiveNumberFromBody,
   frontLegFeet: positiveNumberFromBody,
   existingImages: z.union([z.array(z.string()), z.string()]).optional(),
   existingRowDiagramImage: z.string().optional(),
