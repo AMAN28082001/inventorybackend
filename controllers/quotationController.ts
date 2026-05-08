@@ -1306,10 +1306,31 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         typeof qAny.get === 'function'
           ? (qAny.get({ plain: true }) as Record<string, unknown>)
           : (q as unknown as Record<string, unknown>);
+      const resolvedDocsAny = (resolvedDocuments || {}) as any;
+      const prefillPhoneNumber =
+        resolvedDocsAny.phoneNumber ??
+        resolvedDocsAny.phone_number ??
+        customer?.mobile ??
+        null;
+      const prefillEmailId =
+        resolvedDocsAny.emailId ??
+        resolvedDocsAny.email_id ??
+        customer?.email ??
+        null;
+      const prefillElectricityKno =
+        resolvedDocsAny.electricityKno ??
+        resolvedDocsAny.electricity_kno ??
+        null;
+      const customerTypeValue =
+        (row as any).customerType ??
+        (row as any).customer_type ??
+        null;
 
       return {
         id: q.id,
         dealerId: q.dealerId,
+        customerType: customerTypeValue,
+        customer_type: customerTypeValue,
         dealer: dealer ? {
           id: dealer.id,
           firstName: dealer.firstName,
@@ -1356,6 +1377,12 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
           installationDocs.map((doc: any) => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc))
         ),
         documents: resolvedDocuments,
+        phoneNumber: prefillPhoneNumber,
+        phone_number: prefillPhoneNumber,
+        emailId: prefillEmailId,
+        email_id: prefillEmailId,
+        electricityKno: prefillElectricityKno,
+        electricity_kno: prefillElectricityKno,
         pricing: pricing ? {
           subtotal: (q as any).subtotal !== undefined && (q as any).subtotal !== null 
             ? Number((q as any).subtotal) 
@@ -1666,6 +1693,25 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
         : Number(quotation.paidAmount || 0);
     const remainingAmount = remainingPaymentAgainstSubtotal(subtotalNum, totalPaidForRemaining);
     const rowById = quotation.get({ plain: true }) as unknown as Record<string, unknown>;
+    const resolvedDocsAny = (resolvedDocuments || {}) as any;
+    const prefillPhoneNumber =
+      resolvedDocsAny.phoneNumber ??
+      resolvedDocsAny.phone_number ??
+      customer?.mobile ??
+      null;
+    const prefillEmailId =
+      resolvedDocsAny.emailId ??
+      resolvedDocsAny.email_id ??
+      customer?.email ??
+      null;
+    const prefillElectricityKno =
+      resolvedDocsAny.electricityKno ??
+      resolvedDocsAny.electricity_kno ??
+      null;
+    const customerTypeValue =
+      (rowById as any).customerType ??
+      (rowById as any).customer_type ??
+      null;
 
     const serializedVisits = (visits as any[]).map((visit: any) => {
       const assignedVisitors = (visit.assignments || []).map((a: any) => ({
@@ -1692,6 +1738,8 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
       data: {
         id: quotation.id,
         dealerId: quotation.dealerId,
+        customerType: customerTypeValue,
+        customer_type: customerTypeValue,
         dealer: dealer ? {
           id: dealer.id,
           firstName: dealer.firstName,
@@ -1778,6 +1826,12 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
         otherVisitors: primaryVisit?.assignedVisitors || [],
         assignedVisitors: primaryVisit?.assignedVisitors || [],
         documents: resolvedDocuments,
+        phoneNumber: prefillPhoneNumber,
+        phone_number: prefillPhoneNumber,
+        emailId: prefillEmailId,
+        email_id: prefillEmailId,
+        electricityKno: prefillElectricityKno,
+        electricity_kno: prefillElectricityKno,
         ...quotationPaymentApiFields(rowById),
         ...quotationAdminMetadataFields(rowById),
         subtotal: subtotalNum,
@@ -2679,6 +2733,36 @@ const getUploadedFileUrl = async (req: Request, fieldName: string, quotationId: 
   return undefined;
 };
 
+const getUploadedFileUrlSafe = async (
+  req: Request,
+  fieldName: string,
+  quotationId: string
+): Promise<string | undefined> => {
+  try {
+    return await getUploadedFileUrl(req, fieldName, quotationId);
+  } catch (error: any) {
+    const message = typeof error?.message === 'string' ? error.message : 'Upload failed';
+    const code = typeof error?.code === 'string' ? error.code : undefined;
+    const statusCode = code === 'AccessDenied' ? 403 : 502;
+    const errorCode = code === 'AccessDenied' ? 'AUTH_004' : 'SYS_001';
+
+    const wrapped: any = new Error(message);
+    wrapped.statusCode = statusCode;
+    wrapped.errorPayload = {
+      success: false,
+      error: {
+        code: errorCode,
+        message: `Failed to upload ${fieldName}. ${message}`,
+        details: [
+          { field: fieldName, message },
+          ...(code ? [{ field: 's3Code', message: code }] : [])
+        ]
+      }
+    };
+    throw wrapped;
+  }
+};
+
 const extractS3KeyFromDocumentUrl = (value: string): string | null => {
   if (!value) return null;
 
@@ -2836,22 +2920,22 @@ export const saveQuotationDocuments = async (req: Request, res: Response): Promi
         body.isCompliantSenior === '1'
       : !!existing?.isCompliantSenior;
 
-    const aadharFrontUrl = await getUploadedFileUrl(req, 'aadharFront', quotation.id);
-    const aadharBackUrl = await getUploadedFileUrl(req, 'aadharBack', quotation.id);
-    const panImageUrl = await getUploadedFileUrl(req, 'panImage', quotation.id);
-    const electricityBillImageUrl = await getUploadedFileUrl(req, 'electricityBillImage', quotation.id);
-    const bankPassbookImageUrl = await getUploadedFileUrl(req, 'bankPassbookImage', quotation.id);
-    const geotagRoofPhotoUrl = await getUploadedFileUrl(req, 'geotagRoofPhoto', quotation.id);
-    const customerWithHousePhotoUrl = await getUploadedFileUrl(req, 'customerWithHousePhoto', quotation.id);
-    const propertyDocumentPdfUrl = await getUploadedFileUrl(req, 'propertyDocumentPdf', quotation.id);
-    const compliantAadharFrontUrl = await getUploadedFileUrl(req, 'compliantAadharFront', quotation.id);
-    const compliantAadharBackUrl = await getUploadedFileUrl(req, 'compliantAadharBack', quotation.id);
-    const compliantPanImageUrl = await getUploadedFileUrl(req, 'compliantPanImage', quotation.id);
-    const compliantBankPassbookImageUrl = await getUploadedFileUrl(req, 'compliantBankPassbookImage', quotation.id);
-    const customerFinalBillFileUrl = await getUploadedFileUrl(req, 'customerFinalBillFile', quotation.id);
-    const panelWarrantyFileUrl = await getUploadedFileUrl(req, 'panelWarrantyFile', quotation.id);
-    const inverterWarrantyFileUrl = await getUploadedFileUrl(req, 'inverterWarrantyFile', quotation.id);
-    const workCompletionWarrantyFileUrl = await getUploadedFileUrl(req, 'workCompletionWarrantyFile', quotation.id);
+    const aadharFrontUrl = await getUploadedFileUrlSafe(req, 'aadharFront', quotation.id);
+    const aadharBackUrl = await getUploadedFileUrlSafe(req, 'aadharBack', quotation.id);
+    const panImageUrl = await getUploadedFileUrlSafe(req, 'panImage', quotation.id);
+    const electricityBillImageUrl = await getUploadedFileUrlSafe(req, 'electricityBillImage', quotation.id);
+    const bankPassbookImageUrl = await getUploadedFileUrlSafe(req, 'bankPassbookImage', quotation.id);
+    const geotagRoofPhotoUrl = await getUploadedFileUrlSafe(req, 'geotagRoofPhoto', quotation.id);
+    const customerWithHousePhotoUrl = await getUploadedFileUrlSafe(req, 'customerWithHousePhoto', quotation.id);
+    const propertyDocumentPdfUrl = await getUploadedFileUrlSafe(req, 'propertyDocumentPdf', quotation.id);
+    const compliantAadharFrontUrl = await getUploadedFileUrlSafe(req, 'compliantAadharFront', quotation.id);
+    const compliantAadharBackUrl = await getUploadedFileUrlSafe(req, 'compliantAadharBack', quotation.id);
+    const compliantPanImageUrl = await getUploadedFileUrlSafe(req, 'compliantPanImage', quotation.id);
+    const compliantBankPassbookImageUrl = await getUploadedFileUrlSafe(req, 'compliantBankPassbookImage', quotation.id);
+    const customerFinalBillFileUrl = await getUploadedFileUrlSafe(req, 'customerFinalBillFile', quotation.id);
+    const panelWarrantyFileUrl = await getUploadedFileUrlSafe(req, 'panelWarrantyFile', quotation.id);
+    const inverterWarrantyFileUrl = await getUploadedFileUrlSafe(req, 'inverterWarrantyFile', quotation.id);
+    const workCompletionWarrantyFileUrl = await getUploadedFileUrlSafe(req, 'workCompletionWarrantyFile', quotation.id);
 
     logInfo('Quotation document uploads processed', {
       quotationId: quotation.id,
@@ -3137,6 +3221,12 @@ export const saveQuotationDocuments = async (req: Request, res: Response): Promi
     });
   } catch (error) {
     logError('Save quotation documents error', error, { quotationId: req.params.quotationId });
+    const statusCode = (error as any)?.statusCode;
+    const errorPayload = (error as any)?.errorPayload;
+    if (statusCode && errorPayload) {
+      res.status(statusCode).json(errorPayload);
+      return;
+    }
     res.status(500).json({
       success: false,
       error: { code: 'SYS_001', message: 'Internal server error' }
