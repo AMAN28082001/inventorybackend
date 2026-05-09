@@ -5,6 +5,7 @@ import { Op } from 'sequelize';
 import sequelize from '../config/database';
 import { logError, logInfo } from '../utils/loggerHelper';
 import { deleteFileFromS3IfExists } from '../middleware/upload';
+import { SYS_STORAGE_CREDENTIALS_MESSAGE, SYS_STORAGE_OPTIONAL_NO_IMAGE_HINT } from '../utils/mapAwsStorageError';
 import fs from 'fs';
 import path from 'path';
 import XLSX from 'xlsx';
@@ -257,10 +258,19 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
         : undefined;
 
     const id = uuidv4();
-    // S3-only upload path for product images
-    const uploadedS3Image = req.file ? (req.file as any).s3Location : null;
-    if (req.file && !uploadedS3Image) {
-      res.status(500).json({ error: 'Image upload failed. Could not store file in S3.' });
+    // S3-only upload path for product images (ignore empty multipart file parts)
+    const imageDiskFile =
+      req.file && req.file.size !== 0 ? req.file : null;
+    const uploadedS3Image = imageDiskFile ? (imageDiskFile as any).s3Location : null;
+    if (imageDiskFile && !uploadedS3Image) {
+      res.status(503).json({
+        success: false,
+        error: {
+          code: 'SYS_STORAGE',
+          message: SYS_STORAGE_CREDENTIALS_MESSAGE,
+          hint: SYS_STORAGE_OPTIONAL_NO_IMAGE_HINT
+        }
+      });
       return;
     }
     const imagePath = uploadedS3Image || image;
@@ -553,11 +563,21 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
       updates.selling_price = selling_price;
     }
 
-    const imageFile = (req.file as Express.Multer.File) || ((req as any).files?.image?.[0] as Express.Multer.File | undefined);
+    const rawImageFile =
+      (req.file as Express.Multer.File) || ((req as any).files?.image?.[0] as Express.Multer.File | undefined);
+    const imageFile =
+      rawImageFile && rawImageFile.size !== 0 ? rawImageFile : null;
     if (imageFile) {
       const uploadedS3Image = (imageFile as any).s3Location;
       if (!uploadedS3Image) {
-        res.status(500).json({ error: 'Image upload failed. Could not store file in S3.' });
+        res.status(503).json({
+          success: false,
+          error: {
+            code: 'SYS_STORAGE',
+            message: SYS_STORAGE_CREDENTIALS_MESSAGE,
+            hint: SYS_STORAGE_OPTIONAL_NO_IMAGE_HINT
+          }
+        });
         return;
       }
       updates.image = uploadedS3Image;

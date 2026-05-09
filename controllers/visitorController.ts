@@ -178,6 +178,9 @@ export const getAssignedVisits = async (req: Request, res: Response): Promise<vo
       const customer = quotation?.customer;
       const resolvedImages = await resolveMediaUrls(v.images);
       const resolvedRowDiagramImage = await resolveMediaUrl(vAny.rowDiagramImage);
+      const resolvedMeterImage = await resolveMediaUrl(
+        vAny.meterImage || (Array.isArray(resolvedImages) ? resolvedImages[0] : null)
+      );
       const safeQuotation = {
         id: toSafeString(quotation?.id),
         systemType: toSafeString(quotation?.systemType),
@@ -224,7 +227,11 @@ export const getAssignedVisits = async (req: Request, res: Response): Promise<vo
         midLegFeet: vAny.midLegFeet ?? null,
         frontLegFeet: vAny.frontLegFeet ?? null,
         images: resolvedImages,
+        site_images: resolvedImages,
         rowDiagramImage: resolvedRowDiagramImage,
+        row_diagram_image: resolvedRowDiagramImage,
+        meterImage: resolvedMeterImage,
+        meter_image: resolvedMeterImage,
         otherVisitors: (vAny.assignments || []).filter((a: any) => a.visitorId !== req.visitor!.id).map((a: any) => {
           const visitor = a.visitor;
           if (visitor) {

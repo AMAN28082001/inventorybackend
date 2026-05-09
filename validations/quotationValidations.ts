@@ -163,12 +163,12 @@ export const updateProductsSchema = z.object({
 });
 
 export const updatePricingSchema = z.object({
-  subtotal: z.number().nonnegative().optional(),
-  stateSubsidy: z.number().nonnegative().optional(),
-  centralSubsidy: z.number().nonnegative().optional(),
+  subtotal: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
+  stateSubsidy: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
+  centralSubsidy: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
   discount: numberOrStringNumber.pipe(z.number().min(0).max(100)).optional(),
   discountAmount: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
-  finalAmount: z.number().nonnegative().optional(),
+  finalAmount: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
   paymentMode: paymentModeEnum.optional(),
   paidAmount: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
   paymentDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Payment date must be in YYYY-MM-DD format').optional(),

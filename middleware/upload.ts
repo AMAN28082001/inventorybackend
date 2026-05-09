@@ -10,7 +10,37 @@ import {
   deleteFileFromS3,
   extractS3Key
 } from '../utils/s3Service';
+import { toStorageUnavailableError } from '../utils/mapAwsStorageError';
 import { logInfo, logError } from '../utils/loggerHelper';
+
+const collectMulterDiskFiles = (req: Request): Express.Multer.File[] => {
+  const out: Express.Multer.File[] = [];
+  if (req.file) {
+    out.push(req.file);
+  }
+  const raw = (req as Request & { files?: Record<string, Express.Multer.File[]> }).files;
+  if (!raw || typeof raw !== 'object') {
+    return out;
+  }
+  if (Array.isArray(raw)) {
+    out.push(...(raw as Express.Multer.File[]));
+    return out;
+  }
+  for (const arr of Object.values(raw)) {
+    if (Array.isArray(arr)) {
+      out.push(...arr);
+    }
+  }
+  return out;
+};
+
+/** Disk-backed multer files that should be uploaded (excludes serial CSV etc.). */
+const hasProductStyleFilesToUpload = (req: Request, skipFields: Set<string>): boolean =>
+  collectMulterDiskFiles(req).some((f) => {
+    if (!f?.path || typeof f.path !== 'string' || skipFields.has(f.fieldname)) return false;
+    const bytes = Number(f.size);
+    return !Number.isFinite(bytes) || bytes > 0;
+  });
 
 // Create uploads directory if it doesn't exist
 const uploadDir = process.env.UPLOAD_DIR || './uploads';
@@ -55,6 +85,10 @@ export const uploadToS3 = (folder: string = 'photos') => {
   return async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
     try {
       const skipFields = new Set(['serial_number_excel']);
+      if (!hasProductStyleFilesToUpload(req, skipFields)) {
+        next();
+        return;
+      }
       const uploadFile = async (file: Express.Multer.File) => {
         if (skipFields.has(file.fieldname)) {
           return;
@@ -100,7 +134,7 @@ export const uploadToS3 = (folder: string = 'photos') => {
       next();
     } catch (error) {
       logError('Upload to S3 middleware error', error);
-      next(error as any);
+      next(toStorageUnavailableError(error));
     }
   };
 };
@@ -111,8 +145,13 @@ export const uploadToS3FromMemory = (folder: string = 'photos') => {
     try {
       const files = (req as any).files;
       const fileArrays = files && typeof files === 'object' ? Object.values(files).flat() : [];
+      const memoryFiles = fileArrays as Express.Multer.File[];
+      if (!memoryFiles.some((f) => f?.buffer && f.buffer.length > 0)) {
+        next();
+        return;
+      }
 
-      for (const file of fileArrays as Express.Multer.File[]) {
+      for (const file of memoryFiles) {
         if (!file?.buffer) continue;
 
         const key = await uploadFileToS3FromBuffer(file.buffer, file.originalname, folder);
@@ -132,7 +171,7 @@ export const uploadToS3FromMemory = (folder: string = 'photos') => {
       next();
     } catch (error) {
       logError('Upload to S3 (memory) middleware error', error);
-      next(error as any);
+      next(toStorageUnavailableError(error));
     }
   };
 };

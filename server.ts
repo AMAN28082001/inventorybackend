@@ -172,9 +172,29 @@ app.use((_: Request, res: Response) => {
 
 // Error handler
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction): void => {
+  const storageCode = (err as { code?: string }).code;
+  if (storageCode === 'SYS_STORAGE') {
+    const status = (err as { status?: number }).status || 503;
+    const hint = (err as { storageHint?: string }).storageHint;
+    logger.error('File storage error', {
+      message: err.message,
+      status,
+      hint
+    });
+    res.status(status).json({
+      success: false,
+      error: {
+        code: 'SYS_STORAGE',
+        message: err.message || 'File storage is not configured or unavailable.',
+        ...(hint ? { hint } : {})
+      }
+    });
+    return;
+  }
+
   const status = (err as any).status || 500;
   const errorMessage = err.message || 'Internal server error';
-  
+
   // Handle payload too large error specifically
   if (status === 413 || errorMessage.includes('request entity too large') || errorMessage.includes('PayloadTooLargeError')) {
     logger.error('Request payload too large', {

@@ -169,6 +169,7 @@ export const completeVisitSchema = z.object({
   frontLegFeet: positiveNumberFromBody,
   existingImages: z.union([z.array(z.string()), z.string()]).optional(),
   existingRowDiagramImage: z.string().optional(),
+  existingMeterImage: z.string().optional(),
   notes: z.string().optional()
 });
 

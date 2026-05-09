@@ -9,16 +9,26 @@ import { Product } from '../models';
 import { Op, Sequelize } from 'sequelize';
 import { logError, logInfo } from '../utils/loggerHelper';
 import { deleteFileFromS3IfExists } from '../middleware/upload';
-import { generatePublicUrl } from '../utils/s3Service';
+import { decodeS3UrlPathToKey, generatePublicUrl } from '../utils/s3Service';
 import { normalizePaymentModeInput } from '../utils/paymentMode';
 import { quotationPaymentApiFields, quotationAdminMetadataFields } from '../utils/quotationApiJson';
 
 // Helper function to normalize catalog data - ensures all arrays are arrays (never null/undefined)
 const normalizeCatalog = (catalog: any): any => {
+  const rawPanelSizes = Array.isArray(catalog?.panels?.sizes) ? catalog.panels.sizes : [];
+  const normalizedPanelSizes = Array.from(
+    new Set(
+      rawPanelSizes.map((size: unknown) => String(size || '').trim()).filter(Boolean).map((size: string) => {
+        if (size === '545W') return '550W';
+        return size;
+      })
+    )
+  );
+  if (!normalizedPanelSizes.includes('550W')) normalizedPanelSizes.push('550W');
   return {
     panels: {
       brands: Array.isArray(catalog?.panels?.brands) ? catalog.panels.brands : [],
-      sizes: Array.isArray(catalog?.panels?.sizes) ? catalog.panels.sizes : []
+      sizes: normalizedPanelSizes
     },
     inverters: {
       types: Array.isArray(catalog?.inverters?.types) ? catalog.inverters.types : [],
@@ -44,6 +54,25 @@ const normalizeCatalog = (catalog: any): any => {
       options: Array.isArray(catalog?.dcdb?.options) ? catalog.dcdb.options : []
     }
   };
+};
+
+const panelSizeVariants = (value: unknown): string[] => {
+  const size = String(value || '').trim();
+  if (!size) return [];
+  if (size === '545W') return ['545W', '550W'];
+  if (size === '550W') return ['550W', '545W'];
+  return [size];
+};
+
+const isPanelSizeAllowed = (selectedSize: unknown, catalogSizes: unknown): boolean => {
+  const selected = panelSizeVariants(selectedSize);
+  if (selected.length === 0) return true;
+  const allowed = new Set(
+    (Array.isArray(catalogSizes) ? catalogSizes : [])
+      .map((v) => String(v || '').trim())
+      .filter(Boolean)
+  );
+  return selected.some((candidate) => allowed.has(candidate));
 };
 
 // Helper function to get product catalog
@@ -104,7 +133,7 @@ const validateProductSelection = (products: any, catalog: any): { isValid: boole
   if (products.panelBrand && catalog.panels?.brands && !catalog.panels.brands.includes(products.panelBrand)) {
     errors.push(`Invalid panel brand: ${products.panelBrand}`);
   }
-  if (products.panelSize && catalog.panels?.sizes && !catalog.panels.sizes.includes(products.panelSize)) {
+  if (products.panelSize && catalog.panels?.sizes && !isPanelSizeAllowed(products.panelSize, catalog.panels.sizes)) {
     errors.push(`Invalid panel size: ${products.panelSize}`);
   }
 
@@ -112,7 +141,7 @@ const validateProductSelection = (products: any, catalog: any): { isValid: boole
   if (products.dcrPanelBrand && catalog.panels?.brands && !catalog.panels.brands.includes(products.dcrPanelBrand)) {
     errors.push(`Invalid DCR panel brand: ${products.dcrPanelBrand}`);
   }
-  if (products.dcrPanelSize && catalog.panels?.sizes && !catalog.panels.sizes.includes(products.dcrPanelSize)) {
+  if (products.dcrPanelSize && catalog.panels?.sizes && !isPanelSizeAllowed(products.dcrPanelSize, catalog.panels.sizes)) {
     errors.push(`Invalid DCR panel size: ${products.dcrPanelSize}`);
   }
 
@@ -120,7 +149,7 @@ const validateProductSelection = (products: any, catalog: any): { isValid: boole
   if (products.nonDcrPanelBrand && catalog.panels?.brands && !catalog.panels.brands.includes(products.nonDcrPanelBrand)) {
     errors.push(`Invalid non-DCR panel brand: ${products.nonDcrPanelBrand}`);
   }
-  if (products.nonDcrPanelSize && catalog.panels?.sizes && !catalog.panels.sizes.includes(products.nonDcrPanelSize)) {
+  if (products.nonDcrPanelSize && catalog.panels?.sizes && !isPanelSizeAllowed(products.nonDcrPanelSize, catalog.panels.sizes)) {
     errors.push(`Invalid non-DCR panel size: ${products.nonDcrPanelSize}`);
   }
 
@@ -184,7 +213,7 @@ const validateProductSelection = (products: any, catalog: any): { isValid: boole
       if (panel.brand && catalog.panels?.brands && !catalog.panels.brands.includes(panel.brand)) {
         errors.push(`Invalid custom panel brand: ${panel.brand}`);
       }
-      if (panel.size && catalog.panels?.sizes && !catalog.panels.sizes.includes(panel.size)) {
+      if (panel.size && catalog.panels?.sizes && !isPanelSizeAllowed(panel.size, catalog.panels.sizes)) {
         errors.push(`Invalid custom panel size: ${panel.size}`);
       }
     }
@@ -2173,6 +2202,47 @@ export const updateQuotationPricing = async (req: Request, res: Response): Promi
       paymentStatus
     } = req.body;
 
+    const toFiniteNumber = (value: unknown): number | undefined => {
+      if (value === undefined || value === null) return undefined;
+      if (typeof value === 'string' && value.trim() === '') return undefined;
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : undefined;
+    };
+
+    const details: Array<{ field: string; message: string }> = [];
+    if (subtotal !== undefined && toFiniteNumber(subtotal) === undefined) {
+      details.push({ field: 'subtotal', message: 'subtotal must be a valid number' });
+    }
+    if (stateSubsidy !== undefined && toFiniteNumber(stateSubsidy) === undefined) {
+      details.push({ field: 'stateSubsidy', message: 'stateSubsidy must be a valid number' });
+    }
+    if (centralSubsidy !== undefined && toFiniteNumber(centralSubsidy) === undefined) {
+      details.push({ field: 'centralSubsidy', message: 'centralSubsidy must be a valid number' });
+    }
+    if (discount !== undefined && toFiniteNumber(discount) === undefined) {
+      details.push({ field: 'discount', message: 'discount must be a valid number' });
+    }
+    if (discountAmount !== undefined && toFiniteNumber(discountAmount) === undefined) {
+      details.push({ field: 'discountAmount', message: 'discountAmount must be a valid number' });
+    }
+    if (finalAmount !== undefined && toFiniteNumber(finalAmount) === undefined) {
+      details.push({ field: 'finalAmount', message: 'finalAmount must be a valid number' });
+    }
+    if (paidAmount !== undefined && toFiniteNumber(paidAmount) === undefined) {
+      details.push({ field: 'paidAmount', message: 'paidAmount must be a valid number' });
+    }
+    if (details.length > 0) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VAL_001',
+          message: 'Validation error',
+          details
+        }
+      });
+      return;
+    }
+
     // Account managers are allowed to edit pricing for approved quotations
 
     // Admins can update all quotations, dealers only their own
@@ -2199,15 +2269,15 @@ export const updateQuotationPricing = async (req: Request, res: Response): Promi
     const currentProducts = quotationAny.products || {};
 
     // Get current values or use provided values
-    const newSubtotal = subtotal !== undefined ? Number(subtotal) : Number(quotation.subtotal || 0);
-    const newStateSubsidy = stateSubsidy !== undefined ? Number(stateSubsidy) : Number(currentProducts.stateSubsidy || 0);
-    const newCentralSubsidy = centralSubsidy !== undefined ? Number(centralSubsidy) : Number(currentProducts.centralSubsidy || 0);
+    const newSubtotal = subtotal !== undefined ? Number(toFiniteNumber(subtotal)) : Number(quotation.subtotal || 0);
+    const newStateSubsidy = stateSubsidy !== undefined ? Number(toFiniteNumber(stateSubsidy)) : Number(currentProducts.stateSubsidy || 0);
+    const newCentralSubsidy = centralSubsidy !== undefined ? Number(toFiniteNumber(centralSubsidy)) : Number(currentProducts.centralSubsidy || 0);
     const newDiscount = discount !== undefined 
-      ? (typeof discount === 'string' ? parseFloat(discount) : Number(discount))
+      ? Number(toFiniteNumber(discount))
       : Number(quotation.discount || 0);
-    const newFinalAmount = finalAmount !== undefined ? Number(finalAmount) : undefined;
+    const newFinalAmount = finalAmount !== undefined ? Number(toFiniteNumber(finalAmount)) : undefined;
     const newDiscountAmount = discountAmount !== undefined && discountAmount !== null && discountAmount !== ''
-      ? Number(discountAmount)
+      ? Number(toFiniteNumber(discountAmount))
       : undefined;
 
     // Validate discount range
@@ -2272,20 +2342,20 @@ export const updateQuotationPricing = async (req: Request, res: Response): Promi
     const finalFinalAmount = newFinalAmount !== undefined ? newFinalAmount : calculatedFinalAmount;
 
     // Validate finalAmount is reasonable
-    if (newFinalAmount !== undefined && (isNaN(newFinalAmount) || newFinalAmount < 0 || newFinalAmount > newSubtotal)) {
+    if (newFinalAmount !== undefined && (isNaN(newFinalAmount) || newFinalAmount < 0 || newFinalAmount > amountAfterSubsidy)) {
       res.status(400).json({
         success: false,
         error: {
           code: 'VAL_001',
-          message: 'Final amount must be between 0 and subtotal',
-          details: [{ field: 'finalAmount', message: `Final amount must be between 0 and ${newSubtotal}` }]
+          message: 'Final amount must be between 0 and amount after subsidy',
+          details: [{ field: 'finalAmount', message: `Final amount must be between 0 and ${amountAfterSubsidy}` }]
         }
       });
       return;
     }
 
     const normalizedPaidAmount = paidAmount !== undefined && paidAmount !== null
-      ? Number(paidAmount)
+      ? Number(toFiniteNumber(paidAmount))
       : undefined;
     const normalizedPaymentStatus = normalizedPaidAmount !== undefined
       ? calculatePaymentStatus(normalizedPaidAmount, calculatedTotalAmount)
@@ -2779,8 +2849,8 @@ const extractS3KeyFromDocumentUrl = (value: string): string | null => {
 
   const publicBase = process.env.AWS_S3_PUBLIC_URL?.replace(/\/$/, '');
   if (publicBase && trimmed.startsWith(publicBase)) {
-    const key = trimmed.slice(publicBase.length + 1);
-    return key || null;
+    const raw = trimmed.slice(publicBase.length + 1).split('?')[0];
+    return decodeS3UrlPathToKey(raw) || raw || null;
   }
 
   try {
@@ -2789,8 +2859,7 @@ const extractS3KeyFromDocumentUrl = (value: string): string | null => {
     if (!isS3Host) {
       return null;
     }
-    const key = parsed.pathname.replace(/^\/+/, '');
-    return key || null;
+    return decodeS3UrlPathToKey(parsed.pathname) || null;
   } catch {
     return null;
   }
@@ -2812,10 +2881,37 @@ const resolveDocumentImageUrl = async (value: string | null | undefined): Promis
   }
 };
 
-const resolveQuotationDocumentUrls = async (documents: any) => {
-  if (!documents) return null;
+const QUOTATION_DOCUMENT_MEDIA_FIELDS = [
+  'aadharFront',
+  'aadharBack',
+  'panImage',
+  'electricityBillImage',
+  'bankPassbookImage',
+  'geotagRoofPhoto',
+  'customerWithHousePhoto',
+  'propertyDocumentPdf',
+  'compliantAadharFront',
+  'compliantAadharBack',
+  'compliantPanImage',
+  'compliantBankPassbookImage',
+  'customerFinalBillFile',
+  'panelWarrantyFile',
+  'inverterWarrantyFile',
+  'workCompletionWarrantyFile'
+] as const;
 
-  const json = typeof documents.toJSON === 'function' ? documents.toJSON() : { ...documents };
+const buildEmptyResolvedQuotationDocuments = () => {
+  const empty: Record<string, string | null> = {};
+  for (const field of QUOTATION_DOCUMENT_MEDIA_FIELDS) {
+    empty[field] = null;
+  }
+  return empty;
+};
+
+const resolveQuotationDocumentUrls = async (documents: any) => {
+  const json = documents
+    ? (typeof documents.toJSON === 'function' ? documents.toJSON() : { ...documents })
+    : buildEmptyResolvedQuotationDocuments();
   const mediaFields = [
     'aadharFront',
     'aadharBack',

@@ -29,16 +29,36 @@ const completeVisitUpload = multer({
   limits: {
     fileSize: 15 * 1024 * 1024,
     files: 25
+  },
+  fileFilter: (_req, file, cb) => {
+    const allowed = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp']);
+    if (allowed.has(file.mimetype)) {
+      cb(null, true);
+      return;
+    }
+    cb(new Error(`${file.fieldname} must be jpeg/jpg/png/webp`));
   }
 });
 
 const handleCompleteVisitMultipart = (req: express.Request, res: express.Response, next: express.NextFunction): void => {
   completeVisitUpload.fields([
     { name: 'images', maxCount: 20 },
-    { name: 'rowDiagramImage', maxCount: 1 }
+    { name: 'rowDiagramImage', maxCount: 1 },
+    { name: 'meterImage', maxCount: 1 }
   ])(req, res, (err: unknown) => {
     if (!err) {
       next();
+      return;
+    }
+    const genericError = err as Error;
+    if (genericError?.message?.includes('must be jpeg/jpg/png/webp')) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: genericError.message
+        }
+      });
       return;
     }
     const e = err as MulterError;

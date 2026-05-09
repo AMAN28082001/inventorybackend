@@ -70,6 +70,36 @@ const resolveMediaUrls = async (urls: unknown): Promise<string[]> => {
   return resolved.filter((u): u is string => !!u);
 };
 
+const toOptionalFiniteNumber = (value: unknown): number | undefined => {
+  if (value === undefined || value === null) return undefined;
+  const text = String(value).trim();
+  if (!text) return undefined;
+  const parsed = Number(text);
+  return Number.isFinite(parsed) ? parsed : undefined;
+};
+
+const normalizeMediaIdentity = (url: string): string => {
+  const key = extractS3Key(url);
+  if (!key) return url.trim();
+  const filePart = key.split('/').pop() || key;
+  // uploadFileToS3FromBuffer prefixes keys with "<timestamp>_<filename>".
+  return filePart.replace(/^\d+_/, '').trim();
+};
+
+const dedupeMediaUrls = (urls: string[]): string[] => {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of urls) {
+    const url = String(raw || '').trim();
+    if (!url) continue;
+    const identity = normalizeMediaIdentity(url);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    out.push(url);
+  }
+  return out;
+};
+
 // Create visit
 export const createVisit = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -280,6 +310,9 @@ export const getAllVisits = async (req: Request, res: Response): Promise<void> =
       const assignments = vAny.assignments || [];
       const resolvedImages = await resolveMediaUrls(v.images);
       const resolvedRowDiagramImage = await resolveMediaUrl((v as any).rowDiagramImage);
+      const resolvedMeterImage = await resolveMediaUrl(
+        (v as any).meterImage || (Array.isArray(resolvedImages) ? resolvedImages[0] : null)
+      );
 
       // Get full visitor details
       const visitors = assignments.map((a: any) => {
@@ -330,12 +363,16 @@ export const getAllVisits = async (req: Request, res: Response): Promise<void> =
         width: v.width,
         height: v.height,
         images: resolvedImages,
+        site_images: resolvedImages,
         feedback: v.feedback,
         unit: (v as any).unit || null,
         backLegFeet: (v as any).backLegFeet || null,
         midLegFeet: (v as any).midLegFeet || null,
         frontLegFeet: (v as any).frontLegFeet || null,
         rowDiagramImage: resolvedRowDiagramImage,
+        row_diagram_image: resolvedRowDiagramImage,
+        meterImage: resolvedMeterImage,
+        meter_image: resolvedMeterImage,
         rejectionReason: v.rejectionReason,
         visitors: visitors,
         createdAt: v.createdAt,
@@ -470,6 +507,9 @@ export const getVisitsForQuotation = async (req: Request, res: Response): Promis
       const assignments = vAny.assignments || [];
       const resolvedImages = await resolveMediaUrls(v.images);
       const resolvedRowDiagramImage = await resolveMediaUrl((v as any).rowDiagramImage);
+      const resolvedMeterImage = await resolveMediaUrl(
+        (v as any).meterImage || (Array.isArray(resolvedImages) ? resolvedImages[0] : null)
+      );
 
       // Get full visitor details from the included Visitor model
       const visitors = assignments.map((a: any) => {
@@ -514,6 +554,7 @@ export const getVisitsForQuotation = async (req: Request, res: Response): Promis
         width: wid,
         height: hgt,
         images: resolvedImages,
+        site_images: resolvedImages,
         feedback: v.feedback,
         unit: (v as any).unit || null,
         backLegFeet,
@@ -531,6 +572,9 @@ export const getVisitsForQuotation = async (req: Request, res: Response): Promis
           frontLegFeet
         },
         rowDiagramImage: resolvedRowDiagramImage,
+        row_diagram_image: resolvedRowDiagramImage,
+        meterImage: resolvedMeterImage,
+        meter_image: resolvedMeterImage,
         rejectionReason: v.rejectionReason,
         visitors,
         otherVisitors: visitors,
@@ -639,6 +683,7 @@ export const completeVisit = async (req: Request, res: Response): Promise<void> 
       frontLegFeet,
       existingImages,
       existingRowDiagramImage,
+      existingMeterImage,
       notes
     } = req.body;
 
@@ -667,6 +712,7 @@ export const completeVisit = async (req: Request, res: Response): Promise<void> 
     const files = (req.files || {}) as Record<string, Express.Multer.File[]>;
     const imageFiles = files.images || [];
     const rowDiagramFile = (files.rowDiagramImage || [])[0];
+    const meterImageFile = (files.meterImage || [])[0];
 
     const storedVisitImages = Array.isArray(visit.images) ? visit.images : [];
     const existingImageUrls = existingImages !== undefined
@@ -675,55 +721,138 @@ export const completeVisit = async (req: Request, res: Response): Promise<void> 
     const uploadedImageUrls = imageFiles
       .map((file) => (file as any).s3Location || null)
       .filter((url): url is string => !!url);
-    const mergedImages = Array.from(new Set([...existingImageUrls, ...uploadedImageUrls]));
+    const uploadedMeterImageUrl = (meterImageFile && (meterImageFile as any).s3Location) || null;
+    const mergedImages = dedupeMediaUrls([...existingImageUrls, ...uploadedImageUrls]);
 
     const rowDiagramImageUrl =
       (rowDiagramFile && (rowDiagramFile as any).s3Location) ||
       (typeof existingRowDiagramImage === 'string' && existingRowDiagramImage.trim() !== ''
         ? existingRowDiagramImage.trim()
         : ((visit as any).rowDiagramImage || null));
+    const meterImageUrl =
+      uploadedMeterImageUrl ||
+      (typeof existingMeterImage === 'string' && existingMeterImage.trim() !== ''
+        ? existingMeterImage.trim()
+        : null);
 
-    const parsedBackLegFeet =
-      backLegFeet !== undefined && String(backLegFeet).trim() !== ''
-        ? Number(backLegFeet)
-        : (visit as any).backLegFeet;
-    const parsedMidLegFeet =
-      midLegFeet !== undefined && String(midLegFeet).trim() !== ''
-        ? Number(midLegFeet)
-        : (visit as any).midLegFeet;
-    const parsedFrontLegFeet =
-      frontLegFeet !== undefined && String(frontLegFeet).trim() !== ''
-        ? Number(frontLegFeet)
-        : (visit as any).frontLegFeet;
+    const parsedLength = toOptionalFiniteNumber(length);
+    const parsedWidth = toOptionalFiniteNumber(width);
+    const parsedHeight = toOptionalFiniteNumber(height);
+    const parsedBackLegFeet = toOptionalFiniteNumber(backLegFeet) ?? (visit as any).backLegFeet;
+    const parsedMidLegFeet = toOptionalFiniteNumber(midLegFeet) ?? (visit as any).midLegFeet;
+    const parsedFrontLegFeet = toOptionalFiniteNumber(frontLegFeet) ?? (visit as any).frontLegFeet;
+
+    const invalidNumericFields: Array<{ field: string; message: string }> = [];
+    if (length !== undefined && parsedLength === undefined) {
+      invalidNumericFields.push({ field: 'length', message: 'length must be a valid number' });
+    }
+    if (width !== undefined && parsedWidth === undefined) {
+      invalidNumericFields.push({ field: 'width', message: 'width must be a valid number' });
+    }
+    if (height !== undefined && parsedHeight === undefined) {
+      invalidNumericFields.push({ field: 'height', message: 'height must be a valid number' });
+    }
+    if (backLegFeet !== undefined && toOptionalFiniteNumber(backLegFeet) === undefined) {
+      invalidNumericFields.push({ field: 'backLegFeet', message: 'backLegFeet must be a valid number' });
+    }
+    if (midLegFeet !== undefined && toOptionalFiniteNumber(midLegFeet) === undefined) {
+      invalidNumericFields.push({ field: 'midLegFeet', message: 'midLegFeet must be a valid number' });
+    }
+    if (frontLegFeet !== undefined && toOptionalFiniteNumber(frontLegFeet) === undefined) {
+      invalidNumericFields.push({ field: 'frontLegFeet', message: 'frontLegFeet must be a valid number' });
+    }
+    if (invalidNumericFields.length > 0) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Invalid numeric fields in complete visit payload',
+          details: invalidNumericFields
+        }
+      });
+      return;
+    }
 
     const compatibilityHeightFromLegs = [parsedBackLegFeet, parsedMidLegFeet, parsedFrontLegFeet]
       .filter((v) => typeof v === 'number' && Number.isFinite(v))
       .reduce((max, current) => Math.max(max, current as number), Number.NEGATIVE_INFINITY);
 
     const computedHeight =
-      height !== undefined && String(height).trim() !== ''
-        ? Number(height)
+      parsedHeight !== undefined
+        ? parsedHeight
         : Number.isFinite(compatibilityHeightFromLegs)
           ? compatibilityHeightFromLegs
           : visit.height;
 
+    const normalizedUnit = typeof unit === 'string' && unit.trim() ? unit.trim() : ((visit as any).unit || null);
+    const nextLength = parsedLength ?? visit.length;
+    const nextWidth = parsedWidth ?? visit.width;
+    const nextNotes = notes !== undefined ? notes : visit.notes;
+    const nextFeedback = notes !== undefined ? notes : visit.feedback;
+
+    const noScalarChange =
+      visit.status === 'completed' &&
+      Number(visit.length ?? 0) === Number(nextLength ?? 0) &&
+      Number(visit.width ?? 0) === Number(nextWidth ?? 0) &&
+      Number(visit.height ?? 0) === Number(computedHeight ?? 0) &&
+      String((visit as any).unit || '') === String(normalizedUnit || '') &&
+      Number(((visit as any).backLegFeet ?? 0)) === Number(parsedBackLegFeet ?? 0) &&
+      Number(((visit as any).midLegFeet ?? 0)) === Number(parsedMidLegFeet ?? 0) &&
+      Number(((visit as any).frontLegFeet ?? 0)) === Number(parsedFrontLegFeet ?? 0) &&
+      String((visit as any).rowDiagramImage || '') === String(rowDiagramImageUrl || '') &&
+      JSON.stringify(dedupeMediaUrls(Array.isArray(visit.images) ? visit.images : [])) === JSON.stringify(mergedImages) &&
+      String(visit.notes || '') === String(nextNotes || '') &&
+      String(visit.feedback || '') === String(nextFeedback || '');
+
+    if (noScalarChange && imageFiles.length === 0 && !rowDiagramFile) {
+      const responseImages = await resolveMediaUrls(visit.images);
+      const responseRowDiagramImage = await resolveMediaUrl((visit as any).rowDiagramImage);
+      const responseMeterImage = await resolveMediaUrl(
+        meterImageUrl || (Array.isArray(responseImages) ? responseImages[0] : null)
+      );
+      res.json({
+        success: true,
+        data: {
+          id: visit.id,
+          status: visit.status,
+          length: visit.length,
+          width: visit.width,
+          height: visit.height,
+          unit: (visit as any).unit || null,
+          backLegFeet: (visit as any).backLegFeet || null,
+          midLegFeet: (visit as any).midLegFeet || null,
+          frontLegFeet: (visit as any).frontLegFeet || null,
+          images: responseImages,
+          rowDiagramImage: responseRowDiagramImage,
+          meterImage: responseMeterImage,
+          notes: visit.notes || visit.feedback || null,
+          feedback: visit.feedback || visit.notes || null,
+          updatedAt: visit.updatedAt
+        }
+      });
+      return;
+    }
+
     await visit.update({
       status: 'completed',
-      length: length !== undefined ? Number(length) : visit.length,
-      width: width !== undefined ? Number(width) : visit.width,
+      length: nextLength,
+      width: nextWidth,
       height: computedHeight,
-      unit: unit || (visit as any).unit || null,
+      unit: normalizedUnit,
       backLegFeet: parsedBackLegFeet,
       midLegFeet: parsedMidLegFeet,
       frontLegFeet: parsedFrontLegFeet,
       rowDiagramImage: rowDiagramImageUrl,
       images: mergedImages,
-      feedback: notes,
-      notes: notes !== undefined ? notes : visit.notes
+      feedback: nextFeedback,
+      notes: nextNotes
     });
 
     const responseImages = await resolveMediaUrls(visit.images);
     const responseRowDiagramImage = await resolveMediaUrl((visit as any).rowDiagramImage);
+    const responseMeterImage = await resolveMediaUrl(
+      meterImageUrl || (Array.isArray(responseImages) ? responseImages[0] : null)
+    );
 
     res.json({
       success: true,
@@ -739,7 +868,9 @@ export const completeVisit = async (req: Request, res: Response): Promise<void> 
         frontLegFeet: (visit as any).frontLegFeet || null,
         images: responseImages,
         rowDiagramImage: responseRowDiagramImage,
+        meterImage: responseMeterImage,
         notes: visit.notes || visit.feedback || notes || null,
+        feedback: visit.feedback || visit.notes || notes || null,
         updatedAt: visit.updatedAt
       }
     });

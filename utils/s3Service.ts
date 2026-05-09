@@ -4,17 +4,67 @@ import path from 'path';
 import mime from 'mime-types';
 import { logInfo, logError } from '../utils/loggerHelper';
 
-// Configure AWS SDK with credentials from environment variables
-AWS.config.update({
-  accessKeyId: process.env.AWS_ACCESS_KEY,
-  secretAccessKey: process.env.AWS_SECRET_KEY,
-  region: process.env.AWS_REGION || 'ap-south-1',
-});
-
-const s3 = new AWS.S3();
-
 const BUCKET_NAME = process.env.AWS_BUCKET_NAME || 'cbpl-bajaj-node';
 const AWS_REGION = process.env.AWS_REGION || 'ap-south-1';
+
+let cachedS3: AWS.S3 | null = null;
+
+/** Lazy client so processes that never upload do not need credentials at import time. */
+export const getS3Client = (): AWS.S3 => {
+  if (!cachedS3) {
+    const accessKeyId = process.env.AWS_ACCESS_KEY || process.env.AWS_ACCESS_KEY_ID;
+    const secretAccessKey = process.env.AWS_SECRET_KEY || process.env.AWS_SECRET_ACCESS_KEY;
+    const region = process.env.AWS_REGION || 'ap-south-1';
+    if (accessKeyId && secretAccessKey) {
+      AWS.config.update({ accessKeyId, secretAccessKey, region });
+    } else {
+      AWS.config.update({ region });
+    }
+    cachedS3 = new AWS.S3({ region });
+  }
+  return cachedS3;
+};
+
+/** Undo accidental multiple URI-encoding (e.g. %2520 → space) when recovering keys from URLs. */
+const decodeUrlEncodedRepeatedly = (input: string, maxPasses = 4): string => {
+  let out = input;
+  for (let i = 0; i < maxPasses; i++) {
+    try {
+      const next = decodeURIComponent(out.replace(/\+/g, ' '));
+      if (next === out) break;
+      out = next;
+    } catch {
+      break;
+    }
+  }
+  return out;
+};
+
+/**
+ * Turn multipart original filenames into safe S3 suffixes so object keys match URLs clients request
+ * (avoids literal %20 / double-encoding in keys and broken public links).
+ */
+export const sanitizeFilenameForS3Key = (originalname: string): string => {
+  const rawBase = path.basename(String(originalname || '').trim() || 'upload');
+  const base = decodeUrlEncodedRepeatedly(rawBase);
+  const ext = path.extname(base).toLowerCase();
+  const stem = ext ? base.slice(0, -ext.length) : base;
+  const safeStem = stem
+    .replace(/[^a-zA-Z0-9._-]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '');
+  const safe = `${safeStem || 'file'}${ext}`;
+  return safe.slice(0, 200);
+};
+
+/** Decode URL path (may be partially encoded) into the canonical S3 object key. */
+export const decodeS3UrlPathToKey = (rawPath: string): string | null => {
+  const trimmed = rawPath.replace(/^\/+/, '').split('?')[0];
+  if (!trimmed) return null;
+  const segments = trimmed.split('/').filter(Boolean);
+  const decoded = segments.map((seg) => decodeUrlEncodedRepeatedly(seg)).join('/');
+  return decoded || null;
+};
 
 const toBool = (value: string | undefined, fallback = false): boolean => {
   if (value === undefined) return fallback;
@@ -26,8 +76,14 @@ const shouldUseSignedUrls = toBool(process.env.AWS_S3_USE_SIGNED_URLS, true);
 const shouldUsePublicReadAcl = toBool(process.env.AWS_S3_USE_PUBLIC_READ_ACL, false);
 const signedUrlTtlSeconds = Number(process.env.AWS_S3_SIGNED_URL_TTL_SECONDS || 604800); // 7 days
 
-export const buildS3ObjectUrl = (key: string): string =>
-  `https://${BUCKET_NAME}.s3.${AWS_REGION}.amazonaws.com/${key}`;
+export const buildS3ObjectUrl = (key: string): string => {
+  const encodedKey = key
+    .split('/')
+    .filter(Boolean)
+    .map((segment) => encodeURIComponent(segment))
+    .join('/');
+  return `https://${BUCKET_NAME}.s3.${AWS_REGION}.amazonaws.com/${encodedKey}`;
+};
 
 /**
  * Upload a file from disk to S3
@@ -49,7 +105,7 @@ export async function uploadFileToS3(filePath: string, folder: string = 'photos'
     }
 
     const fileStream = fs.createReadStream(filePath);
-    const fileName = path.basename(filePath);
+    const fileName = sanitizeFilenameForS3Key(path.basename(filePath));
     const fileExtension = path.extname(fileName);
     const contentType = mime.lookup(fileExtension) || 'application/octet-stream';
     const s3Key = `${folder}/${Date.now()}_${fileName}`;
@@ -64,7 +120,7 @@ export async function uploadFileToS3(filePath: string, folder: string = 'photos'
       uploadParams.ACL = 'public-read';
     }
 
-    const uploadResult = await s3.upload(uploadParams).promise();
+    const uploadResult = await getS3Client().upload(uploadParams).promise();
     const finalFileUrl = shouldUseSignedUrls
       ? await generatePublicUrl(uploadResult.Key, signedUrlTtlSeconds)
       : uploadResult.Location || buildS3ObjectUrl(uploadResult.Key);
@@ -106,9 +162,10 @@ export async function uploadFileToS3FromBuffer(
     logInfo('📤 Initiating S3 upload from buffer', { filename, folder });
 
     const buffer = Buffer.isBuffer(fileBuffer) ? fileBuffer : Buffer.from(fileBuffer, 'base64');
-    const fileExtension = path.extname(filename);
+    const safeFilename = sanitizeFilenameForS3Key(filename);
+    const fileExtension = path.extname(safeFilename);
     const contentType = mime.lookup(fileExtension) || 'application/octet-stream';
-    const s3Key = `${folder}/${Date.now()}_${filename}`;
+    const s3Key = `${folder}/${Date.now()}_${safeFilename}`;
 
     const uploadParams: AWS.S3.PutObjectRequest = {
       Bucket: BUCKET_NAME,
@@ -120,7 +177,7 @@ export async function uploadFileToS3FromBuffer(
       uploadParams.ACL = 'public-read';
     }
 
-    const uploadResult = await s3.upload(uploadParams).promise();
+    const uploadResult = await getS3Client().upload(uploadParams).promise();
 
     logInfo('✅ S3 Upload Successful (from buffer)', {
       s3Key: uploadResult.Key,
@@ -159,7 +216,7 @@ export async function uploadFileWithPublicAccess(
     }
 
     const fileStream = fs.createReadStream(filePath);
-    const fileName = path.basename(filePath);
+    const fileName = sanitizeFilenameForS3Key(path.basename(filePath));
     const fileExtension = path.extname(fileName);
     const contentType = mime.lookup(fileExtension) || 'application/octet-stream';
     const s3Key = `${folder}/${Date.now()}_${fileName}`;
@@ -172,7 +229,7 @@ export async function uploadFileWithPublicAccess(
       ACL: 'public-read',
     };
 
-    const uploadResult = await s3.upload(uploadParams).promise();
+    const uploadResult = await getS3Client().upload(uploadParams).promise();
 
     const fileInfo = {
       fileName: uploadResult.Key.split('/').pop() || fileName,
@@ -203,7 +260,7 @@ export async function uploadFileWithPublicAccess(
  */
 export async function generatePublicUrl(key: string, expiresIn: number = 3600): Promise<string> {
   try {
-    const url = s3.getSignedUrl('getObject', {
+    const url = getS3Client().getSignedUrl('getObject', {
       Bucket: BUCKET_NAME,
       Key: key,
       Expires: expiresIn,
@@ -234,7 +291,7 @@ export async function deleteFileFromS3(key: string): Promise<void> {
       Key: key,
     };
 
-    await s3.deleteObject(deleteParams).promise();
+    await getS3Client().deleteObject(deleteParams).promise();
 
     logInfo('✅ S3 File Deleted', { s3Key: key });
   } catch (error) {
@@ -249,14 +306,29 @@ export async function deleteFileFromS3(key: string): Promise<void> {
  * @returns S3 key if it's an S3 URL, null otherwise
  */
 export function extractS3Key(urlOrPath: string): string | null {
-  // Check if it's an S3 URL
-  if (urlOrPath.includes('amazonaws.com') || urlOrPath.includes('s3.')) {
-    // Extract key from URL (format: https://bucket.s3.region.amazonaws.com/key)
-    const urlParts = urlOrPath.split('.com/');
-    if (urlParts.length > 1) {
-      return urlParts[1].split('?')[0]; // Remove query params
+  const trimmed = String(urlOrPath || '').trim();
+  if (!trimmed) return null;
+
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+    try {
+      const parsed = new URL(trimmed);
+      const isS3Host = parsed.hostname.includes('amazonaws.com') || parsed.hostname.startsWith('s3.');
+      if (isS3Host) {
+        return decodeS3UrlPathToKey(parsed.pathname);
+      }
+      return null;
+    } catch {
+      // Non-standard URL string; fall back below
     }
+    if (trimmed.includes('amazonaws.com') || trimmed.includes('s3.')) {
+      const urlParts = trimmed.split('.com/');
+      if (urlParts.length > 1) {
+        return decodeS3UrlPathToKey(urlParts[1]);
+      }
+    }
+    return null;
   }
+
   return null;
 }
 
