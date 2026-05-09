@@ -733,7 +733,7 @@ export const completeVisit = async (req: Request, res: Response): Promise<void> 
       uploadedMeterImageUrl ||
       (typeof existingMeterImage === 'string' && existingMeterImage.trim() !== ''
         ? existingMeterImage.trim()
-        : null);
+        : ((visit as any).meterImage || null));
 
     const parsedLength = toOptionalFiniteNumber(length);
     const parsedWidth = toOptionalFiniteNumber(width);
@@ -800,11 +800,12 @@ export const completeVisit = async (req: Request, res: Response): Promise<void> 
       Number(((visit as any).midLegFeet ?? 0)) === Number(parsedMidLegFeet ?? 0) &&
       Number(((visit as any).frontLegFeet ?? 0)) === Number(parsedFrontLegFeet ?? 0) &&
       String((visit as any).rowDiagramImage || '') === String(rowDiagramImageUrl || '') &&
+      String((visit as any).meterImage || '') === String(meterImageUrl || '') &&
       JSON.stringify(dedupeMediaUrls(Array.isArray(visit.images) ? visit.images : [])) === JSON.stringify(mergedImages) &&
       String(visit.notes || '') === String(nextNotes || '') &&
       String(visit.feedback || '') === String(nextFeedback || '');
 
-    if (noScalarChange && imageFiles.length === 0 && !rowDiagramFile) {
+    if (noScalarChange && imageFiles.length === 0 && !rowDiagramFile && !meterImageFile) {
       const responseImages = await resolveMediaUrls(visit.images);
       const responseRowDiagramImage = await resolveMediaUrl((visit as any).rowDiagramImage);
       const responseMeterImage = await resolveMediaUrl(
@@ -823,8 +824,11 @@ export const completeVisit = async (req: Request, res: Response): Promise<void> 
           midLegFeet: (visit as any).midLegFeet || null,
           frontLegFeet: (visit as any).frontLegFeet || null,
           images: responseImages,
+          site_images: responseImages,
           rowDiagramImage: responseRowDiagramImage,
+          row_diagram_image: responseRowDiagramImage,
           meterImage: responseMeterImage,
+          meter_image: responseMeterImage,
           notes: visit.notes || visit.feedback || null,
           feedback: visit.feedback || visit.notes || null,
           updatedAt: visit.updatedAt
@@ -833,7 +837,7 @@ export const completeVisit = async (req: Request, res: Response): Promise<void> 
       return;
     }
 
-    await visit.update({
+    await (visit as any).update({
       status: 'completed',
       length: nextLength,
       width: nextWidth,
@@ -843,6 +847,7 @@ export const completeVisit = async (req: Request, res: Response): Promise<void> 
       midLegFeet: parsedMidLegFeet,
       frontLegFeet: parsedFrontLegFeet,
       rowDiagramImage: rowDiagramImageUrl,
+      meterImage: meterImageUrl,
       images: mergedImages,
       feedback: nextFeedback,
       notes: nextNotes
@@ -867,8 +872,11 @@ export const completeVisit = async (req: Request, res: Response): Promise<void> 
         midLegFeet: (visit as any).midLegFeet || null,
         frontLegFeet: (visit as any).frontLegFeet || null,
         images: responseImages,
+        site_images: responseImages,
         rowDiagramImage: responseRowDiagramImage,
+        row_diagram_image: responseRowDiagramImage,
         meterImage: responseMeterImage,
+        meter_image: responseMeterImage,
         notes: visit.notes || visit.feedback || notes || null,
         feedback: visit.feedback || visit.notes || notes || null,
         updatedAt: visit.updatedAt
