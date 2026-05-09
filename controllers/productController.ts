@@ -529,6 +529,12 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
       updates.category = category;
     }
 
+    /**
+     * Stock semantics (single rule):
+     * - quantity alone: sets absolute on-hand quantity (delta logged as adjustment).
+     * - stock_to_add alone: adds to current quantity (logged as purchase).
+     * - both: quantity must equal current + stock_to_add (frontend consistency check).
+     */
     const stockToAdd = stock_to_add !== undefined ? Number(stock_to_add) : undefined;
     if (stockToAdd !== undefined && (isNaN(stockToAdd) || stockToAdd < 0)) {
       res.status(400).json({ error: 'stock_to_add must be a non-negative number' });

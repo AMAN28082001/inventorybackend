@@ -177,6 +177,42 @@ export const uploadToS3FromMemory = (folder: string = 'photos') => {
 };
 
 // Middleware to handle file deletion from S3 when updating/deleting records
+const isMultipartProductRequest = (req: Request): boolean =>
+  String(req.headers['content-type'] || '').toLowerCase().includes('multipart/form-data');
+
+/**
+ * For POST/PUT products: run disk multer + S3 only when Content-Type is multipart/form-data.
+ * Use application/json for creates/updates without a binary image so AWS is never touched.
+ */
+export const conditionalProductMultipartUpload = (mode: 'create' | 'update') => {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    if (!isMultipartProductRequest(req)) {
+      next();
+      return;
+    }
+    if (mode === 'create') {
+      upload.single('image')(req, res, (err: unknown) => {
+        if (err) {
+          next(err as Error);
+          return;
+        }
+        uploadToS3('products')(req, res, next);
+      });
+      return;
+    }
+    upload.fields([
+      { name: 'image', maxCount: 1 },
+      { name: 'serial_number_excel', maxCount: 1 }
+    ])(req, res, (err: unknown) => {
+      if (err) {
+        next(err as Error);
+        return;
+      }
+      uploadToS3('products')(req, res, next);
+    });
+  };
+};
+
 export const deleteFileFromS3IfExists = async (filePathOrUrl: string | null | undefined): Promise<void> => {
   if (!filePathOrUrl) return;
   

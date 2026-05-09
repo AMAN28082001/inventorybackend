@@ -9,7 +9,7 @@ import {
   getInventoryLevels
 } from '../controllers/productController';
 import { authenticate, authorizeProductManagement } from '../middleware/auth';
-import upload, { uploadToS3 } from '../middleware/upload';
+import { conditionalProductMultipartUpload } from '../middleware/upload';
 import { validate } from '../middleware/validate';
 import { createProductSchema, updateProductSchema } from '../validations/productValidations';
 
@@ -115,7 +115,13 @@ router.get('/:id/serial-numbers', getProductSerialNumbers);
  *       400:
  *         description: Validation error
  */
-router.post('/', authorizeProductManagement, upload.single('image'), uploadToS3('products'), validate(createProductSchema), createProduct);
+router.post(
+  '/',
+  authorizeProductManagement,
+  conditionalProductMultipartUpload('create'),
+  validate(createProductSchema),
+  createProduct
+);
 
 /**
  * @swagger
@@ -162,11 +168,7 @@ router.post('/', authorizeProductManagement, upload.single('image'), uploadToS3(
 router.put(
   '/:id',
   authorizeProductManagement,
-  upload.fields([
-    { name: 'image', maxCount: 1 },
-    { name: 'serial_number_excel', maxCount: 1 }
-  ]),
-  uploadToS3('products'),
+  conditionalProductMultipartUpload('update'),
   validate(updateProductSchema),
   updateProduct
 );

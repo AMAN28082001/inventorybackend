@@ -153,7 +153,7 @@ const normalizeSaleItems = async (rawItems: any, transaction: Transaction): Prom
  *
  * - Agent: only their own sales
  * - Admin: their own sales + sales from agents they created
- * - Account / Super-Admin: all sales
+ * - Account, Super-Admin, Super-Admin-Manager: no filter (all sales)
  */
 const buildSalesRoleConditions = async (req: Request): Promise<any[]> => {
   const conditions: any[] = [];
@@ -643,7 +643,11 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
         if (!reduced) {
           throw new Error(`Insufficient admin inventory for product ${item.product_id}`);
         }
-      } else if (req.user.role === 'super-admin') {
+      } else if (
+        req.user.role === 'super-admin' ||
+        req.user.role === 'super-admin-manager' ||
+        req.user.role === 'account'
+      ) {
         await reduceCentralInventory(item.product_id, item.quantity, transaction);
       } else {
         throw new Error('Insufficient permissions to deduct inventory');
