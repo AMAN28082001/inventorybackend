@@ -5,8 +5,23 @@ import mime from 'mime-types';
 import { logInfo, logError } from '../utils/loggerHelper';
 import logger from '../config/logger';
 
-const BUCKET_NAME = process.env.AWS_BUCKET_NAME || 'cbpl-bajaj-node';
-const AWS_REGION = process.env.AWS_REGION || 'ap-south-1';
+const normalizeAwsEnvValue = (value: string | undefined, fallback = ''): string => {
+  const normalized = String(value || '')
+    .trim()
+    .replace(/^['"]+|['"]+$/g, '');
+
+  if (!normalized) return fallback;
+
+  const lower = normalized.toLowerCase();
+  if (lower === 'undefined' || lower === 'null') {
+    return fallback;
+  }
+
+  return normalized;
+};
+
+const BUCKET_NAME = normalizeAwsEnvValue(process.env.AWS_BUCKET_NAME, 'cbpl-bajaj-node');
+const AWS_REGION = normalizeAwsEnvValue(process.env.AWS_REGION, 'ap-south-1');
 
 let cachedS3: AWS.S3 | null = null;
 
@@ -24,16 +39,17 @@ const createStorageConfigError = (message: string): Error => {
 };
 
 export const resolveAwsStorageConfig = (): AwsStorageConfig => {
-  const region = String(process.env.AWS_REGION || 'ap-south-1').trim();
-  const bucketName = String(process.env.AWS_BUCKET_NAME || 'cbpl-bajaj-node').trim();
-  const accessKeyId = process.env.AWS_ACCESS_KEY || '';
-  const secretAccessKey = process.env.AWS_SECRET_KEY || '';
-  console.log('accessKeyId', accessKeyId);
-  console.log('secretAccessKey', secretAccessKey);
-  console.log('region', region);
-  console.log('bucketName', bucketName);
+  const region = normalizeAwsEnvValue(process.env.AWS_REGION, 'ap-south-1');
+  const bucketName = normalizeAwsEnvValue(process.env.AWS_BUCKET_NAME, 'cbpl-bajaj-node');
+  const accessKeyId = normalizeAwsEnvValue(process.env.AWS_ACCESS_KEY);
+  const secretAccessKey = normalizeAwsEnvValue(process.env.AWS_SECRET_KEY);
 
-  logger.info('AWS Storage Config', { region, bucketName, accessKeyId, secretAccessKey });
+  logger.info('AWS Storage Config', {
+    region,
+    bucketName,
+    hasAccessKeyId: Boolean(accessKeyId),
+    hasSecretAccessKey: Boolean(secretAccessKey)
+  });
 
   if (!region) {
     throw createStorageConfigError('AWS_REGION is not configured.');
@@ -53,9 +69,9 @@ export const resolveAwsStorageConfig = (): AwsStorageConfig => {
 /** Lazy client so processes that never upload do not need credentials at import time. */
 export const getS3Client = (): AWS.S3 => {
   if (!cachedS3) {
-    const accessKeyId = process.env.AWS_ACCESS_KEY || process.env.AWS_ACCESS_KEY_ID;
-    const secretAccessKey = process.env.AWS_SECRET_KEY || process.env.AWS_SECRET_ACCESS_KEY;
-    const region = process.env.AWS_REGION || 'ap-south-1';
+    const accessKeyId = normalizeAwsEnvValue(process.env.AWS_ACCESS_KEY || process.env.AWS_ACCESS_KEY_ID);
+    const secretAccessKey = normalizeAwsEnvValue(process.env.AWS_SECRET_KEY || process.env.AWS_SECRET_ACCESS_KEY);
+    const region = normalizeAwsEnvValue(process.env.AWS_REGION, 'ap-south-1');
     if (accessKeyId && secretAccessKey) {
       AWS.config.update({ accessKeyId, secretAccessKey, region });
     } else {

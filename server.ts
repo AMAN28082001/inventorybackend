@@ -64,7 +64,7 @@ const getActor = (req: Request): { id?: string; role?: string; username?: string
 const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3000', 'http://localhost:3050', 'http://localhost:3001', 'http://43.204.133.228:3051', 'http://43.204.133.228:3050', 'http://localhost:3002', 'http://localhost:3003','http://quotation.chairbordsolar.com', 'http://api.inventory.chairbordsolar.com', 'https://api.inventory.chairbordsolar.com', 'https://inventory.chairbordsolar.com', 'http://43.204.133.228:3052','https://quotation.chairbordsolar.com','http://192.168.1.25:3000','http://192.0.0.2:3000', 'http://192.168.1.47:3000'];
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow requests with no origin (like mobile apps or curl requests)
+    // Allow requests with no origin (like mobile apps or curl request)
     if (!origin) return callback(null, true);
 
     if (allowedOrigins.includes(origin)) {

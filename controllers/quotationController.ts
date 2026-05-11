@@ -2750,10 +2750,25 @@ export const updateQuotationInstallationRelease = async (req: Request, res: Resp
   }
 };
 
+const normalizeAwsEnvValue = (value: string | undefined, fallback = ''): string => {
+  const normalized = String(value || '')
+    .trim()
+    .replace(/^['"]+|['"]+$/g, '');
+
+  if (!normalized) return fallback;
+
+  const lower = normalized.toLowerCase();
+  if (lower === 'undefined' || lower === 'null') {
+    return fallback;
+  }
+
+  return normalized;
+};
+
 const getS3Client = () => {
-  const region = process.env.AWS_REGION || 'ap-south-1';
-  const accessKeyId = process.env.AWS_ACCESS_KEY || process.env.AWS_ACCESS_KEY_ID;
-  const secretAccessKey = process.env.AWS_SECRET_KEY || process.env.AWS_SECRET_ACCESS_KEY;
+  const region = normalizeAwsEnvValue(process.env.AWS_REGION, 'ap-south-1');
+  const accessKeyId = normalizeAwsEnvValue(process.env.AWS_ACCESS_KEY || process.env.AWS_ACCESS_KEY_ID);
+  const secretAccessKey = normalizeAwsEnvValue(process.env.AWS_SECRET_KEY || process.env.AWS_SECRET_ACCESS_KEY);
 
   if (accessKeyId && secretAccessKey) {
     return new AWS.S3({ region, accessKeyId, secretAccessKey });
@@ -2766,14 +2781,14 @@ const buildS3Url = (key: string) => {
   if (publicBase) {
     return `${publicBase.replace(/\/$/, '')}/${key}`;
   }
-  const bucket = process.env.AWS_BUCKET_NAME;
-  const region = process.env.AWS_REGION || 'ap-south-1';
+  const bucket = normalizeAwsEnvValue(process.env.AWS_BUCKET_NAME, 'cbpl-bajaj-node');
+  const region = normalizeAwsEnvValue(process.env.AWS_REGION, 'ap-south-1');
   const host = region === 'us-east-1' ? 's3.amazonaws.com' : `s3.${region}.amazonaws.com`;
   return `https://${bucket}.${host}/${key}`;
 };
 
 const uploadFileToS3 = async (file: Express.Multer.File, quotationId: string, fieldName: string) => {
-  const bucket = process.env.AWS_BUCKET_NAME;
+  const bucket = normalizeAwsEnvValue(process.env.AWS_BUCKET_NAME, 'cbpl-bajaj-node');
   if (!bucket) {
     throw new Error('AWS_BUCKET_NAME is not configured');
   }
