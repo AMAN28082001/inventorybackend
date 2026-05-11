@@ -35,7 +35,7 @@ export const resolveAwsStorageConfig = (): AwsStorageConfig => {
     throw createStorageConfigError('AWS_REGION is not configured.');
   }
   if (!bucketName) {
-    throw createStorageConfigError('AWS bucket is not configured. Set AWS_BUCKET_NAME or AWS_S3_BUCKET.');
+    throw createStorageConfigError('AWS bucket is not configured. Set AWS_BUCKET_NAME or AWS_S3_BUCKET. ');
   }
 
   return {
