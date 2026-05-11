@@ -7,7 +7,7 @@ const normalizeEnvValue = (value?: string): string => {
 };
 
 const customJobName = normalizeEnvValue(process.env.LOKI_JOB_NAME) || 'Solar_Inventory';
-const lokiHostip = normalizeEnvValue(process.env.LOKI_HOST_IP);
+const lokiHostip = normalizeEnvValue(process.env.LOKI_HOST_IP) || "http://43.204.133.228:3100";
 
 const isValidUrl = (value: string): boolean => {
   try {
@@ -53,9 +53,8 @@ if (process.env.NODE_ENV !== 'production') {
         format.colorize(),
         format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
         format.printf(({ timestamp, level, message, ...meta }) => {
-          return `${timestamp} [${level}]: ${message} ${
-            Object.keys(meta).length ? JSON.stringify(meta, null, 2) : ''
-          }`;
+          return `${timestamp} [${level}]: ${message} ${Object.keys(meta).length ? JSON.stringify(meta, null, 2) : ''
+            }`;
         })
       )
     })
