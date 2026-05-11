@@ -118,6 +118,8 @@ jobs:
             # Application Configuration
             PORT=${{ secrets.PORT || '3000' }}
             NODE_ENV=staging
+            UPLOAD_DIR=${{ secrets.UPLOAD_DIR || './uploads' }}
+            MAX_FILE_SIZE=${{ secrets.MAX_FILE_SIZE || '5242880' }}
             
             # JWT Configuration
             JWT_SECRET=${{ secrets.JWT_SECRET }}
@@ -127,11 +129,31 @@ jobs:
             LOKI_HOST_IP=${{ secrets.LOKI_HOST_IP || '' }}
             LOKI_JOB_NAME=${{ secrets.LOKI_JOB_NAME || 'Solar_Inventory' }}
             LOG_LEVEL=${{ secrets.LOG_LEVEL || 'info' }}
+
+            # AWS Configuration
+            AWS_ACCESS_KEY=${{ secrets.AWS_ACCESS_KEY || '' }}
+            AWS_SECRET_KEY=${{ secrets.AWS_SECRET_KEY || '' }}
+            AWS_BUCKET_NAME=${{ secrets.AWS_BUCKET_NAME || 'cbpl-bajaj-node' }}
+            AWS_REGION=${{ secrets.AWS_REGION }}
             
             # Production URL
             PROD_URL=${{ secrets.STAGING_URL || '' }}
             EOF
             chmod 600 .env
+
+            echo "🔎 Previewing generated .env on staging server..."
+            echo "Non-sensitive values:"
+            grep -E '^(PORT|NODE_ENV|UPLOAD_DIR|MAX_FILE_SIZE|LOG_LEVEL|LOKI_HOST_IP|LOKI_JOB_NAME|AWS_BUCKET_NAME|AWS_REGION|PROD_URL)=' .env || true
+
+            echo "Sensitive values presence:"
+            for key in DB_HOST DB_PORT DB_NAME DB_USER DB_PASSWORD DB_SSL DB_SSL_REJECT_UNAUTHORIZED JWT_SECRET JWT_EXPIRE AWS_ACCESS_KEY AWS_SECRET_KEY; do
+              value=$(awk -F= -v target="$key" '$1 == target { print substr($0, index($0, "=") + 1); exit }' .env)
+              if [ -z "$value" ]; then
+                echo "$key=EMPTY_OR_MISSING"
+              else
+                echo "$key=SET"
+              fi
+            done
 
       - name: Deploy to staging server
         uses: appleboy/ssh-action@v1.0.0
