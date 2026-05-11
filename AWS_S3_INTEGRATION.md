@@ -4,7 +4,7 @@ This document describes the AWS S3 integration for file uploads in the inventory
 
 ## Overview
 
-All file uploads (images, PDFs) are now automatically uploaded to AWS S3 after being processed by multer. The system maintains backward compatibility with local file storage as a fallback.
+All file uploads (images, PDF) are now automatically uploaded to AWS S3 after being processed by multer. The system maintains backward compatibility with local file storage as a fallback.
 
 ## Environment Variables
 
