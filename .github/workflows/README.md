@@ -1,6 +1,6 @@
 # GitHub Actions Workflows
 
-This directory contains CI/CD workflows for the Chairbord Solar Inventory Backend.
+This directory contains CI/CD workflows for the Chairbord Solar Inventory Backend
 
 ## Workflow Files
 
