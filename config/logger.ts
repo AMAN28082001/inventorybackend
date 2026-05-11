@@ -1,8 +1,22 @@
 import { createLogger, format, transports } from 'winston';
 import LokiTransport from 'winston-loki';
 
-const customJobName = process.env.LOKI_JOB_NAME || 'Solar_Inventory';
-const lokiHostip = process.env.LOKI_HOST_IP;
+const normalizeEnvValue = (value?: string): string => {
+  if (!value) return '';
+  return value.trim().replace(/^['"]+|['"]+$/g, '');
+};
+
+const customJobName = normalizeEnvValue(process.env.LOKI_JOB_NAME) || 'Solar_Inventory';
+const lokiHostip = normalizeEnvValue(process.env.LOKI_HOST_IP);
+
+const isValidUrl = (value: string): boolean => {
+  try {
+    new URL(value);
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 
 
@@ -50,15 +64,19 @@ if (process.env.NODE_ENV !== 'production') {
 
 // Add Loki transport if host is configured
 if (lokiHostip) {
-  transportArray.push(
-    new LokiTransport({
-      host: lokiHostip,
-      labels: { job: customJobName },
-      json: true,
-      batching: true,
-      interval: 5 // push logs every 5 seconds
-    })
-  );
+  if (isValidUrl(lokiHostip)) {
+    transportArray.push(
+      new LokiTransport({
+        host: lokiHostip,
+        labels: { job: customJobName },
+        json: true,
+        batching: true,
+        interval: 5 // push logs every 5 seconds
+      })
+    );
+  } else {
+    console.warn(`Skipping Loki transport due to invalid LOKI_HOST_IP: ${lokiHostip}`);
+  }
 }
 
 // If no transports configured, add console as fallback
@@ -81,7 +99,7 @@ const options = {
     format.json()
   ),
   transports: transportArray,
-  level: process.env.LOG_LEVEL || 'info'
+  level: normalizeEnvValue(process.env.LOG_LEVEL) || 'info'
 };
 
 const logger = createLogger(options);

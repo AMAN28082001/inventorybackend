@@ -25,9 +25,9 @@ const createStorageConfigError = (message: string): Error => {
 
 export const resolveAwsStorageConfig = (): AwsStorageConfig => {
   const region = String(process.env.AWS_REGION || '').trim();
-  const bucketName = String(process.env.AWS_BUCKET_NAME || process.env.AWS_S3_BUCKET || '').trim();
-  const accessKeyId = process.env.AWS_ACCESS_KEY || process.env.AWS_ACCESS_KEY_ID;
-  const secretAccessKey = process.env.AWS_SECRET_KEY || process.env.AWS_SECRET_ACCESS_KEY;
+  const bucketName = String(process.env.AWS_BUCKET_NAME || '').trim();
+  const accessKeyId = process.env.AWS_ACCESS_KEY || '';
+  const secretAccessKey = process.env.AWS_SECRET_KEY || '';
 
   logger.info('AWS Storage Config', { region, bucketName, accessKeyId, secretAccessKey });
 
