@@ -3,6 +3,7 @@ import multer, { MulterError } from 'multer';
 import {
   createVisit,
   getAllVisits,
+  getVisitById,
   approveVisit,
   completeVisit,
   uploadVisitMedia,
@@ -301,6 +302,7 @@ router.post('/', authenticate, authorizeDealer, validate(createVisitSchema), cre
  *         description: Unauthorized
  */
 router.get('/', authenticate, authorizeDealer, getAllVisits);
+router.get('/:visitId', getVisitById);
 
 /**
  * @swagger

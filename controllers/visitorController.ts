@@ -16,6 +16,26 @@ const normalizeVisitTime = (value: unknown): string => {
   return raw;
 };
 
+const parseVisitTimeFields = (value: unknown): { visitTime: string; visitStartTime: string | null; visitEndTime: string | null } => {
+  const visitTime = normalizeVisitTime(value);
+  if (/^([01]\d|2[0-3]):([0-5]\d)\s-\s([01]\d|2[0-3]):([0-5]\d)$/.test(visitTime)) {
+    const [visitStartTime, visitEndTime] = visitTime.split(' - ');
+    return { visitTime, visitStartTime, visitEndTime };
+  }
+  if (/^([01]\d|2[0-3]):([0-5]\d)$/.test(visitTime)) {
+    return { visitTime, visitStartTime: visitTime, visitEndTime: null };
+  }
+  return { visitTime, visitStartTime: null, visitEndTime: null };
+};
+
+const parseSummaryFlag = (value: unknown, fallback = true): boolean => {
+  if (value === undefined || value === null || value === '') return fallback;
+  const normalized = String(value).trim().toLowerCase();
+  if (['false', '0', 'no', 'off'].includes(normalized)) return false;
+  if (['true', '1', 'yes', 'on'].includes(normalized)) return true;
+  return fallback;
+};
+
 type CanonicalVisitStatus = 'pending' | 'approved' | 'completed' | 'incomplete' | 'rescheduled' | 'rejected';
 
 const normalizeVisitStatus = (raw?: unknown): CanonicalVisitStatus => {
@@ -71,6 +91,44 @@ const resolveMediaUrls = async (urls: unknown): Promise<string[]> => {
   return resolved.filter((u): u is string => !!u);
 };
 
+const mapAssignmentSummary = (assignments: any[]) =>
+  (assignments || []).map((a: any) => {
+    const visitor = a.visitor;
+    if (visitor) {
+      return {
+        visitorId: visitor.id,
+        visitorName: `${toSafeString(visitor.firstName)} ${toSafeString(visitor.lastName)}`.trim() || toSafeString(a.visitorName)
+      };
+    }
+    return {
+      visitorId: a.visitorId,
+      visitorName: toSafeString(a.visitorName)
+    };
+  });
+
+const mapAssignmentDetails = (assignments: any[]) =>
+  (assignments || []).map((a: any) => {
+    const visitor = a.visitor;
+    if (visitor) {
+      return {
+        visitorId: visitor.id,
+        username: visitor.username,
+        firstName: visitor.firstName,
+        lastName: visitor.lastName,
+        fullName: `${visitor.firstName} ${visitor.lastName}`,
+        email: visitor.email,
+        mobile: visitor.mobile,
+        employeeId: visitor.employeeId,
+        isActive: visitor.isActive
+      };
+    }
+    return {
+      visitorId: a.visitorId,
+      visitorName: a.visitorName,
+      fullName: a.visitorName
+    };
+  });
+
 // Get assigned visits (visitor)
 export const getAssignedVisits = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -88,6 +146,7 @@ export const getAssignedVisits = async (req: Request, res: Response): Promise<vo
     const startDate = req.query.startDate as string;
     const endDate = req.query.endDate as string;
     const search = req.query.search as string;
+    const summary = parseSummaryFlag(req.query.summary, true);
 
     const where: any = {};
 
@@ -141,7 +200,7 @@ export const getAssignedVisits = async (req: Request, res: Response): Promise<vo
             {
               model: Dealer,
               as: 'dealer',
-              attributes: ['firstName', 'lastName']
+              attributes: ['id', 'firstName', 'lastName']
             }
           ]
         }
@@ -176,49 +235,68 @@ export const getAssignedVisits = async (req: Request, res: Response): Promise<vo
       const vAny = v as any;
       const quotation = vAny.quotation;
       const customer = quotation?.customer;
-      const resolvedImages = await resolveMediaUrls(v.images);
-      const resolvedRowDiagramImage = await resolveMediaUrl(vAny.rowDiagramImage);
-      const resolvedMeterImage = await resolveMediaUrl(
-        vAny.meterImage || (Array.isArray(resolvedImages) ? resolvedImages[0] : null)
-      );
+      const assignments = vAny.assignments || [];
+      const timeFields = parseVisitTimeFields(v.visitTime);
       const safeQuotation = {
-        id: toSafeString(quotation?.id),
-        systemType: toSafeString(quotation?.systemType),
-        finalAmount: Number(quotation?.finalAmount || 0),
-        createdAt: quotation?.createdAt || null,
-        customer: {
-          firstName: toSafeString(customer?.firstName),
-          lastName: toSafeString(customer?.lastName),
-          mobile: toSafeString(customer?.mobile),
-          email: toSafeString(customer?.email)
-        }
+        id: toSafeString(quotation?.id)
       };
       const safeCustomer = {
         firstName: toSafeString(customer?.firstName),
         lastName: toSafeString(customer?.lastName),
         mobile: toSafeString(customer?.mobile),
-        email: toSafeString(customer?.email),
-        address: {
-          street: toSafeString(customer?.streetAddress),
-          city: toSafeString(customer?.city),
-          state: toSafeString(customer?.state),
-          pincode: toSafeString(customer?.pincode)
-        }
+        email: toSafeString(customer?.email)
       };
-      return {
+
+      const baseVisit = {
         id: v.id,
         quotation: safeQuotation,
         customer: safeCustomer,
         dealer: quotation?.dealer ? {
+          id: quotation.dealer.id,
           firstName: quotation.dealer.firstName,
           lastName: quotation.dealer.lastName
         } : null,
         visitDate: v.visitDate || '',
-        visitTime: normalizeVisitTime(v.visitTime),
+        visitTime: timeFields.visitTime,
+        visitStartTime: timeFields.visitStartTime,
+        visitEndTime: timeFields.visitEndTime,
         location: toSafeString(v.location),
         locationLink: toSafeString(v.locationLink),
-        notes: toSafeString(v.notes),
         status: normalizeVisitStatus(v.status),
+        createdAt: v.createdAt
+      };
+
+      if (summary) {
+        return {
+          ...baseVisit,
+          visitors: mapAssignmentSummary(assignments)
+        };
+      }
+
+      const resolvedImages = await resolveMediaUrls(v.images);
+      const resolvedRowDiagramImage = await resolveMediaUrl(vAny.rowDiagramImage);
+      const resolvedMeterImage = await resolveMediaUrl(
+        vAny.meterImage || (Array.isArray(resolvedImages) ? resolvedImages[0] : null)
+      );
+      return {
+        ...baseVisit,
+        quotation: {
+          ...safeQuotation,
+          systemType: toSafeString(quotation?.systemType),
+          finalAmount: Number(quotation?.finalAmount || 0),
+          createdAt: quotation?.createdAt || null,
+          customer: safeCustomer
+        },
+        customer: {
+          ...safeCustomer,
+          address: {
+            street: toSafeString(customer?.streetAddress),
+            city: toSafeString(customer?.city),
+            state: toSafeString(customer?.state),
+            pincode: toSafeString(customer?.pincode)
+          }
+        },
+        notes: toSafeString(v.notes),
         length: v.length ?? null,
         width: v.width ?? null,
         height: v.height ?? null,
@@ -232,49 +310,9 @@ export const getAssignedVisits = async (req: Request, res: Response): Promise<vo
         row_diagram_image: resolvedRowDiagramImage,
         meterImage: resolvedMeterImage,
         meter_image: resolvedMeterImage,
-        otherVisitors: (vAny.assignments || []).filter((a: any) => a.visitorId !== req.visitor!.id).map((a: any) => {
-          const visitor = a.visitor;
-          if (visitor) {
-            return {
-              visitorId: visitor.id,
-              username: visitor.username,
-              firstName: visitor.firstName,
-              lastName: visitor.lastName,
-              fullName: `${visitor.firstName} ${visitor.lastName}`,
-              email: visitor.email,
-              mobile: visitor.mobile,
-              employeeId: visitor.employeeId,
-              isActive: visitor.isActive
-            };
-          }
-          return {
-            visitorId: a.visitorId,
-            visitorName: a.visitorName,
-            fullName: a.visitorName
-          };
-        }),
-        assignedVisitors: (vAny.assignments || []).map((a: any) => {
-          const visitor = a.visitor;
-          if (visitor) {
-            return {
-              visitorId: visitor.id,
-              username: visitor.username,
-              firstName: visitor.firstName,
-              lastName: visitor.lastName,
-              fullName: `${visitor.firstName} ${visitor.lastName}`,
-              email: visitor.email,
-              mobile: visitor.mobile,
-              employeeId: visitor.employeeId,
-              isActive: visitor.isActive
-            };
-          }
-          return {
-            visitorId: a.visitorId,
-            visitorName: a.visitorName,
-            fullName: a.visitorName
-          };
-        }),
-        createdAt: v.createdAt
+        otherVisitors: mapAssignmentDetails(assignments.filter((a: any) => a.visitorId !== req.visitor!.id)),
+        assignedVisitors: mapAssignmentDetails(assignments),
+        visitors: mapAssignmentSummary(assignments)
       };
     }));
 

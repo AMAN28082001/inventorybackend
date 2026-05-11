@@ -4,17 +4,46 @@ import path from 'path';
 import mime from 'mime-types';
 import { logInfo, logError } from '../utils/loggerHelper';
 
-const BUCKET_NAME = process.env.AWS_BUCKET_NAME || 'cbpl-bajaj-node';
-const AWS_REGION = process.env.AWS_REGION || 'ap-south-1';
-
 let cachedS3: AWS.S3 | null = null;
+
+type AwsStorageConfig = {
+  bucketName: string;
+  region: string;
+  accessKeyId?: string;
+  secretAccessKey?: string;
+};
+
+const createStorageConfigError = (message: string): Error => {
+  const err = new Error(message) as Error & { code?: string };
+  err.code = 'S3_CONFIG_MISSING';
+  return err;
+};
+
+export const resolveAwsStorageConfig = (): AwsStorageConfig => {
+  const region = String(process.env.AWS_REGION || '').trim();
+  const bucketName = String(process.env.AWS_BUCKET_NAME || process.env.AWS_S3_BUCKET || '').trim();
+  const accessKeyId = process.env.AWS_ACCESS_KEY || process.env.AWS_ACCESS_KEY_ID;
+  const secretAccessKey = process.env.AWS_SECRET_KEY || process.env.AWS_SECRET_ACCESS_KEY;
+
+  if (!region) {
+    throw createStorageConfigError('AWS_REGION is not configured.');
+  }
+  if (!bucketName) {
+    throw createStorageConfigError('AWS bucket is not configured. Set AWS_BUCKET_NAME or AWS_S3_BUCKET.');
+  }
+
+  return {
+    bucketName,
+    region,
+    ...(accessKeyId ? { accessKeyId } : {}),
+    ...(secretAccessKey ? { secretAccessKey } : {})
+  };
+};
 
 /** Lazy client so processes that never upload do not need credentials at import time. */
 export const getS3Client = (): AWS.S3 => {
   if (!cachedS3) {
-    const accessKeyId = process.env.AWS_ACCESS_KEY || process.env.AWS_ACCESS_KEY_ID;
-    const secretAccessKey = process.env.AWS_SECRET_KEY || process.env.AWS_SECRET_ACCESS_KEY;
-    const region = process.env.AWS_REGION || 'ap-south-1';
+    const { accessKeyId, secretAccessKey, region } = resolveAwsStorageConfig();
     if (accessKeyId && secretAccessKey) {
       AWS.config.update({ accessKeyId, secretAccessKey, region });
     } else {
@@ -77,12 +106,13 @@ const shouldUsePublicReadAcl = toBool(process.env.AWS_S3_USE_PUBLIC_READ_ACL, fa
 const signedUrlTtlSeconds = Number(process.env.AWS_S3_SIGNED_URL_TTL_SECONDS || 604800); // 7 days
 
 export const buildS3ObjectUrl = (key: string): string => {
+  const { bucketName, region } = resolveAwsStorageConfig();
   const encodedKey = key
     .split('/')
     .filter(Boolean)
     .map((segment) => encodeURIComponent(segment))
     .join('/');
-  return `https://${BUCKET_NAME}.s3.${AWS_REGION}.amazonaws.com/${encodedKey}`;
+  return `https://${bucketName}.s3.${region}.amazonaws.com/${encodedKey}`;
 };
 
 /**
@@ -99,6 +129,7 @@ export async function uploadFileToS3(filePath: string, folder: string = 'photos'
 }> {
   try {
     logInfo('📤 Initiating S3 upload', { filePath, folder });
+    const { bucketName } = resolveAwsStorageConfig();
 
     if (!fs.existsSync(filePath)) {
       throw new Error(`File not found: ${filePath}`);
@@ -111,7 +142,7 @@ export async function uploadFileToS3(filePath: string, folder: string = 'photos'
     const s3Key = `${folder}/${Date.now()}_${fileName}`;
 
     const uploadParams: AWS.S3.PutObjectRequest = {
-      Bucket: BUCKET_NAME,
+      Bucket: bucketName,
       Key: s3Key,
       Body: fileStream,
       ContentType: contentType,
@@ -160,6 +191,7 @@ export async function uploadFileToS3FromBuffer(
 ): Promise<string> {
   try {
     logInfo('📤 Initiating S3 upload from buffer', { filename, folder });
+    const { bucketName } = resolveAwsStorageConfig();
 
     const buffer = Buffer.isBuffer(fileBuffer) ? fileBuffer : Buffer.from(fileBuffer, 'base64');
     const safeFilename = sanitizeFilenameForS3Key(filename);
@@ -168,7 +200,7 @@ export async function uploadFileToS3FromBuffer(
     const s3Key = `${folder}/${Date.now()}_${safeFilename}`;
 
     const uploadParams: AWS.S3.PutObjectRequest = {
-      Bucket: BUCKET_NAME,
+      Bucket: bucketName,
       Key: s3Key,
       Body: buffer,
       ContentType: contentType,
@@ -210,6 +242,7 @@ export async function uploadFileWithPublicAccess(
 }> {
   try {
     logInfo('📤 Initiating S3 upload with public access', { filePath, folder });
+    const { bucketName } = resolveAwsStorageConfig();
 
     if (!fs.existsSync(filePath)) {
       throw new Error(`File not found: ${filePath}`);
@@ -222,7 +255,7 @@ export async function uploadFileWithPublicAccess(
     const s3Key = `${folder}/${Date.now()}_${fileName}`;
 
     const uploadParams: AWS.S3.PutObjectRequest = {
-      Bucket: BUCKET_NAME,
+      Bucket: bucketName,
       Key: s3Key,
       Body: fileStream,
       ContentType: contentType,
@@ -260,8 +293,9 @@ export async function uploadFileWithPublicAccess(
  */
 export async function generatePublicUrl(key: string, expiresIn: number = 3600): Promise<string> {
   try {
+    const { bucketName } = resolveAwsStorageConfig();
     const url = getS3Client().getSignedUrl('getObject', {
-      Bucket: BUCKET_NAME,
+      Bucket: bucketName,
       Key: key,
       Expires: expiresIn,
     });
@@ -285,9 +319,10 @@ export async function generatePublicUrl(key: string, expiresIn: number = 3600): 
 export async function deleteFileFromS3(key: string): Promise<void> {
   try {
     logInfo('🗑️ Initiating S3 file deletion', { key });
+    const { bucketName } = resolveAwsStorageConfig();
 
     const deleteParams: AWS.S3.DeleteObjectRequest = {
-      Bucket: BUCKET_NAME,
+      Bucket: bucketName,
       Key: key,
     };
 

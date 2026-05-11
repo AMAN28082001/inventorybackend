@@ -9,6 +9,7 @@ import { logError, logInfo } from '../utils/loggerHelper';
 import { INSTALLER_RELEASE_STATUSES, resolveInstallerQueueStatuses } from '../constants/workflowQueues';
 import { toDateOnlyStringOrNull } from '../utils/quotationApiJson';
 import { getInstallationTeamIdFromRequest } from '../utils/installationTeamRole';
+import { resolveAwsStorageConfig } from '../utils/s3Service';
 
 const assertInstallationTeamQuotationScope = (req: Request, quotation: Quotation, res: Response): boolean => {
   const tid = getInstallationTeamIdFromRequest(req);
@@ -25,9 +26,7 @@ const assertInstallationTeamQuotationScope = (req: Request, quotation: Quotation
 };
 
 const getS3Client = () => {
-  const region = process.env.AWS_REGION;
-  const accessKeyId = process.env.AWS_ACCESS_KEY;
-  const secretAccessKey = process.env.AWS_SECRET_KEY;
+  const { region, accessKeyId, secretAccessKey } = resolveAwsStorageConfig();
   if (region && accessKeyId && secretAccessKey) {
     return new AWS.S3({ region, accessKeyId, secretAccessKey });
   }
@@ -37,15 +36,13 @@ const getS3Client = () => {
 const buildS3Url = (key: string) => {
   const publicBase = process.env.AWS_S3_PUBLIC_URL;
   if (publicBase) return `${publicBase.replace(/\/$/, '')}/${key}`;
-  const bucket = process.env.AWS_BUCKET_NAME;
-  const region = process.env.AWS_REGION || 'us-east-1';
+  const { bucketName: bucket, region } = resolveAwsStorageConfig();
   const host = region === 'us-east-1' ? 's3.amazonaws.com' : `s3.${region}.amazonaws.com`;
   return `https://${bucket}.${host}/${key}`;
 };
 
 const uploadFileToS3 = async (file: Express.Multer.File, quotationId: string, docType: string) => {
-  const bucket = process.env.AWS_BUCKET_NAME;
-  if (!bucket) throw new Error('AWS_BUCKET_NAME is not configured');
+  const { bucketName: bucket } = resolveAwsStorageConfig();
   const ext = path.extname(file.originalname || '');
   const key = `quotation-workflow/${quotationId}/${docType}-${Date.now()}-${Math.round(Math.random() * 1e8)}${ext}`;
   await getS3Client().putObject({
@@ -55,6 +52,21 @@ const uploadFileToS3 = async (file: Express.Multer.File, quotationId: string, do
     ContentType: file.mimetype
   }).promise();
   return buildS3Url(key);
+};
+
+const sendWorkflowStorageErrorIfNeeded = (error: unknown, res: Response): boolean => {
+  const e = error as { code?: string; message?: string };
+  if (e?.code === 'S3_CONFIG_MISSING') {
+    res.status(503).json({
+      success: false,
+      error: {
+        code: 'S3_CONFIG_MISSING',
+        message: 'Storage is not configured on the server.'
+      }
+    });
+    return true;
+  }
+  return false;
 };
 
 const normalizeWorkflowFileUrl = (value: unknown): string | null => {
@@ -1106,6 +1118,9 @@ export const uploadInstallerDocument = async (req: Request, res: Response): Prom
     });
   } catch (error) {
     logError('Upload installer document error', error, { quotationId: req.params.quotationId, field: req.body?.field });
+    if (sendWorkflowStorageErrorIfNeeded(error, res)) {
+      return;
+    }
     res.status(500).json({ success: false, error: { code: 'SYS_001', message: 'Internal server error' } });
   }
 };
@@ -1241,6 +1256,9 @@ export const saveMeteringDetails = async (req: Request, res: Response): Promise<
     });
   } catch (error) {
     logError('Save metering details error', error, { quotationId: req.params.quotationId });
+    if (sendWorkflowStorageErrorIfNeeded(error, res)) {
+      return;
+    }
     res.status(500).json({
       success: false,
       error: { code: 'SYS_001', message: 'Internal server error' }
@@ -1320,6 +1338,9 @@ export const saveMeteringMcoDocuments = async (req: Request, res: Response): Pro
     });
   } catch (error) {
     logError('Save metering MCO documents error', error, { quotationId: req.params.quotationId });
+    if (sendWorkflowStorageErrorIfNeeded(error, res)) {
+      return;
+    }
     res.status(500).json({ success: false, error: { code: 'SYS_001', message: 'Internal server error' } });
   }
 };
@@ -1620,6 +1641,9 @@ export const installerUploadDocuments = async (req: Request, res: Response): Pro
     });
   } catch (error) {
     logError('Installer upload documents error', error, { quotationId: req.params.quotationId });
+    if (sendWorkflowStorageErrorIfNeeded(error, res)) {
+      return;
+    }
     res.status(500).json({ success: false, error: { code: 'SYS_001', message: 'Internal server error' } });
   }
 };
@@ -1682,6 +1706,9 @@ const saveDocs = async (req: Request, res: Response, allowedTypes: string[]) => 
     });
   } catch (error) {
     logError('Save workflow docs error', error, { quotationId: req.params.quotationId });
+    if (sendWorkflowStorageErrorIfNeeded(error, res)) {
+      return;
+    }
     res.status(500).json({ success: false, error: { code: 'SYS_001', message: 'Internal server error' } });
   }
 };

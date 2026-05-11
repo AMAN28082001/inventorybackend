@@ -114,6 +114,86 @@ const dedupeMediaUrls = (urls: string[]): string[] => {
   return out;
 };
 
+const mapVisitDetailPayload = async (visit: Visit): Promise<Record<string, unknown>> => {
+  const vAny = visit as any;
+  const assignments = vAny.assignments || [];
+  const resolvedImages = await resolveMediaUrls(visit.images);
+  const resolvedRowDiagramImage = await resolveMediaUrl((visit as any).rowDiagramImage);
+  const resolvedMeterImage = await resolveMediaUrl(
+    (visit as any).meterImage || (Array.isArray(resolvedImages) ? resolvedImages[0] : null)
+  );
+
+  const visitors = assignments.map((a: any) => {
+    const visitor = a.visitor;
+    if (visitor) {
+      return {
+        visitorId: visitor.id,
+        username: visitor.username,
+        firstName: visitor.firstName,
+        lastName: visitor.lastName,
+        fullName: `${visitor.firstName} ${visitor.lastName}`,
+        email: visitor.email,
+        mobile: visitor.mobile,
+        employeeId: visitor.employeeId,
+        isActive: visitor.isActive
+      };
+    }
+    return {
+      visitorId: a.visitorId,
+      visitorName: a.visitorName,
+      fullName: a.visitorName
+    };
+  });
+
+  const backLegFeet = (visit as any).backLegFeet != null ? Number((visit as any).backLegFeet) : null;
+  const midLegFeet = (visit as any).midLegFeet != null ? Number((visit as any).midLegFeet) : null;
+  const frontLegFeet = (visit as any).frontLegFeet != null ? Number((visit as any).frontLegFeet) : null;
+  const len = visit.length != null ? Number(visit.length) : null;
+  const wid = visit.width != null ? Number(visit.width) : null;
+  const hgt = visit.height != null ? Number(visit.height) : null;
+
+  return {
+    id: visit.id,
+    visitDate: visit.visitDate,
+    ...getVisitTimeFields(visit.visitTime),
+    location: visit.location,
+    locationLink: visit.locationLink,
+    notes: visit.notes,
+    status: visit.status,
+    length: len,
+    width: wid,
+    height: hgt,
+    images: resolvedImages,
+    site_images: resolvedImages,
+    feedback: visit.feedback,
+    unit: (visit as any).unit || null,
+    backLegFeet,
+    midLegFeet,
+    frontLegFeet,
+    back_leg_feet: backLegFeet,
+    mid_leg_feet: midLegFeet,
+    front_leg_feet: frontLegFeet,
+    siteDimensions: {
+      siteLength: len,
+      siteWidth: wid,
+      siteHeight: hgt,
+      backLegFeet,
+      midLegFeet,
+      frontLegFeet
+    },
+    rowDiagramImage: resolvedRowDiagramImage,
+    row_diagram_image: resolvedRowDiagramImage,
+    meterImage: resolvedMeterImage,
+    meter_image: resolvedMeterImage,
+    rejectionReason: visit.rejectionReason,
+    visitors,
+    otherVisitors: visitors,
+    assignedVisitors: visitors,
+    createdAt: visit.createdAt,
+    updatedAt: visit.updatedAt
+  };
+};
+
 const getAssignedVisitForVisitor = async (
   visitId: string,
   visitorId: string,
@@ -205,6 +285,16 @@ export const uploadVisitMedia = async (req: Request, res: Response): Promise<voi
     });
   } catch (error) {
     logError('Upload visit media error', error, { visitId: req.params.visitId, field: req.body?.field });
+    if ((error as { code?: string })?.code === 'S3_CONFIG_MISSING') {
+      res.status(503).json({
+        success: false,
+        error: {
+          code: 'S3_CONFIG_MISSING',
+          message: 'Storage is not configured on the server.'
+        }
+      });
+      return;
+    }
     res.status(500).json({
       success: false,
       error: { code: 'SYS_001', message: 'Internal server error' }
@@ -515,6 +605,96 @@ export const getAllVisits = async (req: Request, res: Response): Promise<void> =
   }
 };
 
+export const getVisitById = async (req: Request, res: Response): Promise<void> => {
+  try {
+    if (!req.dealer && !req.visitor && !req.user) {
+      res.status(401).json({
+        success: false,
+        error: { code: 'AUTH_003', message: 'User not authenticated' }
+      });
+      return;
+    }
+
+    const { visitId } = req.params;
+    const visit = await Visit.findByPk(visitId, {
+      include: [
+        {
+          model: VisitAssignment,
+          as: 'assignments',
+          required: false,
+          include: [
+            {
+              model: Visitor,
+              as: 'visitor',
+              required: false,
+              attributes: ['id', 'username', 'firstName', 'lastName', 'email', 'mobile', 'employeeId', 'isActive']
+            }
+          ]
+        }
+      ]
+    });
+
+    if (!visit) {
+      res.status(404).json({
+        success: false,
+        error: { code: 'RES_001', message: 'Visit not found' }
+      });
+      return;
+    }
+
+    if (req.visitor) {
+      const assignments = ((visit as any).assignments || []) as any[];
+      const assigned = assignments.some((a) => a.visitorId === req.visitor!.id);
+      if (!assigned) {
+        res.status(403).json({
+          success: false,
+          error: { code: 'AUTH_004', message: 'Insufficient permissions' }
+        });
+        return;
+      }
+    } else if (req.dealer) {
+      if (req.dealer.role !== 'admin' && visit.dealerId !== req.dealer.id) {
+        res.status(403).json({
+          success: false,
+          error: { code: 'AUTH_004', message: 'Insufficient permissions' }
+        });
+        return;
+      }
+    } else if (req.user) {
+      const allowedRoles = new Set([
+        'installer',
+        'baldev',
+        'confirmation',
+        'agent',
+        'account',
+        'admin',
+        'super-admin',
+        'super-admin-manager',
+        'hr'
+      ]);
+      if (!allowedRoles.has(req.user.role)) {
+        res.status(403).json({
+          success: false,
+          error: { code: 'AUTH_004', message: 'Insufficient permissions' }
+        });
+        return;
+      }
+    }
+
+    const mapped = await mapVisitDetailPayload(visit);
+    res.json({
+      success: true,
+      data: mapped
+    });
+  } catch (error) {
+    logError('Get visit by id error', error, { visitId: req.params.visitId });
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
+};
+
 // Get visits for quotation
 export const getVisitsForQuotation = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -614,87 +794,7 @@ export const getVisitsForQuotation = async (req: Request, res: Response): Promis
       order: [['visitDate', 'DESC'], ['visitTime', 'DESC']]
     });
 
-    const mappedVisits = await Promise.all(visits.map(async (v) => {
-      const vAny = v as any;
-      const assignments = vAny.assignments || [];
-      const resolvedImages = await resolveMediaUrls(v.images);
-      const resolvedRowDiagramImage = await resolveMediaUrl((v as any).rowDiagramImage);
-      const resolvedMeterImage = await resolveMediaUrl(
-        (v as any).meterImage || (Array.isArray(resolvedImages) ? resolvedImages[0] : null)
-      );
-
-      // Get full visitor details from the included Visitor model
-      const visitors = assignments.map((a: any) => {
-        const visitor = a.visitor;
-        if (visitor) {
-          return {
-            visitorId: visitor.id,
-            username: visitor.username,
-            firstName: visitor.firstName,
-            lastName: visitor.lastName,
-            fullName: `${visitor.firstName} ${visitor.lastName}`,
-            email: visitor.email,
-            mobile: visitor.mobile,
-            employeeId: visitor.employeeId,
-            isActive: visitor.isActive
-          };
-        }
-        // Fallback to assignment data if visitor not loaded
-        return {
-          visitorId: a.visitorId,
-          visitorName: a.visitorName,
-          fullName: a.visitorName
-        };
-      });
-
-      const backLegFeet = (v as any).backLegFeet != null ? Number((v as any).backLegFeet) : null;
-      const midLegFeet = (v as any).midLegFeet != null ? Number((v as any).midLegFeet) : null;
-      const frontLegFeet = (v as any).frontLegFeet != null ? Number((v as any).frontLegFeet) : null;
-      const len = v.length != null ? Number(v.length) : null;
-      const wid = v.width != null ? Number(v.width) : null;
-      const hgt = v.height != null ? Number(v.height) : null;
-
-      return {
-        id: v.id,
-        visitDate: v.visitDate,
-        ...getVisitTimeFields(v.visitTime),
-        location: v.location,
-        locationLink: v.locationLink,
-        notes: v.notes,
-        status: v.status,
-        length: len,
-        width: wid,
-        height: hgt,
-        images: resolvedImages,
-        site_images: resolvedImages,
-        feedback: v.feedback,
-        unit: (v as any).unit || null,
-        backLegFeet,
-        midLegFeet,
-        frontLegFeet,
-        back_leg_feet: backLegFeet,
-        mid_leg_feet: midLegFeet,
-        front_leg_feet: frontLegFeet,
-        siteDimensions: {
-          siteLength: len,
-          siteWidth: wid,
-          siteHeight: hgt,
-          backLegFeet,
-          midLegFeet,
-          frontLegFeet
-        },
-        rowDiagramImage: resolvedRowDiagramImage,
-        row_diagram_image: resolvedRowDiagramImage,
-        meterImage: resolvedMeterImage,
-        meter_image: resolvedMeterImage,
-        rejectionReason: v.rejectionReason,
-        visitors,
-        otherVisitors: visitors,
-        assignedVisitors: visitors,
-        createdAt: v.createdAt,
-        updatedAt: v.updatedAt
-      };
-    }));
+    const mappedVisits = await Promise.all(visits.map(async (v) => mapVisitDetailPayload(v)));
 
     res.json({
       success: true,

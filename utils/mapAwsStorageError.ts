@@ -13,6 +13,10 @@ export function toStorageUnavailableError(error: unknown): Error {
   const e = error as Record<string, unknown> & { code?: string; name?: string; message?: string };
   const awsCode = String(e?.code ?? e?.name ?? '');
   const msg = String(e?.message ?? error ?? '');
+  const looksLikeConfigMissing =
+    awsCode === 'S3_CONFIG_MISSING' ||
+    msg.includes('AWS bucket is not configured') ||
+    msg.includes('AWS_REGION is not configured');
 
   const looksLikeCredentials =
     awsCode === 'CredentialsError' ||
@@ -36,7 +40,11 @@ export function toStorageUnavailableError(error: unknown): Error {
     msg.includes('ECONNRESET');
 
   let clientMessage = 'File storage is not configured or unavailable.';
-  if (looksLikeCredentials) {
+  let responseCode: 'SYS_STORAGE' | 'S3_CONFIG_MISSING' = 'SYS_STORAGE';
+  if (looksLikeConfigMissing) {
+    clientMessage = 'Storage is not configured on the server.';
+    responseCode = 'S3_CONFIG_MISSING';
+  } else if (looksLikeCredentials) {
     clientMessage = SYS_STORAGE_CREDENTIALS_MESSAGE;
   } else if (looksLikeNetwork && !looksLikeCredentials) {
     clientMessage = 'File storage is temporarily unavailable.';
@@ -44,7 +52,7 @@ export function toStorageUnavailableError(error: unknown): Error {
 
   const err = new Error(clientMessage);
   (err as { status?: number }).status = 503;
-  (err as { code?: string }).code = 'SYS_STORAGE';
+  (err as { code?: string }).code = responseCode;
   (err as { storageHint?: string }).storageHint = SYS_STORAGE_OPTIONAL_NO_IMAGE_HINT;
   return err;
 }
