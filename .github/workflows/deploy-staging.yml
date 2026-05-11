@@ -63,6 +63,8 @@ jobs:
             # Application Configuration
             PORT=${{ secrets.PORT || '3000' }}
             NODE_ENV=development
+            UPLOAD_DIR=${{ secrets.UPLOAD_DIR || './uploads' }}
+            MAX_FILE_SIZE=${{ secrets.MAX_FILE_SIZE || '5242880' }}
             
             # JWT Configuration
             JWT_SECRET=${{ secrets.JWT_SECRET }}
@@ -72,6 +74,12 @@ jobs:
             LOKI_HOST_IP=${{ secrets.LOKI_HOST_IP || '' }}
             LOKI_JOB_NAME=${{ secrets.LOKI_JOB_NAME || 'Solar_Inventory' }}
             LOG_LEVEL=${{ secrets.LOG_LEVEL || 'info' }}
+
+            # AWS Configuration
+            AWS_ACCESS_KEY=${{ secrets.AWS_ACCESS_KEY || '' }}
+            AWS_SECRET_KEY=${{ secrets.AWS_SECRET_KEY || '' }}
+            AWS_BUCKET_NAME=${{ secrets.AWS_BUCKET_NAME || 'cbpl-bajaj-node' }}
+            AWS_REGION=${{ secrets.AWS_REGION }}
             
             # Production URL
             PROD_URL=${{ secrets.STAGING_URL || '' }}

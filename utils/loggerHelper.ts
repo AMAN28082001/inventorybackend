@@ -14,7 +14,7 @@ export const logError = (message: string, error: unknown, context?: Record<strin
 };
 
 /**
- * Helper function to log info messages
+ * Helper function to log info messages logs
  */
 export const logInfo = (message: string, context?: Record<string, any>): void => {
   logger.info(message, context || {});
