@@ -115,7 +115,7 @@ const toBool = (value: string | undefined, fallback = false): boolean => {
 // Default to signed URLs so private buckets work out-of-the-box.
 const shouldUseSignedUrls = toBool(process.env.AWS_S3_USE_SIGNED_URLS, true);
 const shouldUsePublicReadAcl = toBool(process.env.AWS_S3_USE_PUBLIC_READ_ACL, false);
-const signedUrlTtlSeconds = Number(process.env.AWS_S3_SIGNED_URL_TTL_SECONDS || 604800); // 7 days
+const signedUrlTtlSeconds = Number(process.env.AWS_S3_SIGNED_URL_TTL_SECONDS || 604800); // 7 day
 
 export const buildS3ObjectUrl = (key: string): string => {
   const encodedKey = key
