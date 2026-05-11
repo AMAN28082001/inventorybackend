@@ -9,7 +9,7 @@ import { Product } from '../models';
 import { Op, Sequelize } from 'sequelize';
 import { logError, logInfo } from '../utils/loggerHelper';
 import { deleteFileFromS3IfExists } from '../middleware/upload';
-import { decodeS3UrlPathToKey, generatePublicUrl, resolveAwsStorageConfig } from '../utils/s3Service';
+import { decodeS3UrlPathToKey, generatePublicUrl } from '../utils/s3Service';
 import { normalizePaymentModeInput } from '../utils/paymentMode';
 import { quotationPaymentApiFields, quotationAdminMetadataFields } from '../utils/quotationApiJson';
 
@@ -2751,12 +2751,14 @@ export const updateQuotationInstallationRelease = async (req: Request, res: Resp
 };
 
 const getS3Client = () => {
-  const { region, accessKeyId, secretAccessKey } = resolveAwsStorageConfig();
+  const region = process.env.AWS_REGION || 'ap-south-1';
+  const accessKeyId = process.env.AWS_ACCESS_KEY || process.env.AWS_ACCESS_KEY_ID;
+  const secretAccessKey = process.env.AWS_SECRET_KEY || process.env.AWS_SECRET_ACCESS_KEY;
 
-  if (region && accessKeyId && secretAccessKey) {
+  if (accessKeyId && secretAccessKey) {
     return new AWS.S3({ region, accessKeyId, secretAccessKey });
   }
-  return new AWS.S3();
+  return new AWS.S3({ region });
 };
 
 const buildS3Url = (key: string) => {
@@ -2764,13 +2766,17 @@ const buildS3Url = (key: string) => {
   if (publicBase) {
     return `${publicBase.replace(/\/$/, '')}/${key}`;
   }
-  const { bucketName: bucket, region } = resolveAwsStorageConfig();
+  const bucket = process.env.AWS_BUCKET_NAME;
+  const region = process.env.AWS_REGION || 'ap-south-1';
   const host = region === 'us-east-1' ? 's3.amazonaws.com' : `s3.${region}.amazonaws.com`;
   return `https://${bucket}.${host}/${key}`;
 };
 
 const uploadFileToS3 = async (file: Express.Multer.File, quotationId: string, fieldName: string) => {
-  const { bucketName: bucket } = resolveAwsStorageConfig();
+  const bucket = process.env.AWS_BUCKET_NAME;
+  if (!bucket) {
+    throw new Error('AWS_BUCKET_NAME is not configured');
+  }
   const ext = path.extname(file.originalname || '');
   const key = `quotation-documents/${quotationId}/${fieldName}-${Date.now()}${ext}`;
 
@@ -2790,11 +2796,8 @@ const uploadFileToS3 = async (file: Express.Multer.File, quotationId: string, fi
 const wrapQuotationDocumentUploadError = (fieldName: string, error: any): never => {
   const message = typeof error?.message === 'string' ? error.message : 'Upload failed';
   const code = typeof error?.code === 'string' ? error.code : undefined;
-  const statusCode = code === 'AccessDenied' ? 403 : code === 'S3_CONFIG_MISSING' ? 503 : 502;
-  const errorCode = code === 'AccessDenied' ? 'AUTH_004' : code === 'S3_CONFIG_MISSING' ? 'S3_CONFIG_MISSING' : 'SYS_001';
-  const clientMessage = code === 'S3_CONFIG_MISSING'
-    ? 'Storage is not configured on the server.'
-    : `Failed to upload ${fieldName}. ${message}`;
+  const statusCode = code === 'AccessDenied' ? 403 : 502;
+  const errorCode = code === 'AccessDenied' ? 'AUTH_004' : 'SYS_001';
 
   const wrapped: any = new Error(message);
   wrapped.statusCode = statusCode;
@@ -2802,7 +2805,7 @@ const wrapQuotationDocumentUploadError = (fieldName: string, error: any): never 
     success: false,
     error: {
       code: errorCode,
-      message: clientMessage,
+      message: `Failed to upload ${fieldName}. ${message}`,
       details: [
         { field: fieldName, message },
         ...(code ? [{ field: 's3Code', message: code }] : [])
@@ -3602,8 +3605,9 @@ const getFileExtFromDocumentValue = (value: string | null | undefined, fallback 
 };
 
 const fetchS3ObjectBuffer = async (key: string): Promise<Buffer | null> => {
+  const bucket = process.env.AWS_BUCKET_NAME;
+  if (!bucket) return null;
   try {
-    const { bucketName: bucket } = resolveAwsStorageConfig();
     const result = await getS3Client().getObject({ Bucket: bucket, Key: key }).promise();
     if (!result.Body) return null;
     return Buffer.isBuffer(result.Body) ? result.Body : Buffer.from(result.Body as any);
