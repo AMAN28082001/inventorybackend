@@ -24,7 +24,7 @@ module.exports = {
       },
       email: {
         type: Sequelize.STRING(255),
-        allowNull: false
+        allowNull: true
       },
       streetAddress: {
         type: Sequelize.TEXT,
