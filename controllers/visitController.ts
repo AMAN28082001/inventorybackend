@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { Op } from 'sequelize';
 import { Visit, VisitAssignment, Quotation, Visitor, Customer } from '../models/index-quotation';
 import { logError, logInfo } from '../utils/loggerHelper';
-import { extractS3Key, generatePublicUrl } from '../utils/s3Service';
+import { buildS3ObjectUrl, extractS3Key, generatePublicUrl, uploadFileToS3FromBuffer } from '../utils/s3Service';
 
 const timeRangeRegex = /^([01]\d|2[0-3]):([0-5]\d)\s-\s([01]\d|2[0-3]):([0-5]\d)$/;
 const hhmmRegex = /^([01]\d|2[0-3]):([0-5]\d)$/;
@@ -53,6 +53,20 @@ const parseExistingImages = (raw: unknown): string[] => {
   return [];
 };
 
+const normalizeVisitMediaUrl = (value: unknown): string | null => {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.startsWith('blob:') || trimmed.startsWith('data:')) return null;
+  const key = extractS3Key(trimmed);
+  if (key) {
+    return buildS3ObjectUrl(key);
+  }
+  return trimmed;
+};
+
+const normalizeVisitMediaUrls = (raw: unknown): string[] =>
+  dedupeMediaUrls(parseExistingImages(raw).map((v) => normalizeVisitMediaUrl(v)).filter((v): v is string => !!v));
+
 const resolveMediaUrl = async (url: unknown): Promise<string | null> => {
   if (typeof url !== 'string' || !url.trim()) return null;
   const key = extractS3Key(url);
@@ -98,6 +112,104 @@ const dedupeMediaUrls = (urls: string[]): string[] => {
     out.push(url);
   }
   return out;
+};
+
+const getAssignedVisitForVisitor = async (
+  visitId: string,
+  visitorId: string,
+  res: Response
+): Promise<Visit | null> => {
+  const visit = await Visit.findByPk(visitId, {
+    include: [{ model: VisitAssignment, as: 'assignments' }]
+  });
+
+  if (!visit) {
+    res.status(404).json({
+      success: false,
+      error: { code: 'RES_001', message: 'Visit not found' }
+    });
+    return null;
+  }
+
+  const visitAny = visit as any;
+  const assignment = (visitAny.assignments || []).find((a: any) => a.visitorId === visitorId);
+  if (!assignment) {
+    res.status(403).json({
+      success: false,
+      error: { code: 'AUTH_004', message: 'You are not assigned to this visit' }
+    });
+    return null;
+  }
+
+  return visit;
+};
+
+export const uploadVisitMedia = async (req: Request, res: Response): Promise<void> => {
+  try {
+    if (!req.visitor) {
+      res.status(401).json({
+        success: false,
+        error: { code: 'AUTH_003', message: 'User not authenticated' }
+      });
+      return;
+    }
+
+    const { visitId } = req.params;
+    const visit = await getAssignedVisitForVisitor(visitId, req.visitor.id, res);
+    if (!visit) return;
+
+    const fieldName = typeof req.body?.field === 'string' ? req.body.field.trim() : '';
+    const file = req.file as Express.Multer.File | undefined;
+    const allowedFields = new Set(['images', 'rowDiagramImage', 'meterImage']);
+
+    if (!fieldName || !allowedFields.has(fieldName)) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'field must be one of images, rowDiagramImage, meterImage',
+          details: [{ field: 'field', message: 'Invalid visit media field' }]
+        }
+      });
+      return;
+    }
+
+    if (!file?.buffer) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'file is required',
+          details: [{ field: 'file', message: 'file is required' }]
+        }
+      });
+      return;
+    }
+
+    const key = await uploadFileToS3FromBuffer(file.buffer, file.originalname, 'visits');
+    const storedValue = buildS3ObjectUrl(key);
+    const usableUrl = await generatePublicUrl(key, Number(process.env.AWS_S3_SIGNED_URL_TTL_SECONDS || 604800))
+      .catch(() => storedValue);
+    const urlKey = `${fieldName}Url`;
+
+    logInfo('Visit media uploaded', { visitId: visit.id, field: fieldName, visitorId: req.visitor.id });
+    res.status(200).json({
+      success: true,
+      data: {
+        field: fieldName,
+        url: usableUrl,
+        fileUrl: usableUrl,
+        storedValue,
+        [urlKey]: usableUrl
+      }
+    });
+  } catch (error) {
+    logError('Upload visit media error', error, { visitId: req.params.visitId, field: req.body?.field });
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
 };
 
 // Create visit
@@ -681,59 +793,47 @@ export const completeVisit = async (req: Request, res: Response): Promise<void> 
       backLegFeet,
       midLegFeet,
       frontLegFeet,
+      images,
+      rowDiagramImage,
+      meterImage,
       existingImages,
       existingRowDiagramImage,
       existingMeterImage,
       notes
     } = req.body;
 
-    const visit = await Visit.findByPk(visitId, {
-      include: [{ model: VisitAssignment, as: 'assignments' }]
-    });
-
-    if (!visit) {
-      res.status(404).json({
-        success: false,
-        error: { code: 'RES_001', message: 'Visit not found' }
-      });
-      return;
-    }
-
-    const visitAny = visit as any;
-    const assignment = (visitAny.assignments || []).find((a: any) => a.visitorId === req.visitor!.id);
-    if (!assignment) {
-      res.status(403).json({
-        success: false,
-        error: { code: 'AUTH_004', message: 'You are not assigned to this visit' }
-      });
-      return;
-    }
+    const visit = await getAssignedVisitForVisitor(visitId, req.visitor.id, res);
+    if (!visit) return;
 
     const files = (req.files || {}) as Record<string, Express.Multer.File[]>;
     const imageFiles = files.images || [];
     const rowDiagramFile = (files.rowDiagramImage || [])[0];
     const meterImageFile = (files.meterImage || [])[0];
 
-    const storedVisitImages = Array.isArray(visit.images) ? visit.images : [];
+    const storedVisitImages = normalizeVisitMediaUrls(Array.isArray(visit.images) ? visit.images : []);
     const existingImageUrls = existingImages !== undefined
-      ? parseExistingImages(existingImages)
+      ? normalizeVisitMediaUrls(existingImages)
+      : images !== undefined
+        ? normalizeVisitMediaUrls(images)
       : storedVisitImages;
     const uploadedImageUrls = imageFiles
-      .map((file) => (file as any).s3Location || null)
+      .map((file) => normalizeVisitMediaUrl((file as any).s3Location))
       .filter((url): url is string => !!url);
-    const uploadedMeterImageUrl = (meterImageFile && (meterImageFile as any).s3Location) || null;
+    const uploadedMeterImageUrl = normalizeVisitMediaUrl((meterImageFile && (meterImageFile as any).s3Location) || null);
     const mergedImages = dedupeMediaUrls([...existingImageUrls, ...uploadedImageUrls]);
 
     const rowDiagramImageUrl =
-      (rowDiagramFile && (rowDiagramFile as any).s3Location) ||
-      (typeof existingRowDiagramImage === 'string' && existingRowDiagramImage.trim() !== ''
-        ? existingRowDiagramImage.trim()
-        : ((visit as any).rowDiagramImage || null));
+      normalizeVisitMediaUrl((rowDiagramFile && (rowDiagramFile as any).s3Location) || null) ||
+      normalizeVisitMediaUrl(rowDiagramImage) ||
+      normalizeVisitMediaUrl(existingRowDiagramImage) ||
+      normalizeVisitMediaUrl((visit as any).rowDiagramImage) ||
+      null;
     const meterImageUrl =
       uploadedMeterImageUrl ||
-      (typeof existingMeterImage === 'string' && existingMeterImage.trim() !== ''
-        ? existingMeterImage.trim()
-        : ((visit as any).meterImage || null));
+      normalizeVisitMediaUrl(meterImage) ||
+      normalizeVisitMediaUrl(existingMeterImage) ||
+      normalizeVisitMediaUrl((visit as any).meterImage) ||
+      null;
 
     const parsedLength = toOptionalFiniteNumber(length);
     const parsedWidth = toOptionalFiniteNumber(width);
@@ -801,7 +901,7 @@ export const completeVisit = async (req: Request, res: Response): Promise<void> 
       Number(((visit as any).frontLegFeet ?? 0)) === Number(parsedFrontLegFeet ?? 0) &&
       String((visit as any).rowDiagramImage || '') === String(rowDiagramImageUrl || '') &&
       String((visit as any).meterImage || '') === String(meterImageUrl || '') &&
-      JSON.stringify(dedupeMediaUrls(Array.isArray(visit.images) ? visit.images : [])) === JSON.stringify(mergedImages) &&
+      JSON.stringify(storedVisitImages) === JSON.stringify(mergedImages) &&
       String(visit.notes || '') === String(nextNotes || '') &&
       String(visit.feedback || '') === String(nextFeedback || '');
 

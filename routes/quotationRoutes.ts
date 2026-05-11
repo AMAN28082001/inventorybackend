@@ -14,14 +14,16 @@ import {
   downloadQuotationPDF,
   downloadQuotationDocumentsZip,
   getProductCatalog,
-  saveQuotationDocuments
+  saveQuotationDocuments,
+  uploadQuotationDocument
 } from '../controllers/quotationController';
 import { patchQuotationInstallationTeam } from '../controllers/installationTeamController';
 import {
   getWorkflowHistory,
   meteringStatusUpdate,
   saveMeteringDetails,
-  saveMeteringMcoDocuments
+  saveMeteringMcoDocuments,
+  uploadInstallerDocument
 } from '../controllers/workflowController';
 import { getVisitsForQuotation, rescheduleVisit } from '../controllers/visitController';
 import {
@@ -30,6 +32,7 @@ import {
   authorizeDealerAdminOrVisitor,
   authorizeDealerOrAccountManager,
   authorizeQuotationDocumentsEditor,
+  authorizeInstallerOrAdmin,
   authorizeMeteringOrAdmin,
   authorizeAdmin,
   rejectAccountManager
@@ -153,6 +156,46 @@ const handleQuotationDocumentsMultipart = (req: express.Request, res: express.Re
       return;
     }
 
+    const genericError = err as Error;
+    res.status(400).json({
+      success: false,
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: genericError.message || 'Invalid document upload payload'
+      }
+    });
+  });
+};
+
+const handleSingleQuotationDocumentUpload = (
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+): void => {
+  documentsUpload.single('file')(req, res, (err: unknown) => {
+    if (!err) {
+      next();
+      return;
+    }
+    const e = err as MulterError;
+    if (e.code === 'LIMIT_FILE_SIZE') {
+      res.status(413).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'Uploaded file exceeds the maximum upload size' }
+      });
+      return;
+    }
+    if (e.code === 'LIMIT_UNEXPECTED_FILE') {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Expected a single file field named "file"',
+          details: [{ field: e.field || 'file', message: e.message }]
+        }
+      });
+      return;
+    }
     const genericError = err as Error;
     res.status(400).json({
       success: false,
@@ -754,6 +797,20 @@ router.post(
   authorizeQuotationDocumentsEditor,
   handleQuotationDocumentsMultipart,
   saveQuotationDocuments
+);
+
+router.post(
+  '/:quotationId/documents/upload',
+  authorizeQuotationDocumentsEditor,
+  handleSingleQuotationDocumentUpload,
+  uploadQuotationDocument
+);
+
+router.post(
+  '/:quotationId/installer-documents/upload',
+  authorizeInstallerOrAdmin,
+  handleSingleQuotationDocumentUpload,
+  uploadInstallerDocument
 );
 
 router.patch(

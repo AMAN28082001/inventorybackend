@@ -5,6 +5,7 @@ import {
   getAllVisits,
   approveVisit,
   completeVisit,
+  uploadVisitMedia,
   patchVisitSiteDimensions,
   markVisitIncomplete,
   rescheduleVisit,
@@ -76,6 +77,50 @@ const handleCompleteVisitMultipart = (req: express.Request, res: express.Respons
           code: 'VALIDATION_ERROR',
           message: 'Unexpected or too many file fields',
           details: [{ field: e.field || 'files', message: e.message }]
+        }
+      });
+      return;
+    }
+    next(err as any);
+  });
+};
+
+const handleSingleVisitUploadMultipart = (
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+): void => {
+  completeVisitUpload.single('file')(req, res, (err: unknown) => {
+    if (!err) {
+      next();
+      return;
+    }
+    const genericError = err as Error;
+    if (genericError?.message?.includes('must be jpeg/jpg/png/webp')) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: genericError.message
+        }
+      });
+      return;
+    }
+    const e = err as MulterError;
+    if (e.code === 'LIMIT_FILE_SIZE') {
+      res.status(413).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'Uploaded file exceeds the maximum upload size' }
+      });
+      return;
+    }
+    if (e.code === 'LIMIT_UNEXPECTED_FILE') {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Expected a single file field named "file"',
+          details: [{ field: e.field || 'file', message: e.message }]
         }
       });
       return;
@@ -342,6 +387,10 @@ router.patch(
   validate(completeVisitSchema),
   completeVisit
 );
+
+router.post('/:visitId/upload', authenticate, authorizeVisitor, handleSingleVisitUploadMultipart, uploadVisitMedia);
+router.post('/:visitId/media-upload', authenticate, authorizeVisitor, handleSingleVisitUploadMultipart, uploadVisitMedia);
+router.post('/:visitId/complete/upload', authenticate, authorizeVisitor, handleSingleVisitUploadMultipart, uploadVisitMedia);
 
 router.patch('/:visitId', authenticate, validate(patchVisitSiteSchema), patchVisitSiteDimensions);
 

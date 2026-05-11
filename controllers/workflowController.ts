@@ -57,6 +57,15 @@ const uploadFileToS3 = async (file: Express.Multer.File, quotationId: string, do
   return buildS3Url(key);
 };
 
+const normalizeWorkflowFileUrl = (value: unknown): string | null => {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.startsWith('blob:') || trimmed.startsWith('data:')) {
+    return null;
+  }
+  return trimmed;
+};
+
 const groupDocsByType = (docs: any[]) => {
   const grouped: Record<string, any[]> = {};
   for (const doc of docs || []) {
@@ -889,6 +898,27 @@ const parseTrimmedString = (v: unknown): string | undefined => {
   return s === '' ? undefined : s;
 };
 
+const parseStringList = (raw: unknown): string[] => {
+  if (raw === undefined || raw === null) return [];
+  if (Array.isArray(raw)) {
+    return raw.map((v) => String(v).trim()).filter(Boolean);
+  }
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!trimmed) return [];
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) {
+        return parsed.map((v) => String(v).trim()).filter(Boolean);
+      }
+    } catch {
+      return [trimmed];
+    }
+    return [trimmed];
+  }
+  return [String(raw).trim()].filter(Boolean);
+};
+
 const parsePositiveDecimal = (v: unknown): number | null => {
   const s = parseTrimmedString(v);
   if (s === undefined) return null;
@@ -938,6 +968,146 @@ const flattenMulterFiles = (req: Request): Express.Multer.File[] => {
   if (!raw) return [];
   if (Array.isArray(raw)) return raw;
   return Object.values(raw).flat();
+};
+
+type InstallerUrlDocCandidate = {
+  fieldName: string;
+  url: string;
+  docType: 'installer_po' | 'installer_pi' | 'additional_expense' | 'site_completion_image';
+  slot?: string;
+};
+
+const buildInstallerUrlDocCandidates = (
+  body: Record<string, unknown>,
+  bodyDocType:
+    | 'installer_po'
+    | 'installer_pi'
+    | 'additional_expense'
+    | 'site_completion_image'
+    | undefined
+): InstallerUrlDocCandidate[] => {
+  const orderedFields = [
+    'homeFrontPhoto',
+    'homeWithPersonPhoto',
+    'inverterWithCustomerPhoto',
+    'plantWithCustomerPhoto',
+    'inverterSerialNumberPhoto',
+    'panelSerialNumberPhoto',
+    'geoTagPlantPhoto',
+    'otherImages',
+    'piUpload',
+    'installerPo',
+    'installerCompletionImages',
+    'files'
+  ];
+
+  const picked = new Map<string, InstallerUrlDocCandidate>();
+  for (const fieldName of orderedFields) {
+    const map = INSTALLER_FIELD_DOC_MAP[fieldName];
+    if (!map) continue;
+    const values = parseStringList(body[fieldName]);
+    for (const value of values) {
+      const url = normalizeWorkflowFileUrl(value);
+      if (!url) continue;
+      let docType = map.docType;
+      if (fieldName === 'files' && bodyDocType && ['installer_po', 'installer_pi', 'additional_expense', 'site_completion_image'].includes(bodyDocType)) {
+        docType = bodyDocType;
+      }
+      const dedupeKey = `${docType}:${url}`;
+      const candidate: InstallerUrlDocCandidate = {
+        fieldName,
+        url,
+        docType,
+        ...(map.slot ? { slot: map.slot } : {})
+      };
+      const existing = picked.get(dedupeKey);
+      if (!existing || (!existing.slot && candidate.slot)) {
+        picked.set(dedupeKey, candidate);
+      }
+    }
+  }
+  return [...picked.values()];
+};
+
+export const uploadInstallerDocument = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { quotationId } = req.params;
+    const quotation = await Quotation.findByPk(quotationId);
+    if (!quotation) {
+      res.status(404).json({ success: false, error: { code: 'RES_001', message: 'Quotation not found' } });
+      return;
+    }
+
+    if (!assertInstallationTeamQuotationScope(req, quotation, res)) {
+      return;
+    }
+
+    if (!INSTALLER_UPLOAD_ALLOWED_STATUSES.has(quotation.installationStatus || '')) {
+      res.status(403).json({
+        success: false,
+        error: { code: 'AUTH_004', message: 'Installation upload not allowed for this quotation state' }
+      });
+      return;
+    }
+
+    const fieldName = parseTrimmedString(req.body?.field);
+    const file = req.file as Express.Multer.File | undefined;
+    const allowedFields = new Set([
+      'homeFrontPhoto',
+      'homeWithPersonPhoto',
+      'inverterWithCustomerPhoto',
+      'plantWithCustomerPhoto',
+      'inverterSerialNumberPhoto',
+      'panelSerialNumberPhoto',
+      'geoTagPlantPhoto',
+      'otherImages',
+      'piUpload'
+    ]);
+
+    if (!fieldName || !allowedFields.has(fieldName)) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VAL_001',
+          message: 'field must be a supported installer upload slot',
+          details: [{ field: 'field', message: 'Invalid installer upload field' }]
+        }
+      });
+      return;
+    }
+
+    if (!file?.buffer) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VAL_001',
+          message: 'file is required',
+          details: [{ field: 'file', message: 'file is required' }]
+        }
+      });
+      return;
+    }
+
+    const docType = INSTALLER_FIELD_DOC_MAP[fieldName].docType;
+    const url = await uploadFileToS3(file, quotationId, docType);
+    const urlKey = `${fieldName}Url`;
+
+    res.status(200).json({
+      success: true,
+      data: {
+        field: fieldName,
+        url,
+        fileUrl: url,
+        [urlKey]: url,
+        documents: {
+          [fieldName]: url
+        }
+      }
+    });
+  } catch (error) {
+    logError('Upload installer document error', error, { quotationId: req.params.quotationId, field: req.body?.field });
+    res.status(500).json({ success: false, error: { code: 'SYS_001', message: 'Internal server error' } });
+  }
 };
 
 export const saveMeteringDetails = async (req: Request, res: Response): Promise<void> => {
@@ -1272,7 +1442,8 @@ export const installerUploadDocuments = async (req: Request, res: Response): Pro
     }
 
     const files = flattenMulterFiles(req);
-    if (files.length === 0 && !siteSignal && !extraParsed) {
+    const urlDocs = buildInstallerUrlDocCandidates(body, bodyDocType);
+    if (files.length === 0 && urlDocs.length === 0 && !siteSignal && !extraParsed) {
       res.status(400).json({
         success: false,
         error: { code: 'VAL_002', message: 'Provide at least one file, site dimensions, or extra expenses' }
@@ -1281,6 +1452,7 @@ export const installerUploadDocuments = async (req: Request, res: Response): Pro
     }
 
     const seenHashes = new Set<string>();
+    const seenUrls = new Set<string>();
     const createdDocs: any[] = [];
 
     for (const file of files) {
@@ -1313,6 +1485,33 @@ export const installerUploadDocuments = async (req: Request, res: Response): Pro
         quotationId,
         docType: docType as any,
         fileUrl,
+        uploadedByUserId: req.user?.id || 'unknown',
+        uploadedByRole: req.user?.role || 'unknown',
+        remarks: (parseTrimmedString(body.installerRemarks) || parseTrimmedString(body.remarks)) || null,
+        metadata,
+        uploadedAt: new Date()
+      });
+      createdDocs.push(doc);
+    }
+
+    for (const ref of urlDocs) {
+      const dedupeKey = `${ref.docType}:${ref.url}`;
+      if (seenUrls.has(dedupeKey)) {
+        continue;
+      }
+      seenUrls.add(dedupeKey);
+      const metadata: Record<string, unknown> = {
+        field: ref.fieldName,
+        source: 'url_submit'
+      };
+      if (ref.slot) {
+        metadata.slot = ref.slot;
+      }
+      const doc = await QuotationInstallationDoc.create({
+        id: uuidv4(),
+        quotationId,
+        docType: ref.docType as any,
+        fileUrl: ref.url,
         uploadedByUserId: req.user?.id || 'unknown',
         uploadedByRole: req.user?.role || 'unknown',
         remarks: (parseTrimmedString(body.installerRemarks) || parseTrimmedString(body.remarks)) || null,

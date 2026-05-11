@@ -2793,14 +2793,38 @@ const uploadFileToS3 = async (file: Express.Multer.File, quotationId: string, fi
   return buildS3Url(key);
 };
 
-const getUploadedFileUrl = async (req: Request, fieldName: string, quotationId: string): Promise<string | undefined> => {
-  const files = (req as any).files;
-  const fieldFiles = files?.[fieldName];
-  if (Array.isArray(fieldFiles) && fieldFiles.length > 0) {
-    const file = fieldFiles[0] as Express.Multer.File;
-    return uploadFileToS3(file, quotationId, fieldName);
+const wrapQuotationDocumentUploadError = (fieldName: string, error: any): never => {
+  const message = typeof error?.message === 'string' ? error.message : 'Upload failed';
+  const code = typeof error?.code === 'string' ? error.code : undefined;
+  const statusCode = code === 'AccessDenied' ? 403 : 502;
+  const errorCode = code === 'AccessDenied' ? 'AUTH_004' : 'SYS_001';
+
+  const wrapped: any = new Error(message);
+  wrapped.statusCode = statusCode;
+  wrapped.errorPayload = {
+    success: false,
+    error: {
+      code: errorCode,
+      message: `Failed to upload ${fieldName}. ${message}`,
+      details: [
+        { field: fieldName, message },
+        ...(code ? [{ field: 's3Code', message: code }] : [])
+      ]
+    }
+  };
+  throw wrapped;
+};
+
+const uploadDocumentFieldFileSafe = async (
+  file: Express.Multer.File,
+  fieldName: string,
+  quotationId: string
+): Promise<string> => {
+  try {
+    return await uploadFileToS3(file, quotationId, fieldName);
+  } catch (error: any) {
+    return wrapQuotationDocumentUploadError(fieldName, error);
   }
-  return undefined;
 };
 
 const getUploadedFileUrlSafe = async (
@@ -2808,29 +2832,13 @@ const getUploadedFileUrlSafe = async (
   fieldName: string,
   quotationId: string
 ): Promise<string | undefined> => {
-  try {
-    return await getUploadedFileUrl(req, fieldName, quotationId);
-  } catch (error: any) {
-    const message = typeof error?.message === 'string' ? error.message : 'Upload failed';
-    const code = typeof error?.code === 'string' ? error.code : undefined;
-    const statusCode = code === 'AccessDenied' ? 403 : 502;
-    const errorCode = code === 'AccessDenied' ? 'AUTH_004' : 'SYS_001';
-
-    const wrapped: any = new Error(message);
-    wrapped.statusCode = statusCode;
-    wrapped.errorPayload = {
-      success: false,
-      error: {
-        code: errorCode,
-        message: `Failed to upload ${fieldName}. ${message}`,
-        details: [
-          { field: fieldName, message },
-          ...(code ? [{ field: 's3Code', message: code }] : [])
-        ]
-      }
-    };
-    throw wrapped;
+  const files = (req as any).files;
+  const fieldFiles = files?.[fieldName];
+  if (!Array.isArray(fieldFiles) || fieldFiles.length === 0) {
+    return undefined;
   }
+  const file = fieldFiles[0] as Express.Multer.File;
+  return uploadDocumentFieldFileSafe(file, fieldName, quotationId);
 };
 
 const extractS3KeyFromDocumentUrl = (value: string): string | null => {
@@ -2863,6 +2871,19 @@ const extractS3KeyFromDocumentUrl = (value: string): string | null => {
   } catch {
     return null;
   }
+};
+
+const normalizeStoredDocumentReference = (value: unknown): string | null => {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.startsWith('blob:') || trimmed.startsWith('data:')) {
+    return null;
+  }
+  const possibleKey = extractS3KeyFromDocumentUrl(trimmed);
+  if (possibleKey) {
+    return possibleKey;
+  }
+  return trimmed.length <= 255 ? trimmed : null;
 };
 
 const resolveDocumentImageUrl = async (value: string | null | undefined): Promise<string | null> => {
@@ -2906,6 +2927,58 @@ const buildEmptyResolvedQuotationDocuments = () => {
     empty[field] = null;
   }
   return empty;
+};
+
+const QUOTATION_DOCUMENT_IMAGE_ONLY_FIELDS = new Set([
+  'aadharFront',
+  'aadharBack',
+  'panImage',
+  'electricityBillImage',
+  'bankPassbookImage',
+  'geotagRoofPhoto',
+  'customerWithHousePhoto',
+  'compliantAadharFront',
+  'compliantAadharBack',
+  'compliantPanImage',
+  'compliantBankPassbookImage'
+]);
+
+const QUOTATION_DOCUMENT_IMAGE_OR_PDF_FIELDS = new Set([
+  'customerFinalBillFile',
+  'panelWarrantyFile',
+  'inverterWarrantyFile',
+  'workCompletionWarrantyFile'
+]);
+
+const QUOTATION_DOCUMENT_PDF_ONLY_FIELDS = new Set(['propertyDocumentPdf']);
+
+const ensureQuotationDocumentUploadFieldIsValid = (
+  fieldName: string,
+  file: Express.Multer.File
+): { valid: true } | { valid: false; message: string } => {
+  if (!(QUOTATION_DOCUMENT_MEDIA_FIELDS as readonly string[]).includes(fieldName)) {
+    return { valid: false, message: 'Invalid document field' };
+  }
+
+  const imageMimes = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp']);
+  if (QUOTATION_DOCUMENT_IMAGE_ONLY_FIELDS.has(fieldName)) {
+    return imageMimes.has(file.mimetype)
+      ? { valid: true }
+      : { valid: false, message: `${fieldName} must be jpeg/jpg/png/webp` };
+  }
+  if (QUOTATION_DOCUMENT_IMAGE_OR_PDF_FIELDS.has(fieldName)) {
+    return imageMimes.has(file.mimetype) || file.mimetype === 'application/pdf'
+      ? { valid: true }
+      : { valid: false, message: `${fieldName} must be jpeg/jpg/png/webp/pdf` };
+  }
+  if (QUOTATION_DOCUMENT_PDF_ONLY_FIELDS.has(fieldName)) {
+    return file.mimetype === 'application/pdf'
+      ? { valid: true }
+      : { valid: false, message: `${fieldName} must be a PDF` };
+  }
+  return file.mimetype.startsWith('image/') || file.mimetype === 'application/pdf'
+    ? { valid: true }
+    : { valid: false, message: 'Only image or PDF uploads are allowed' };
 };
 
 const resolveQuotationDocumentUrls = async (documents: any) => {
@@ -2958,6 +3031,116 @@ const resolveQuotationDocumentUrls = async (documents: any) => {
   }
 
   return json;
+};
+
+export const uploadQuotationDocument = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const role = req.user?.role;
+    const isAccountManager = role === 'account-management' || role === 'hr';
+    const isOperationalDocumentsEditor =
+      role === 'baldev' ||
+      role === 'confirmation' ||
+      role === 'admin' ||
+      role === 'super-admin' ||
+      role === 'super-admin-manager';
+
+    if (!req.dealer && !isAccountManager && !isOperationalDocumentsEditor) {
+      res.status(401).json({
+        success: false,
+        error: { code: 'AUTH_003', message: 'User not authenticated' }
+      });
+      return;
+    }
+
+    const { quotationId } = req.params;
+    const where: any = { id: quotationId };
+    if (isAccountManager) {
+      where.status = 'approved';
+    } else if (req.dealer && req.dealer.role !== 'admin') {
+      where.dealerId = req.dealer.id;
+    }
+
+    const quotation = await Quotation.findOne({ where });
+    if (!quotation) {
+      res.status(404).json({
+        success: false,
+        error: { code: 'RES_001', message: 'Quotation not found' }
+      });
+      return;
+    }
+
+    const fieldName = typeof req.body?.field === 'string' ? req.body.field.trim() : '';
+    const file = req.file as Express.Multer.File | undefined;
+
+    if (!fieldName) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'field is required',
+          details: [{ field: 'field', message: 'field is required' }]
+        }
+      });
+      return;
+    }
+
+    if (!file) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'file is required',
+          details: [{ field: 'file', message: 'file is required' }]
+        }
+      });
+      return;
+    }
+
+    const fieldValidation = ensureQuotationDocumentUploadFieldIsValid(fieldName, file);
+    if (!fieldValidation.valid) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: fieldValidation.message,
+          details: [{ field: fieldName, message: fieldValidation.message }]
+        }
+      });
+      return;
+    }
+
+    const uploadedReference = await uploadDocumentFieldFileSafe(file, fieldName, quotation.id);
+    const storedValue = normalizeStoredDocumentReference(uploadedReference) || uploadedReference;
+    const usableUrl = (await resolveDocumentImageUrl(storedValue)) || uploadedReference;
+    const urlKey = `${fieldName}Url`;
+
+    res.status(200).json({
+      success: true,
+      data: {
+        field: fieldName,
+        url: usableUrl,
+        fileUrl: usableUrl,
+        storedValue,
+        [urlKey]: usableUrl,
+        documents: {
+          [fieldName]: usableUrl
+        }
+      }
+    });
+  } catch (error: any) {
+    logError('Upload quotation document error', error, {
+      quotationId: req.params.quotationId,
+      field: req.body?.field
+    });
+    if (error?.errorPayload) {
+      res.status(error.statusCode || 500).json(error.errorPayload);
+      return;
+    }
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
 };
 
 const groupInstallationDocsByType = (docs: any[]) => {
@@ -3095,23 +3278,12 @@ export const saveQuotationDocuments = async (req: Request, res: Response): Promi
       bodyValue: any,
       existingValue: any
     ): string | null => {
-      if (uploadedUrl !== undefined) return uploadedUrl;
+      if (uploadedUrl !== undefined) {
+        return normalizeStoredDocumentReference(uploadedUrl) || (existingValue ?? null);
+      }
       if (bodyValue === undefined) return existingValue ?? null;
       if (bodyValue === '' || bodyValue === null) return null;
-      if (typeof bodyValue !== 'string') return existingValue ?? null;
-
-      const trimmed = bodyValue.trim();
-      if (!trimmed) return null;
-      if (trimmed.startsWith('blob:') || trimmed.startsWith('data:')) {
-        return existingValue ?? null;
-      }
-
-      // Only accept persisted S3-style document values; ignore transient frontend values.
-      const possibleKey = extractS3KeyFromDocumentUrl(trimmed);
-      if (!possibleKey) {
-        return existingValue ?? null;
-      }
-      return trimmed;
+      return normalizeStoredDocumentReference(bodyValue) || (existingValue ?? null);
     };
 
     const payload = {
@@ -3321,6 +3493,23 @@ export const saveQuotationDocuments = async (req: Request, res: Response): Promi
     const errorPayload = (error as any)?.errorPayload;
     if (statusCode && errorPayload) {
       res.status(statusCode).json(errorPayload);
+      return;
+    }
+    const message = error instanceof Error ? error.message : String(error || '');
+    if (message.includes('value too long for type character varying')) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'One or more document values are too long to store',
+          details: [
+            {
+              field: 'documents',
+              message: 'Send persisted document URLs/keys only. Temporary signed URLs should not be stored.'
+            }
+          ]
+        }
+      });
       return;
     }
     res.status(500).json({

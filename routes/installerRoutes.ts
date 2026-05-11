@@ -3,7 +3,7 @@ import multer, { MulterError } from 'multer';
 import { authenticate, authorizeInstaller, authorizeInstallerOrAdmin } from '../middleware/authQuotation';
 import { validate } from '../middleware/validate';
 import { installerStatusSchema, installerUploadMetaSchema } from '../validations/workflowValidations';
-import { getInstallerQueue, installerDecision, installerUploadDocuments } from '../controllers/workflowController';
+import { getInstallerQueue, installerDecision, installerUploadDocuments, uploadInstallerDocument } from '../controllers/workflowController';
 
 const router: Router = express.Router();
 
@@ -56,6 +56,35 @@ const handleInstallerMultipart = (req: Request, res: Response, next: NextFunctio
   });
 };
 
+const handleSingleInstallerUploadMultipart = (req: Request, res: Response, next: NextFunction): void => {
+  installerMulter.single('file')(req, res, (err: unknown) => {
+    if (!err) {
+      next();
+      return;
+    }
+    const e = err as MulterError;
+    if (e.code === 'LIMIT_FILE_SIZE') {
+      res.status(413).json({
+        success: false,
+        error: { code: 'VAL_001', message: 'Uploaded file exceeds the maximum upload size' }
+      });
+      return;
+    }
+    if (e.code === 'LIMIT_UNEXPECTED_FILE') {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VAL_001',
+          message: 'Expected a single file field named "file"',
+          details: [{ field: e.field || 'file', message: e.message }]
+        }
+      });
+      return;
+    }
+    next(err);
+  });
+};
+
 router.use(authenticate);
 
 router.get('/quotations', authorizeInstallerOrAdmin, getInstallerQueue);
@@ -64,6 +93,8 @@ router.get('/queue', authorizeInstallerOrAdmin, getInstallerQueue);
 router.use(authorizeInstaller);
 router.patch('/quotations/:quotationId/status', validate(installerStatusSchema), installerDecision);
 router.patch('/quotations/:quotationId/decision', validate(installerStatusSchema), installerDecision);
+router.post('/quotations/:quotationId/documents/upload', handleSingleInstallerUploadMultipart, uploadInstallerDocument);
+router.post('/quotations/:quotationId/upload', handleSingleInstallerUploadMultipart, uploadInstallerDocument);
 router.post(
   '/quotations/:quotationId/documents',
   handleInstallerMultipart,
