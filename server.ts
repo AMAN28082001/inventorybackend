@@ -173,7 +173,7 @@ app.use((_: Request, res: Response) => {
 // Error handler
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction): void => {
   const storageCode = (err as { code?: string }).code;
-  if (storageCode === 'SYS_STORAGE' || storageCode === 'S3_CONFIG_MISSING') {
+  if (storageCode === 'SYS_STORAGE') {
     const status = (err as { status?: number }).status || 503;
     const hint = (err as { storageHint?: string }).storageHint;
     logger.error('File storage error', {
@@ -184,10 +184,8 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction): void =>
     res.status(status).json({
       success: false,
       error: {
-        code: storageCode,
-        message: err.message || (storageCode === 'S3_CONFIG_MISSING'
-          ? 'Storage is not configured on the server.'
-          : 'File storage is not configured or unavailable.'),
+        code: 'SYS_STORAGE',
+        message: err.message || 'File storage is not configured or unavailable.',
         ...(hint ? { hint } : {})
       }
     });

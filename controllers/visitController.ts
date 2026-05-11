@@ -285,16 +285,6 @@ export const uploadVisitMedia = async (req: Request, res: Response): Promise<voi
     });
   } catch (error) {
     logError('Upload visit media error', error, { visitId: req.params.visitId, field: req.body?.field });
-    if ((error as { code?: string })?.code === 'S3_CONFIG_MISSING') {
-      res.status(503).json({
-        success: false,
-        error: {
-          code: 'S3_CONFIG_MISSING',
-          message: 'Storage is not configured on the server.'
-        }
-      });
-      return;
-    }
     res.status(500).json({
       success: false,
       error: { code: 'SYS_001', message: 'Internal server error' }
