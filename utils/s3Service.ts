@@ -24,10 +24,14 @@ const createStorageConfigError = (message: string): Error => {
 };
 
 export const resolveAwsStorageConfig = (): AwsStorageConfig => {
-  const region = String(process.env.AWS_REGION || '').trim();
-  const bucketName = String(process.env.AWS_BUCKET_NAME || '').trim();
+  const region = String(process.env.AWS_REGION || 'ap-south-1').trim();
+  const bucketName = String(process.env.AWS_BUCKET_NAME || 'cbpl-bajaj-node').trim();
   const accessKeyId = process.env.AWS_ACCESS_KEY || '';
   const secretAccessKey = process.env.AWS_SECRET_KEY || '';
+  console.log('accessKeyId', accessKeyId);
+  console.log('secretAccessKey', secretAccessKey);
+  console.log('region', region);
+  console.log('bucketName', bucketName);
 
   logger.info('AWS Storage Config', { region, bucketName, accessKeyId, secretAccessKey });
 
