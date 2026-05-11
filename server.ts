@@ -10,7 +10,7 @@ import { attachRealtimeServer, emitRealtime, realtimeEvents } from './utils/real
 
 dotenv.config();
 
-// Import route (Inventory System)
+// Import route (Inventory Systems)
 import authRoutes from './routes/authRoutes';
 import userRoutes from './routes/userRoutes';
 import categoryRoutes from './routes/categoryRoutes';
