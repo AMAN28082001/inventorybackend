@@ -79,6 +79,7 @@ jobs:
             AWS_ACCESS_KEY=${{ secrets.AWS_ACCESS_KEY || '' }}
             AWS_SECRET_KEY=${{ secrets.AWS_SECRET_KEY || '' }}
             AWS_BUCKET_NAME=${{ secrets.AWS_BUCKET_NAME || 'cbpl-bajaj-node' }}
+            AWS_REGION=${{ secrets.AWS_REGION }}
             
             # Production URL
             PROD_URL=${{ secrets.STAGING_URL || '' }}
