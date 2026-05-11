@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import mime from 'mime-types';
 import { logInfo, logError } from '../utils/loggerHelper';
+import logger from '../config/logger';
 
 let cachedS3: AWS.S3 | null = null;
 
@@ -24,6 +25,8 @@ export const resolveAwsStorageConfig = (): AwsStorageConfig => {
   const bucketName = String(process.env.AWS_BUCKET_NAME || process.env.AWS_S3_BUCKET || '').trim();
   const accessKeyId = process.env.AWS_ACCESS_KEY || process.env.AWS_ACCESS_KEY_ID;
   const secretAccessKey = process.env.AWS_SECRET_KEY || process.env.AWS_SECRET_ACCESS_KEY;
+
+  logger.info('AWS Storage Config', { region, bucketName, accessKeyId, secretAccessKey });
 
   if (!region) {
     throw createStorageConfigError('AWS_REGION is not configured.');
