@@ -23,6 +23,7 @@ import {
   meteringStatusUpdate,
   saveMeteringDetails,
   saveMeteringMcoDocuments,
+  installerUploadDocuments,
   uploadInstallerDocument
 } from '../controllers/workflowController';
 import { getVisitsForQuotation, rescheduleVisit } from '../controllers/visitController';
@@ -41,7 +42,13 @@ import { validate } from '../middleware/validate';
 import { logRequestBeforeValidation, logRequestAfterValidation } from '../middleware/requestLogger';
 import { createQuotationSchema, updateDiscountSchema, updateProductsSchema, updatePricingSchema, updatePaymentDetailsSchema, updatePaymentModeSchema, updateInstallationReleaseSchema, updateInstallationScheduledAtSchema } from '../validations/quotationValidations';
 import { patchQuotationInstallationTeamSchema } from '../validations/adminValidations';
-import { meteringDetailsSchema, meteringMcoDocumentsSchema, meteringStatusSchema } from '../validations/workflowValidations';
+import {
+  meteringDetailsSchema,
+  meteringMcoDocumentsSchema,
+  meteringStatusSchema,
+  installerUploadMetaSchema
+} from '../validations/workflowValidations';
+import { handleInstallerMultipart, handleSingleInstallerUploadMultipart } from './installerRoutes';
 import { rescheduleVisitSchema } from '../validations/visitValidations';
 
 const router: Router = express.Router();
@@ -806,10 +813,19 @@ router.post(
   uploadQuotationDocument
 );
 
+/** Same handler as `POST /api/installer/quotations/:id/documents` — quotation-prefixed fallback for gateways/clients. */
+router.post(
+  '/:quotationId/installer-documents',
+  authorizeInstallerOrAdmin,
+  handleInstallerMultipart,
+  validate(installerUploadMetaSchema),
+  installerUploadDocuments
+);
+
 router.post(
   '/:quotationId/installer-documents/upload',
   authorizeInstallerOrAdmin,
-  handleSingleQuotationDocumentUpload,
+  handleSingleInstallerUploadMultipart,
   uploadInstallerDocument
 );
 

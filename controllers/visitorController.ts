@@ -4,6 +4,8 @@ import { Op } from 'sequelize';
 import { logError } from '../utils/loggerHelper';
 import { extractS3Key, generatePublicUrl } from '../utils/s3Service';
 
+const VISIT_MEDIA_PRESIGN_TTL_SECONDS = Number(process.env.AWS_S3_SIGNED_URL_TTL_SECONDS || 604800);
+
 const toSafeString = (value: unknown): string => {
   if (typeof value === 'string') return value;
   if (value === null || value === undefined) return '';
@@ -79,7 +81,7 @@ const resolveMediaUrl = async (url: unknown): Promise<string | null> => {
   const key = extractS3Key(url);
   if (!key) return url;
   try {
-    return await generatePublicUrl(key);
+    return await generatePublicUrl(key, VISIT_MEDIA_PRESIGN_TTL_SECONDS);
   } catch {
     return url;
   }

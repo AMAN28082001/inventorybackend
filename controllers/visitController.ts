@@ -6,6 +6,9 @@ import { logError, logInfo } from '../utils/loggerHelper';
 import { buildS3ObjectUrl, extractS3Key, generatePublicUrl, uploadFileToS3FromBuffer } from '../utils/s3Service';
 import { getInstallationTeamIdFromRequest, isInstallationTeamJwtRole } from '../utils/installationTeamRole';
 
+/** Presigned GET TTL for private S3 visit media (list/detail/complete responses; matches upload helper default). */
+const VISIT_MEDIA_PRESIGN_TTL_SECONDS = Number(process.env.AWS_S3_SIGNED_URL_TTL_SECONDS || 604800);
+
 const timeRangeRegex = /^([01]\d|2[0-3]):([0-5]\d)\s-\s([01]\d|2[0-3]):([0-5]\d)$/;
 const hhmmRegex = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
@@ -73,7 +76,7 @@ const resolveMediaUrl = async (url: unknown): Promise<string | null> => {
   const key = extractS3Key(url);
   if (!key) return url;
   try {
-    return await generatePublicUrl(key);
+    return await generatePublicUrl(key, VISIT_MEDIA_PRESIGN_TTL_SECONDS);
   } catch {
     return url;
   }
@@ -269,8 +272,7 @@ export const uploadVisitMedia = async (req: Request, res: Response): Promise<voi
 
     const key = await uploadFileToS3FromBuffer(file.buffer, file.originalname, 'visits');
     const storedValue = buildS3ObjectUrl(key);
-    const usableUrl = await generatePublicUrl(key, Number(process.env.AWS_S3_SIGNED_URL_TTL_SECONDS || 604800))
-      .catch(() => storedValue);
+    const usableUrl = await generatePublicUrl(key, VISIT_MEDIA_PRESIGN_TTL_SECONDS).catch(() => storedValue);
     const urlKey = `${fieldName}Url`;
 
     logInfo('Visit media uploaded', { visitId: visit.id, field: fieldName, visitorId: req.visitor.id });
@@ -1043,6 +1045,7 @@ export const completeVisit = async (req: Request, res: Response): Promise<void> 
       feedback: nextFeedback,
       notes: nextNotes
     });
+    await visit.reload();
 
     const responseImages = await resolveMediaUrls(visit.images);
     const responseRowDiagramImage = await resolveMediaUrl((visit as any).rowDiagramImage);
@@ -1141,14 +1144,21 @@ export const markVisitIncomplete = async (req: Request, res: Response): Promise<
   }
 };
 
+const isInventorySystemAdminUser = (req: Request): boolean =>
+  !!req.user &&
+  (req.user.role === 'admin' ||
+    req.user.role === 'super-admin' ||
+    req.user.role === 'super-admin-manager');
+
 // Reschedule visit (visitor: must be assigned; dealer/admin: visit must belong to their quotation)
 export const rescheduleVisit = async (req: Request, res: Response): Promise<void> => {
   try {
     const isVisitor = !!req.visitor;
     const isDealer =
       !!req.dealer && (req.dealer.role === 'dealer' || req.dealer.role === 'admin');
+    const isInventoryAdmin = isInventorySystemAdminUser(req);
 
-    if (!isVisitor && !isDealer) {
+    if (!isVisitor && !isDealer && !isInventoryAdmin) {
       res.status(403).json({
         success: false,
         error: { code: 'AUTH_004', message: 'Insufficient permissions' }
@@ -1210,6 +1220,8 @@ export const rescheduleVisit = async (req: Request, res: Response): Promise<void
         });
         return;
       }
+    } else if (isInventoryAdmin) {
+      // Ops: no per-dealer scope check
     }
 
     const updatePayload: any = {

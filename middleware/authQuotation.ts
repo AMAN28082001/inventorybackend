@@ -310,8 +310,8 @@ export const authorizeVisitor = (req: Request, res: Response, next: NextFunction
     res.status(401).json({
       success: false,
       error: {
-        code: 'AUTH_004',
-        message: 'Insufficient permissions'
+        code: 'AUTH_003',
+        message: 'User not authenticated'
       }
     });
     return;
@@ -329,11 +329,19 @@ export const authorizeVisitorOrQuotationsDealer = (req: Request, res: Response, 
     next();
     return;
   }
+  // Inventory admins (User JWT) may reschedule any visit for support / ops (no req.dealer).
+  if (
+    req.user &&
+    (req.user.role === 'admin' || req.user.role === 'super-admin' || req.user.role === 'super-admin-manager')
+  ) {
+    next();
+    return;
+  }
   res.status(403).json({
     success: false,
     error: {
       code: 'AUTH_004',
-      message: 'Insufficient permissions. Visitor or dealer access required.'
+      message: 'Insufficient permissions. Visitor, quotation dealer/admin, or inventory admin access required.'
     }
   });
 };

@@ -115,4 +115,7 @@ router.post(
   installerUploadDocuments
 );
 
+/** Re-used by `quotationRoutes` for `/api/quotations/:id/installer-documents` fallbacks. */
+export { handleInstallerMultipart, handleSingleInstallerUploadMultipart };
+
 export default router;

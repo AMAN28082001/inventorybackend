@@ -59,7 +59,14 @@ Queue and save responses should expose metering fields consistently (camelCase *
 
 ## Installer completion upload — §6.4.C (implemented in API)
 
-**Route:** `POST /api/installer/quotations/{quotationId}/documents` (multipart). **Auth:** `authorizeInstallerOrAdmin` — quotation **dealer** admins (`req.dealer.role === admin`), inventory **admin** / **super-admin** / **super-admin-manager**, **installer**, and **installation-team** JWTs.
+**Routes (equivalent):**
+
+- `POST /api/installer/quotations/{quotationId}/documents` (multipart)
+- `POST /api/quotations/{quotationId}/installer-documents` (multipart) — same handler; use when the client must call a quotation-prefixed URL.
+
+**Auth:** `authorizeInstallerOrAdmin` — quotation **dealer** admins (`req.dealer.role === admin`), inventory **admin** / **super-admin** / **super-admin-manager**, **installer**, and **installation-team** JWTs.
+
+Single-file slot uploads also accept `POST /api/quotations/{quotationId}/installer-documents/upload` (same as installer-prefixed single upload; uses installer multer limits).
 
 ### §6.4.C.1 — Admin vs installer file validation
 
