@@ -24,6 +24,27 @@ const assertInstallationTeamQuotationScope = (req: Request, quotation: Quotation
   return true;
 };
 
+const normalizeWorkflowRole = (role: string | undefined): string =>
+  String(role || '')
+    .trim()
+    .toLowerCase()
+    .replace(/-/g, '_');
+
+/**
+ * Admin Installation tab completion uploader (§6.4.C): quotation `dealer` admins and inventory admins.
+ * Relaxed file / leg requirements vs installer in `installerUploadDocuments`.
+ */
+const isInstallerCompletionAdmin = (req: Request): boolean => {
+  if (req.dealer?.role === 'admin') return true;
+  const r = normalizeWorkflowRole(req.user?.role);
+  return r === 'admin' || r === 'superadmin' || r === 'super_admin' || r === 'super_admin_manager';
+};
+
+const workflowActorId = (req: Request): string => String(req.user?.id || req.dealer?.id || 'unknown');
+
+const workflowActorRole = (req: Request): string =>
+  String(req.user?.role || req.dealer?.role || 'unknown');
+
 const normalizeAwsEnvValue = (value: string | undefined, fallback = ''): string => {
   const normalized = String(value || '')
     .trim()
@@ -1360,6 +1381,8 @@ export const installerUploadDocuments = async (req: Request, res: Response): Pro
       return;
     }
 
+    const isAdmin = isInstallerCompletionAdmin(req);
+
     const body = req.body as Record<string, unknown>;
     const bodyDocType = parseTrimmedString(body.docType) as
       | 'installer_po'
@@ -1388,33 +1411,81 @@ export const installerUploadDocuments = async (req: Request, res: Response): Pro
     const midCmRaw = body.siteWidth ?? body.midLegCm;
 
     if (cmSignal) {
-      const backCm = parsePositiveDecimal(backCmRaw);
-      const frontCm = parsePositiveDecimal(frontCmRaw);
-      if (backCm === null || frontCm === null || Number.isNaN(backCm) || Number.isNaN(frontCm)) {
-        res.status(400).json({
-          success: false,
-          error: {
-            code: 'VALIDATION_ERROR',
-            message: 'Back and front site legs (cm) are required and must be positive numbers',
-            details: [
-              { field: 'siteLength', message: 'Required positive number (back leg cm)' },
-              { field: 'siteHeight', message: 'Required positive number (front leg cm)' }
-            ]
+      if (!isAdmin) {
+        const backCm = parsePositiveDecimal(backCmRaw);
+        const frontCm = parsePositiveDecimal(frontCmRaw);
+        if (backCm === null || frontCm === null || Number.isNaN(backCm) || Number.isNaN(frontCm)) {
+          res.status(400).json({
+            success: false,
+            error: {
+              code: 'VALIDATION_ERROR',
+              message: 'Back and front site legs (cm) are required and must be positive numbers',
+              details: [
+                { field: 'siteLength', message: 'Required positive number (back leg cm)' },
+                { field: 'siteHeight', message: 'Required positive number (front leg cm)' }
+              ]
+            }
+          });
+          return;
+        }
+        const midCm = parseOptionalPositiveDecimal(midCmRaw);
+        if (midCm !== undefined && Number.isNaN(midCm)) {
+          res.status(400).json({
+            success: false,
+            error: {
+              code: 'VALIDATION_ERROR',
+              message: 'Mid leg (cm) must be a positive number when provided',
+              details: [{ field: 'siteWidth', message: 'Invalid mid leg value' }]
+            }
+          });
+          return;
+        }
+      } else {
+        const hasBackInput = parseTrimmedString(backCmRaw) !== undefined;
+        const hasFrontInput = parseTrimmedString(frontCmRaw) !== undefined;
+        const hasMidInput = parseTrimmedString(midCmRaw) !== undefined;
+        if (hasBackInput) {
+          const backCm = parsePositiveDecimal(backCmRaw);
+          if (backCm === null || Number.isNaN(backCm)) {
+            res.status(400).json({
+              success: false,
+              error: {
+                code: 'VALIDATION_ERROR',
+                message: 'Back leg (cm) must be a positive number when provided',
+                details: [{ field: 'siteLength', message: 'Invalid back leg value' }]
+              }
+            });
+            return;
           }
-        });
-        return;
-      }
-      const midCm = parseOptionalPositiveDecimal(midCmRaw);
-      if (midCm !== undefined && Number.isNaN(midCm)) {
-        res.status(400).json({
-          success: false,
-          error: {
-            code: 'VALIDATION_ERROR',
-            message: 'Mid leg (cm) must be a positive number when provided',
-            details: [{ field: 'siteWidth', message: 'Invalid mid leg value' }]
+        }
+        if (hasFrontInput) {
+          const frontCm = parsePositiveDecimal(frontCmRaw);
+          if (frontCm === null || Number.isNaN(frontCm)) {
+            res.status(400).json({
+              success: false,
+              error: {
+                code: 'VALIDATION_ERROR',
+                message: 'Front leg (cm) must be a positive number when provided',
+                details: [{ field: 'siteHeight', message: 'Invalid front leg value' }]
+              }
+            });
+            return;
           }
-        });
-        return;
+        }
+        if (hasMidInput) {
+          const midCm = parseOptionalPositiveDecimal(midCmRaw);
+          if (midCm === undefined || Number.isNaN(midCm)) {
+            res.status(400).json({
+              success: false,
+              error: {
+                code: 'VALIDATION_ERROR',
+                message: 'Mid leg (cm) must be a positive number when provided',
+                details: [{ field: 'siteWidth', message: 'Invalid mid leg value' }]
+              }
+            });
+            return;
+          }
+        }
       }
     }
 
@@ -1458,7 +1529,12 @@ export const installerUploadDocuments = async (req: Request, res: Response): Pro
 
     const files = flattenMulterFiles(req);
     const urlDocs = buildInstallerUrlDocCandidates(body, bodyDocType);
-    if (files.length === 0 && urlDocs.length === 0 && !siteSignal && !extraParsed) {
+    const adminMetaPayload =
+      isAdmin &&
+      (parseTrimmedString(body.installationStatus) !== undefined ||
+        parseTrimmedString(body.installerRemarks) !== undefined ||
+        parseTrimmedString(body.remarks) !== undefined);
+    if (files.length === 0 && urlDocs.length === 0 && !siteSignal && !extraParsed && !adminMetaPayload) {
       res.status(400).json({
         success: false,
         error: { code: 'VAL_002', message: 'Provide at least one file, site dimensions, or extra expenses' }
@@ -1500,8 +1576,8 @@ export const installerUploadDocuments = async (req: Request, res: Response): Pro
         quotationId,
         docType: docType as any,
         fileUrl,
-        uploadedByUserId: req.user?.id || 'unknown',
-        uploadedByRole: req.user?.role || 'unknown',
+        uploadedByUserId: workflowActorId(req),
+        uploadedByRole: workflowActorRole(req),
         remarks: (parseTrimmedString(body.installerRemarks) || parseTrimmedString(body.remarks)) || null,
         metadata,
         uploadedAt: new Date()
@@ -1527,8 +1603,8 @@ export const installerUploadDocuments = async (req: Request, res: Response): Pro
         quotationId,
         docType: ref.docType as any,
         fileUrl: ref.url,
-        uploadedByUserId: req.user?.id || 'unknown',
-        uploadedByRole: req.user?.role || 'unknown',
+        uploadedByUserId: workflowActorId(req),
+        uploadedByRole: workflowActorRole(req),
         remarks: (parseTrimmedString(body.installerRemarks) || parseTrimmedString(body.remarks)) || null,
         metadata,
         uploadedAt: new Date()
@@ -1576,19 +1652,21 @@ export const installerUploadDocuments = async (req: Request, res: Response): Pro
 
     const markInstallerApproved = parseTrimmedString(body.installationStatus) === 'installer_approved';
     if (markInstallerApproved) {
-      const siteImages = await QuotationInstallationDoc.count({
-        where: { quotationId, docType: 'site_completion_image' }
-      });
-      if (siteImages < 1) {
-        res.status(400).json({
-          success: false,
-          error: { code: 'WF_002', message: 'At least one site completion image is required before approval' }
+      if (!isAdmin) {
+        const siteImages = await QuotationInstallationDoc.count({
+          where: { quotationId, docType: 'site_completion_image' }
         });
-        return;
+        if (siteImages < 1) {
+          res.status(400).json({
+            success: false,
+            error: { code: 'WF_002', message: 'At least one site completion image is required before approval' }
+          });
+          return;
+        }
       }
       await quotation.update({
         installationStatus: 'pending_baldev',
-        installerId: req.user?.id || quotation.installerId,
+        installerId: isAdmin ? quotation.installerId : req.user?.id || quotation.installerId,
         installerActionAt: new Date(),
         installerApprovedAt: new Date(),
         installerRemarks: rem || quotation.installerRemarks || null

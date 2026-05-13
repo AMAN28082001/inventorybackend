@@ -4,6 +4,7 @@ import { Op } from 'sequelize';
 import { Visit, VisitAssignment, Quotation, Visitor, Customer } from '../models/index-quotation';
 import { logError, logInfo } from '../utils/loggerHelper';
 import { buildS3ObjectUrl, extractS3Key, generatePublicUrl, uploadFileToS3FromBuffer } from '../utils/s3Service';
+import { getInstallationTeamIdFromRequest, isInstallationTeamJwtRole } from '../utils/installationTeamRole';
 
 const timeRangeRegex = /^([01]\d|2[0-3]):([0-5]\d)\s-\s([01]\d|2[0-3]):([0-5]\d)$/;
 const hhmmRegex = /^([01]\d|2[0-3]):([0-5]\d)$/;
@@ -1336,6 +1337,13 @@ export const patchVisitSiteDimensions = async (req: Request, res: Response): Pro
       allowed = req.dealer.role === 'admin' || visit.dealerId === req.dealer.id;
     } else if (req.user?.role === 'installer') {
       allowed =
+        quotation.status === 'approved' &&
+        INSTALLER_PATCH_VISIT_STATUSES.has((quotation as any).installationStatus || '');
+    } else if (req.user && isInstallationTeamJwtRole(req.user.role)) {
+      const teamId = getInstallationTeamIdFromRequest(req);
+      const qTeam = String((quotation as any).installationTeamId || '').trim();
+      allowed =
+        Boolean(teamId && qTeam && teamId === qTeam) &&
         quotation.status === 'approved' &&
         INSTALLER_PATCH_VISIT_STATUSES.has((quotation as any).installationStatus || '');
     } else if (

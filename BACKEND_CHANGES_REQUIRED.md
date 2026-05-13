@@ -54,3 +54,24 @@ Queue and save responses should expose metering fields consistently (camelCase *
 - Metering dashboard save/status: `app/dashboard/metering/page.tsx`
 - Primary metering API: `PATCH /api/metering/quotations/{id}/status`
 - Quotation-scoped fallback: `PATCH /api/quotations/{id}/metering-status`
+
+---
+
+## Installer completion upload — §6.4.C (implemented in API)
+
+**Route:** `POST /api/installer/quotations/{quotationId}/documents` (multipart). **Auth:** `authorizeInstallerOrAdmin` — quotation **dealer** admins (`req.dealer.role === admin`), inventory **admin** / **super-admin** / **super-admin-manager**, **installer**, and **installation-team** JWTs.
+
+### §6.4.C.1 — Admin vs installer file validation
+
+- **Installer / installation-team:** unchanged — at least one of files, URL doc refs, site dimensions (cm/feet), or `extraExpensesJson` is required (`VAL_002` when empty). When `installationStatus=installer_approved`, at least one existing `site_completion_image` doc is required (`WF_002`).
+- **Admin:** multipart may contain **no files**. A payload is accepted when it includes any of: files, URL docs, site/feet signals, parsed extra expenses, **or** (metadata-only) `installationStatus`, `installerRemarks`, or `remarks` text fields. When `installationStatus=installer_approved`, **do not** require site completion images (`WF_002` skipped for admin).
+
+### §6.4.C.2 — Leg validation (cm)
+
+- **Installer / installation-team:** if any cm leg field is non-empty, **both** back and front legs must be positive numbers; optional mid must be positive when provided (existing behavior).
+- **Admin:** empty `siteLength` / `siteHeight` / `siteWidth` (and `*LegCm` aliases) are treated as omitted — no `400` for “missing legs” when all are empty. When a leg field **is** provided, that value alone must be a positive number (partial updates).
+
+### Audit / FK note
+
+- On admin-driven `installer_approved`, `installerId` on the quotation is **not** overwritten with the admin user id (preserves the real installer when present).
+- `QuotationInstallationDoc.uploadedBy*` uses `req.user?.id` / `req.dealer?.id` and matching role for attribution.

@@ -90,13 +90,26 @@ router.use(authenticate);
 router.get('/quotations', authorizeInstallerOrAdmin, getInstallerQueue);
 router.get('/queue', authorizeInstallerOrAdmin, getInstallerQueue);
 
-router.use(authorizeInstaller);
-router.patch('/quotations/:quotationId/status', validate(installerStatusSchema), installerDecision);
-router.patch('/quotations/:quotationId/decision', validate(installerStatusSchema), installerDecision);
-router.post('/quotations/:quotationId/documents/upload', handleSingleInstallerUploadMultipart, uploadInstallerDocument);
-router.post('/quotations/:quotationId/upload', handleSingleInstallerUploadMultipart, uploadInstallerDocument);
+// Installer / field-team only (not quotation admin): workflow state transitions
+router.patch('/quotations/:quotationId/status', authorizeInstaller, validate(installerStatusSchema), installerDecision);
+router.patch('/quotations/:quotationId/decision', authorizeInstaller, validate(installerStatusSchema), installerDecision);
+
+// Bulk + single completion uploads: admins use same handlers as installers (§6.4.C)
+router.post(
+  '/quotations/:quotationId/documents/upload',
+  authorizeInstallerOrAdmin,
+  handleSingleInstallerUploadMultipart,
+  uploadInstallerDocument
+);
+router.post(
+  '/quotations/:quotationId/upload',
+  authorizeInstallerOrAdmin,
+  handleSingleInstallerUploadMultipart,
+  uploadInstallerDocument
+);
 router.post(
   '/quotations/:quotationId/documents',
+  authorizeInstallerOrAdmin,
   handleInstallerMultipart,
   validate(installerUploadMetaSchema),
   installerUploadDocuments

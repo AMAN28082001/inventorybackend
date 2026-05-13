@@ -389,10 +389,17 @@ export const authorizeInstallerOrInstallationTeam = (req: Request, res: Response
 export const authorizeInstaller = authorizeInstallerOrInstallationTeam;
 
 export const authorizeInstallerOrAdmin = (req: Request, res: Response, next: NextFunction): void => {
+  // Quotation-system admin lives on `req.dealer` (Dealer row with role `admin`).
+  if (req.dealer?.role === 'admin') {
+    next();
+    return;
+  }
   if (
     req.user &&
     (req.user.role === 'installer' ||
       req.user.role === 'admin' ||
+      req.user.role === 'super-admin' ||
+      req.user.role === 'super-admin-manager' ||
       isInstallationTeamJwtRole(req.user.role))
   ) {
     next();
@@ -450,6 +457,10 @@ export const authorizeMeteringOrAdmin = (req: Request, res: Response, next: Next
   });
 };
 
+/** Inventory System roles that may edit any quotation (products/pricing), same as `authorizeAdmin` inventory branch. */
+const isInventorySystemAdminRole = (role: string | undefined): boolean =>
+  role === 'admin' || role === 'super-admin' || role === 'super-admin-manager';
+
 // Allow dealer/admin or account manager
 export const authorizeDealerOrAccountManager = (req: Request, res: Response, next: NextFunction): void => {
   if (req.dealer) {
@@ -457,6 +468,10 @@ export const authorizeDealerOrAccountManager = (req: Request, res: Response, nex
     return;
   }
   if (req.user && (req.user.role === 'account-management' || req.user.role === 'hr')) {
+    next();
+    return;
+  }
+  if (req.user && isInventorySystemAdminRole(req.user.role)) {
     next();
     return;
   }

@@ -2025,7 +2025,12 @@ export const updateQuotationDiscount = async (req: Request, res: Response): Prom
 export const updateQuotationProducts = async (req: Request, res: Response): Promise<void> => {
   try {
     const isAccountManager = req.user && (req.user.role === 'account-management' || req.user.role === 'hr');
-    if (!req.dealer && !isAccountManager) {
+    const isInventoryAdmin =
+      req.user &&
+      (req.user.role === 'admin' ||
+        req.user.role === 'super-admin' ||
+        req.user.role === 'super-admin-manager');
+    if (!req.dealer && !isAccountManager && !isInventoryAdmin) {
       res.status(401).json({
         success: false,
         error: { code: 'AUTH_003', message: 'User not authenticated' }
@@ -2180,7 +2185,12 @@ export const updateQuotationProducts = async (req: Request, res: Response): Prom
 export const updateQuotationPricing = async (req: Request, res: Response): Promise<void> => {
   try {
     const isAccountManager = req.user && (req.user.role === 'account-management' || req.user.role === 'hr');
-    if (!req.dealer && !isAccountManager) {
+    const isInventoryAdmin =
+      req.user &&
+      (req.user.role === 'admin' ||
+        req.user.role === 'super-admin' ||
+        req.user.role === 'super-admin-manager');
+    if (!req.dealer && !isAccountManager && !isInventoryAdmin) {
       res.status(401).json({
         success: false,
         error: { code: 'AUTH_003', message: 'User not authenticated' }
