@@ -30,6 +30,9 @@ import {
 } from '../controllers/installationTeamController';
 import { authenticate, authorizeAdmin } from '../middleware/authQuotation';
 import { validate } from '../middleware/validate';
+import { handleInstallerMultipart, handleSingleInstallerUploadMultipart } from './installerRoutes';
+import { installerUploadDocuments, uploadInstallerDocument } from '../controllers/workflowController';
+import { installerUploadMetaSchema } from '../validations/workflowValidations';
 import {
   updateStatusSchema,
   updateInstallationStatusSchema,
@@ -75,6 +78,41 @@ router.use(authorizeAdmin);
  *       - bearerAuth: []
  */
 router.patch('/quotations/:quotationId/status', validate(updateStatusSchema), updateQuotationStatus);
+
+/**
+ * Installer completion multipart (same as POST /api/installer/quotations/:id/documents).
+ * Admin UI tries these URLs before POST /api/quotations/:id/documents — that route uses KYC-only Multer
+ * and rejects `installerCompletionImages` with "Unexpected or too many file fields".
+ */
+router.post(
+  '/quotations/:quotationId/documents',
+  handleInstallerMultipart,
+  validate(installerUploadMetaSchema),
+  installerUploadDocuments
+);
+router.post(
+  '/quotations/:quotationId/installer-documents',
+  handleInstallerMultipart,
+  validate(installerUploadMetaSchema),
+  installerUploadDocuments
+);
+router.post(
+  '/installer/quotations/:quotationId/documents',
+  handleInstallerMultipart,
+  validate(installerUploadMetaSchema),
+  installerUploadDocuments
+);
+router.post(
+  '/quotations/:quotationId/installer-documents/upload',
+  handleSingleInstallerUploadMultipart,
+  uploadInstallerDocument
+);
+router.post(
+  '/quotations/:quotationId/documents/upload',
+  handleSingleInstallerUploadMultipart,
+  uploadInstallerDocument
+);
+
 router.patch('/quotations/:quotationId/installation-status', validate(updateInstallationStatusSchema), updateQuotationInstallationStatus);
 router.patch('/quotations/:quotationId/workflow-status', validate(updateInstallationStatusSchema), updateQuotationInstallationStatus);
 router.patch('/quotations/:quotationId/installation-scheduled-at', validate(updateInstallationScheduledAtSchema), updateQuotationInstallationScheduledAt);

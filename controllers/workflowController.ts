@@ -1006,6 +1006,63 @@ const flattenMulterFiles = (req: Request): Express.Multer.File[] => {
   return Object.values(raw).flat();
 };
 
+/** Field names allowed in `installerCompletionImageFieldOrderJson` (aligned with admin aggregate upload). */
+const INSTALLER_AGGREGATE_ORDER_KEYS = new Set([
+  'homeFrontPhoto',
+  'homeWithPersonPhoto',
+  'inverterWithCustomerPhoto',
+  'plantWithCustomerPhoto',
+  'inverterSerialNumberPhoto',
+  'panelSerialNumberPhoto',
+  'geoTagPlantPhoto',
+  'otherImages',
+  'piUpload'
+]);
+
+const parseInstallerCompletionImageFieldOrderJson = (body: Record<string, unknown>): string[] | null => {
+  const raw =
+    body.installerCompletionImageFieldOrderJson ?? body.installer_completion_image_field_order_json;
+  const s = parseTrimmedString(raw);
+  if (s === undefined) return null;
+  try {
+    const parsed = JSON.parse(s) as unknown;
+    if (!Array.isArray(parsed)) return null;
+    const keys = parsed.map((x) => String(x).trim()).filter(Boolean);
+    return keys.length ? keys : null;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Deterministic file order: known per-field parts first (stable UI order), then repeated
+ * `installerCompletionImages` in multipart order (matches `installerCompletionImageFieldOrderJson`).
+ */
+const buildOrderedInstallerMultipartFiles = (req: Request): Express.Multer.File[] => {
+  const raw = (req as any).files as Record<string, Express.Multer.File[]> | undefined;
+  if (!raw) return [];
+  const pick = (name: string): Express.Multer.File[] => (Array.isArray(raw[name]) ? raw[name] : []);
+  const nonAggregateOrder = [
+    'homeFrontPhoto',
+    'homeWithPersonPhoto',
+    'inverterWithCustomerPhoto',
+    'plantWithCustomerPhoto',
+    'inverterSerialNumberPhoto',
+    'panelSerialNumberPhoto',
+    'geoTagPlantPhoto',
+    'otherImages',
+    'piUpload',
+    'installerPo',
+    'files'
+  ];
+  const ordered: Express.Multer.File[] = [];
+  for (const name of nonAggregateOrder) {
+    ordered.push(...pick(name));
+  }
+  ordered.push(...pick('installerCompletionImages'));
+  return ordered;
+};
+
 type InstallerUrlDocCandidate = {
   fieldName: string;
   url: string;
@@ -1527,7 +1584,9 @@ export const installerUploadDocuments = async (req: Request, res: Response): Pro
       }
     }
 
-    const files = flattenMulterFiles(req);
+    const fieldOrder = parseInstallerCompletionImageFieldOrderJson(body);
+    let aggregateImageIndex = 0;
+    const files = buildOrderedInstallerMultipartFiles(req);
     const urlDocs = buildInstallerUrlDocCandidates(body, bodyDocType);
     const adminMetaPayload =
       isAdmin &&
@@ -1547,11 +1606,30 @@ export const installerUploadDocuments = async (req: Request, res: Response): Pro
     const createdDocs: any[] = [];
 
     for (const file of files) {
-      const map = INSTALLER_FIELD_DOC_MAP[file.fieldname];
-      if (!map) {
+      const baseMap = INSTALLER_FIELD_DOC_MAP[file.fieldname];
+      if (!baseMap) {
         continue;
       }
-      let docType = map.docType;
+      let docType = baseMap.docType;
+      let slot = baseMap.slot;
+      let logicalField = file.fieldname;
+
+      if (file.fieldname === 'installerCompletionImages' && fieldOrder && fieldOrder.length > 0) {
+        const keyRaw = fieldOrder[aggregateImageIndex] ?? '';
+        aggregateImageIndex += 1;
+        if (keyRaw && INSTALLER_AGGREGATE_ORDER_KEYS.has(keyRaw)) {
+          const sub = INSTALLER_FIELD_DOC_MAP[keyRaw];
+          docType = sub.docType;
+          slot = sub.slot;
+          logicalField = keyRaw;
+        } else {
+          const fallback = INSTALLER_FIELD_DOC_MAP.otherImages;
+          docType = fallback.docType;
+          slot = fallback.slot;
+          logicalField = 'otherImages';
+        }
+      }
+
       if (file.fieldname === 'files' && bodyDocType && ['installer_po', 'installer_pi', 'additional_expense', 'site_completion_image'].includes(bodyDocType)) {
         docType = bodyDocType;
       }
@@ -1566,10 +1644,11 @@ export const installerUploadDocuments = async (req: Request, res: Response): Pro
         originalName: file.originalname,
         mimeType: file.mimetype,
         size: file.size,
-        field: file.fieldname
+        field: logicalField,
+        uploadField: file.fieldname
       };
-      if (map.slot) {
-        metadata.slot = map.slot;
+      if (slot) {
+        metadata.slot = slot;
       }
       const doc = await QuotationInstallationDoc.create({
         id: uuidv4(),

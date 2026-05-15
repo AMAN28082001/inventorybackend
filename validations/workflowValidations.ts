@@ -35,7 +35,9 @@ export const installerUploadMetaSchema = z
     extraExpensesTotal: z.string().max(32).optional(),
     installationStatus: z.string().max(64).optional(),
     installerRemarks: z.string().max(5000).optional(),
-    remarks: z.string().max(5000).optional()
+    remarks: z.string().max(5000).optional(),
+    /** JSON array of logical keys aligned with repeated `installerCompletionImages` file parts (admin aggregate upload). */
+    installerCompletionImageFieldOrderJson: z.string().max(50000).optional()
   })
   .passthrough();
 

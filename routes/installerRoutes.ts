@@ -8,8 +8,8 @@ import { getInstallerQueue, installerDecision, installerUploadDocuments, uploadI
 const router: Router = express.Router();
 
 const INSTALLER_UPLOAD_FIELDS: multer.Field[] = [
-  /** High cap: UI may send the same bytes under this key and per-slot keys (§6.4.C.1). */
-  { name: 'installerCompletionImages', maxCount: 60 },
+  /** High cap: admin sends all completion photos under this key + `installerCompletionImageFieldOrderJson`. */
+  { name: 'installerCompletionImages', maxCount: 100 },
   { name: 'files', maxCount: 60 },
   { name: 'homeFrontPhoto', maxCount: 8 },
   { name: 'homeWithPersonPhoto', maxCount: 8 },
@@ -19,13 +19,14 @@ const INSTALLER_UPLOAD_FIELDS: multer.Field[] = [
   { name: 'panelSerialNumberPhoto', maxCount: 20 },
   { name: 'geoTagPlantPhoto', maxCount: 8 },
   { name: 'otherImages', maxCount: 40 },
-  { name: 'piUpload', maxCount: 1 },
+  /** Allow multiple parts if a client mis-sends; handler persists one PI per upload batch. */
+  { name: 'piUpload', maxCount: 12 },
   { name: 'installerPo', maxCount: 3 }
 ];
 
 const installerMulter = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 15 * 1024 * 1024, files: 200 }
+  limits: { fileSize: 15 * 1024 * 1024, files: 250 }
 });
 
 const handleInstallerMultipart = (req: Request, res: Response, next: NextFunction): void => {
