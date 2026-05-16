@@ -3,11 +3,14 @@ import { v4 as uuidv4 } from 'uuid';
 import { Op } from 'sequelize';
 import { Visit, VisitAssignment, Quotation, Visitor, Customer } from '../models/index-quotation';
 import { logError, logInfo } from '../utils/loggerHelper';
-import { buildS3ObjectUrl, extractS3Key, generatePublicUrl, uploadFileToS3FromBuffer } from '../utils/s3Service';
+import {
+  extractS3Key,
+  persistableMediaReference,
+  resolveBrowsableMediaUrl,
+  resolveBrowsableMediaUrls,
+  uploadFileToS3FromBuffer
+} from '../utils/s3Service';
 import { getInstallationTeamIdFromRequest, isInstallationTeamJwtRole } from '../utils/installationTeamRole';
-
-/** Presigned GET TTL for private S3 visit media (list/detail/complete responses; matches upload helper default). */
-const VISIT_MEDIA_PRESIGN_TTL_SECONDS = Number(process.env.AWS_S3_SIGNED_URL_TTL_SECONDS || 604800);
 
 const timeRangeRegex = /^([01]\d|2[0-3]):([0-5]\d)\s-\s([01]\d|2[0-3]):([0-5]\d)$/;
 const hhmmRegex = /^([01]\d|2[0-3]):([0-5]\d)$/;
@@ -57,36 +60,20 @@ const parseExistingImages = (raw: unknown): string[] => {
   return [];
 };
 
-const normalizeVisitMediaUrl = (value: unknown): string | null => {
-  if (typeof value !== 'string') return null;
-  const trimmed = value.trim();
-  if (!trimmed || trimmed.startsWith('blob:') || trimmed.startsWith('data:')) return null;
-  const key = extractS3Key(trimmed);
-  if (key) {
-    return buildS3ObjectUrl(key);
-  }
-  return trimmed;
-};
+const normalizeVisitMediaUrl = (value: unknown): string | null => persistableMediaReference(value);
 
 const normalizeVisitMediaUrls = (raw: unknown): string[] =>
   dedupeMediaUrls(parseExistingImages(raw).map((v) => normalizeVisitMediaUrl(v)).filter((v): v is string => !!v));
 
-const resolveMediaUrl = async (url: unknown): Promise<string | null> => {
-  if (typeof url !== 'string' || !url.trim()) return null;
-  const key = extractS3Key(url);
-  if (!key) return url;
-  try {
-    return await generatePublicUrl(key, VISIT_MEDIA_PRESIGN_TTL_SECONDS);
-  } catch {
-    return url;
-  }
+const mediaRefFromUploadedFile = (file?: Express.Multer.File): string | null => {
+  if (!file) return null;
+  const key = (file as Express.Multer.File & { s3Key?: string }).s3Key;
+  if (typeof key === 'string' && key.trim()) return key.trim();
+  return persistableMediaReference((file as Express.Multer.File & { s3Location?: string }).s3Location);
 };
 
-const resolveMediaUrls = async (urls: unknown): Promise<string[]> => {
-  if (!Array.isArray(urls)) return [];
-  const resolved = await Promise.all(urls.map((u) => resolveMediaUrl(u)));
-  return resolved.filter((u): u is string => !!u);
-};
+const resolveMediaUrl = resolveBrowsableMediaUrl;
+const resolveMediaUrls = resolveBrowsableMediaUrls;
 
 const toOptionalFiniteNumber = (value: unknown): number | undefined => {
   if (value === undefined || value === null) return undefined;
@@ -271,8 +258,8 @@ export const uploadVisitMedia = async (req: Request, res: Response): Promise<voi
     }
 
     const key = await uploadFileToS3FromBuffer(file.buffer, file.originalname, 'visits');
-    const storedValue = buildS3ObjectUrl(key);
-    const usableUrl = await generatePublicUrl(key, VISIT_MEDIA_PRESIGN_TTL_SECONDS).catch(() => storedValue);
+    const storedValue = key;
+    const usableUrl = (await resolveBrowsableMediaUrl(key)) || key;
     const urlKey = `${fieldName}Url`;
 
     logInfo('Visit media uploaded', { visitId: visit.id, field: fieldName, visitorId: req.visitor.id });
@@ -910,13 +897,13 @@ export const completeVisit = async (req: Request, res: Response): Promise<void> 
         ? normalizeVisitMediaUrls(images)
       : storedVisitImages;
     const uploadedImageUrls = imageFiles
-      .map((file) => normalizeVisitMediaUrl((file as any).s3Location))
+      .map((file) => mediaRefFromUploadedFile(file))
       .filter((url): url is string => !!url);
-    const uploadedMeterImageUrl = normalizeVisitMediaUrl((meterImageFile && (meterImageFile as any).s3Location) || null);
+    const uploadedMeterImageUrl = mediaRefFromUploadedFile(meterImageFile);
     const mergedImages = dedupeMediaUrls([...existingImageUrls, ...uploadedImageUrls]);
 
     const rowDiagramImageUrl =
-      normalizeVisitMediaUrl((rowDiagramFile && (rowDiagramFile as any).s3Location) || null) ||
+      mediaRefFromUploadedFile(rowDiagramFile) ||
       normalizeVisitMediaUrl(rowDiagramImage) ||
       normalizeVisitMediaUrl(existingRowDiagramImage) ||
       normalizeVisitMediaUrl((visit as any).rowDiagramImage) ||

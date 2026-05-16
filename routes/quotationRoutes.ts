@@ -13,6 +13,7 @@ import {
   downloadQuotationsExcel,
   downloadQuotationPDF,
   downloadQuotationDocumentsZip,
+  getQuotationDocumentViewUrl,
   getProductCatalog,
   saveQuotationDocuments,
   uploadQuotationDocument
@@ -870,6 +871,8 @@ router.patch(
  *         description: Unauthorized
  */
 router.get('/:quotationId/pdf', rejectAccountManager, authorizeDealerAdminOrVisitor, downloadQuotationPDF);
+router.get('/:quotationId/documents/view-url', authorizeDealerAdminOrVisitor, getQuotationDocumentViewUrl);
+router.get('/:quotationId/documents/presign-url', authorizeDealerAdminOrVisitor, getQuotationDocumentViewUrl);
 router.get('/:quotationId/documents/zip', authorizeDealerAdminOrVisitor, downloadQuotationDocumentsZip);
 
 /**

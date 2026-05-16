@@ -9,6 +9,10 @@ import { logError, logInfo } from '../utils/loggerHelper';
 import { INSTALLER_RELEASE_STATUSES, resolveInstallerQueueStatuses } from '../constants/workflowQueues';
 import { toDateOnlyStringOrNull } from '../utils/quotationApiJson';
 import { getInstallationTeamIdFromRequest } from '../utils/installationTeamRole';
+import {
+  buildPublicWorkflowFileUrl,
+  mapInstallationDocumentsForApi
+} from '../utils/installationDocumentsApi';
 
 const assertInstallationTeamQuotationScope = (req: Request, quotation: Quotation, res: Response): boolean => {
   const tid = getInstallationTeamIdFromRequest(req);
@@ -70,15 +74,6 @@ const getS3Client = () => {
   return new AWS.S3({ region });
 };
 
-const buildS3Url = (key: string) => {
-  const publicBase = process.env.AWS_S3_PUBLIC_URL;
-  if (publicBase) return `${publicBase.replace(/\/$/, '')}/${key}`;
-  const bucket = normalizeAwsEnvValue(process.env.AWS_BUCKET_NAME, 'cbpl-bajaj-node');
-  const region = normalizeAwsEnvValue(process.env.AWS_REGION, 'ap-south-1');
-  const host = region === 'us-east-1' ? 's3.amazonaws.com' : `s3.${region}.amazonaws.com`;
-  return `https://${bucket}.${host}/${key}`;
-};
-
 const uploadFileToS3 = async (file: Express.Multer.File, quotationId: string, docType: string) => {
   const bucket = normalizeAwsEnvValue(process.env.AWS_BUCKET_NAME, 'cbpl-bajaj-node');
   if (!bucket) throw new Error('AWS_BUCKET_NAME is not configured');
@@ -90,40 +85,13 @@ const uploadFileToS3 = async (file: Express.Multer.File, quotationId: string, do
     Body: file.buffer,
     ContentType: file.mimetype
   }).promise();
-  return buildS3Url(key);
+  return key;
 };
 
-const normalizeWorkflowFileUrl = (value: unknown): string | null => {
-  if (typeof value !== 'string') return null;
-  const trimmed = value.trim();
-  if (!trimmed || trimmed.startsWith('blob:') || trimmed.startsWith('data:')) {
-    return null;
-  }
-  return trimmed;
-};
+const normalizeWorkflowFileUrl = (value: unknown): string | null => buildPublicWorkflowFileUrl(value);
 
-const groupDocsByType = (docs: any[]) => {
-  const grouped: Record<string, any[]> = {};
-  for (const doc of docs || []) {
-    const key = doc.docType || 'other';
-    if (!grouped[key]) grouped[key] = [];
-    grouped[key].push(doc);
-  }
-  return grouped;
-};
-
-const mapWorkflowDocumentsForFrontend = (docs: any[]) => {
-  const grouped = groupDocsByType(docs);
-  return {
-    ...grouped,
-    siteCompletionImages: grouped.site_completion_image || [],
-    installerPo: grouped.installer_po || [],
-    installerPi: grouped.installer_pi || [],
-    additionalExpense: grouped.additional_expense || [],
-    warrantyDocs: grouped.warranty_doc || [],
-    meterDocs: grouped.meter_doc || []
-  };
-};
+const mapWorkflowDocumentsForFrontend = async (docs: any[]) =>
+  (await mapInstallationDocumentsForApi(docs)).documents;
 
 const getLatestMeterDocMeta = (docs: any[]): { url: string | null; name: string | null } => {
   const meterDocs = (docs || []).filter((doc: any) => doc?.docType === 'meter_doc');
@@ -359,7 +327,7 @@ const getWorkflowQueue = async (
     res.json({
       success: true,
       data: {
-        quotations: quotations.rows.map((q: any) => {
+        quotations: await Promise.all(quotations.rows.map(async (q: any) => {
           const rawVisits = Array.isArray(q.visits) ? q.visits : [];
           const sortedVisits = [...rawVisits].sort((a: any, b: any) => {
             const da = new Date(`${a.visitDate || ''} ${a.visitTime || '00:00'}`).getTime();
@@ -405,6 +373,7 @@ const getWorkflowQueue = async (
           const rawInstallationDocs = (q.installationDocs || []).map((doc: any) =>
             (typeof doc.toJSON === 'function' ? doc.toJSON() : doc)
           );
+          const installationPayload = await mapInstallationDocumentsForApi(rawInstallationDocs);
           const latestMeterDoc = getLatestMeterDocMeta(rawInstallationDocs);
           const latestMcoDocs = getLatestMcoDocMeta(rawInstallationDocs);
           const meterDocumentImageUrl = q.meterDocumentImageUrl || latestMeterDoc.url || null;
@@ -493,7 +462,11 @@ const getWorkflowQueue = async (
             },
             approvedAt: q.approvedAt || null,
             installerApprovedAt: q.installerApprovedAt || null,
-            documents: mapWorkflowDocumentsForFrontend(rawInstallationDocs),
+            documents: installationPayload.documents,
+            installationDocuments: installationPayload.installationDocuments,
+            installationPhotoUrls: installationPayload.installationPhotoUrls,
+            installation_photo_urls: installationPayload.installationPhotoUrls,
+            ...installationPayload.installationFieldUrls,
             createdAt: q.createdAt,
             validUntil: q.validUntil,
             // Nested alias for clients that read `row.quotation.*` (must echo team id for field-team portals).
@@ -511,7 +484,7 @@ const getWorkflowQueue = async (
               installation_scheduled_at: toDateOnlyStringOrNull(q.installationScheduledAt ?? (q as any).installation_scheduled_at)
             }
           };
-        }),
+        })),
         pagination: {
           page,
           limit,
@@ -1068,6 +1041,93 @@ type InstallerUrlDocCandidate = {
   url: string;
   docType: 'installer_po' | 'installer_pi' | 'additional_expense' | 'site_completion_image';
   slot?: string;
+  /** Provenance for retained URL rows (admin partial re-upload). */
+  urlSource?: 'existing_installation_image_urls_json' | 'existing_pi_upload_url' | 'url_submit';
+};
+
+/** Logical keys allowed inside `existingInstallationImageUrlsJson` (per-field URL retention). */
+const INSTALLER_EXISTING_URL_BLOB_KEYS = new Set([
+  'homeFrontPhoto',
+  'homeWithPersonPhoto',
+  'inverterWithCustomerPhoto',
+  'plantWithCustomerPhoto',
+  'inverterSerialNumberPhoto',
+  'panelSerialNumberPhoto',
+  'geoTagPlantPhoto',
+  'otherImages',
+  'piUpload',
+  'installerPo'
+]);
+
+const parseExistingInstallationImageUrlsJson = (
+  body: Record<string, unknown>
+): { candidates: InstallerUrlDocCandidate[]; parseError: string | null } => {
+  const raw =
+    body.existingInstallationImageUrlsJson ?? body.existing_installation_image_urls_json;
+  const s = parseTrimmedString(raw);
+  if (s === undefined) {
+    return { candidates: [], parseError: null };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(s);
+  } catch {
+    return { candidates: [], parseError: 'existingInstallationImageUrlsJson is not valid JSON' };
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { candidates: [], parseError: 'existingInstallationImageUrlsJson must be a JSON object' };
+  }
+  const picked = new Map<string, InstallerUrlDocCandidate>();
+  for (const [key, val] of Object.entries(parsed as Record<string, unknown>)) {
+    if (!INSTALLER_EXISTING_URL_BLOB_KEYS.has(key)) {
+      continue;
+    }
+    const map = INSTALLER_FIELD_DOC_MAP[key];
+    if (!map) continue;
+    const list = Array.isArray(val) ? val : val !== undefined && val !== null ? [val] : [];
+    for (const item of list) {
+      const url = normalizeWorkflowFileUrl(item);
+      if (!url) continue;
+      const dedupeKey = `${map.docType}:${url}`;
+      const candidate: InstallerUrlDocCandidate = {
+        fieldName: key,
+        url,
+        docType: map.docType,
+        urlSource: 'existing_installation_image_urls_json',
+        ...(map.slot ? { slot: map.slot } : {})
+      };
+      const existing = picked.get(dedupeKey);
+      if (!existing || (!existing.slot && candidate.slot)) {
+        picked.set(dedupeKey, candidate);
+      }
+    }
+  }
+  return { candidates: [...picked.values()], parseError: null };
+};
+
+const buildExistingPiUploadUrlCandidate = (body: Record<string, unknown>): InstallerUrlDocCandidate | null => {
+  const url = normalizeWorkflowFileUrl(body.existingPiUploadUrl ?? body.existing_pi_upload_url);
+  if (!url) return null;
+  return {
+    fieldName: 'piUpload',
+    url,
+    docType: 'installer_pi',
+    urlSource: 'existing_pi_upload_url'
+  };
+};
+
+const mergeInstallerUrlDocCandidates = (lists: InstallerUrlDocCandidate[][]): InstallerUrlDocCandidate[] => {
+  const byKey = new Map<string, InstallerUrlDocCandidate>();
+  for (const list of lists) {
+    for (const c of list) {
+      const dedupeKey = `${c.docType}:${c.url}`;
+      const existing = byKey.get(dedupeKey);
+      if (!existing || (!existing.slot && c.slot)) {
+        byKey.set(dedupeKey, c);
+      }
+    }
+  }
+  return [...byKey.values()];
 };
 
 const buildInstallerUrlDocCandidates = (
@@ -1111,6 +1171,7 @@ const buildInstallerUrlDocCandidates = (
         fieldName,
         url,
         docType,
+        urlSource: 'url_submit',
         ...(map.slot ? { slot: map.slot } : {})
       };
       const existing = picked.get(dedupeKey);
@@ -1584,10 +1645,29 @@ export const installerUploadDocuments = async (req: Request, res: Response): Pro
       }
     }
 
+    const { candidates: urlCandidatesFromExistingBlob, parseError: existingUrlsParseError } =
+      parseExistingInstallationImageUrlsJson(body);
+    if (existingUrlsParseError) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: existingUrlsParseError,
+          details: [{ field: 'existingInstallationImageUrlsJson', message: existingUrlsParseError }]
+        }
+      });
+      return;
+    }
+
     const fieldOrder = parseInstallerCompletionImageFieldOrderJson(body);
     let aggregateImageIndex = 0;
     const files = buildOrderedInstallerMultipartFiles(req);
-    const urlDocs = buildInstallerUrlDocCandidates(body, bodyDocType);
+    const existingPiUrlCandidate = buildExistingPiUploadUrlCandidate(body);
+    const urlDocs = mergeInstallerUrlDocCandidates([
+      buildInstallerUrlDocCandidates(body, bodyDocType),
+      urlCandidatesFromExistingBlob,
+      existingPiUrlCandidate ? [existingPiUrlCandidate] : []
+    ]);
     const adminMetaPayload =
       isAdmin &&
       (parseTrimmedString(body.installationStatus) !== undefined ||
@@ -1672,7 +1752,7 @@ export const installerUploadDocuments = async (req: Request, res: Response): Pro
       seenUrls.add(dedupeKey);
       const metadata: Record<string, unknown> = {
         field: ref.fieldName,
-        source: 'url_submit'
+        source: ref.urlSource || 'url_submit'
       };
       if (ref.slot) {
         metadata.slot = ref.slot;
@@ -1787,7 +1867,9 @@ export const installerUploadDocuments = async (req: Request, res: Response): Pro
         front_leg_ft: quotation.frontLegFt != null ? Number(quotation.frontLegFt) : null,
         extraExpensesTotal: quotation.extraExpensesTotal != null ? Number(quotation.extraExpensesTotal) : null,
         extraExpensesJson: quotation.extraExpensesJson || null,
-        documents: mapWorkflowDocumentsForFrontend(allDocs.map((doc: any) => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc)))
+        documents: await mapWorkflowDocumentsForFrontend(
+          allDocs.map((doc: any) => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc))
+        )
       }
     });
   } catch (error) {
@@ -1849,7 +1931,9 @@ const saveDocs = async (req: Request, res: Response, allowedTypes: string[]) => 
         installationStatus: quotation.installationStatus,
         installerInProgressAt: quotation.installerInProgressAt || null,
         installerApprovedAt: quotation.installerApprovedAt || null,
-        documents: mapWorkflowDocumentsForFrontend(allDocs.map((doc: any) => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc)))
+        documents: await mapWorkflowDocumentsForFrontend(
+          allDocs.map((doc: any) => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc))
+        )
       }
     });
   } catch (error) {
@@ -1960,7 +2044,7 @@ export const getWorkflowHistory = async (req: Request, res: Response): Promise<v
         approvedAt: quotation.approvedAt || null,
         installerApprovedAt: quotation.installerApprovedAt || null,
         timeline,
-        documents: mapWorkflowDocumentsForFrontend(docs.map((d: any) => d.toJSON()))
+        documents: await mapWorkflowDocumentsForFrontend(docs.map((d: any) => d.toJSON()))
       }
     });
   } catch (error) {

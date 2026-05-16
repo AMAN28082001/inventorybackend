@@ -315,19 +315,39 @@ export async function uploadFileWithPublicAccess(
  * @param expiresIn - Expiration time in seconds (default: 3600 = 1 hour)
  * @returns Signed URL
  */
+const presignUrlCache = new Map<string, { url: string; expiresAt: number }>();
+
+export const isPresignedS3GetUrl = (url: string): boolean =>
+  /[?&]X-Amz-Signature=/i.test(url) || /[?&]X-Amz-Algorithm=/i.test(url);
+
+const getCachedPresignedUrl = (key: string): string | null => {
+  const hit = presignUrlCache.get(key);
+  if (!hit) return null;
+  if (hit.expiresAt <= Date.now() + 60_000) {
+    presignUrlCache.delete(key);
+    return null;
+  }
+  return hit.url;
+};
+
+const setCachedPresignedUrl = (key: string, url: string, expiresIn: number): void => {
+  presignUrlCache.set(key, {
+    url,
+    expiresAt: Date.now() + Math.max(60, expiresIn) * 1000 - 120_000
+  });
+};
+
 export async function generatePublicUrl(key: string, expiresIn: number = 3600): Promise<string> {
+  const cached = getCachedPresignedUrl(key);
+  if (cached) return cached;
+
   try {
     const url = getS3Client().getSignedUrl('getObject', {
       Bucket: BUCKET_NAME,
       Key: key,
-      Expires: expiresIn,
+      Expires: expiresIn
     });
-
-    logInfo('🔗 Generated S3 signed URL', {
-      s3Key: key,
-      expiresIn: `${expiresIn}s`,
-    });
-
+    setCachedPresignedUrl(key, url, expiresIn);
     return url;
   } catch (error) {
     logError('❌ Failed to generate S3 signed URL', error, { key });
@@ -362,6 +382,63 @@ export async function deleteFileFromS3(key: string): Promise<void> {
  * @param urlOrPath - S3 URL or local path
  * @returns S3 key if it's an S3 URL, null otherwise
  */
+/** S3 object key from HTTPS URL, or bare stored key (e.g. `visits/123_photo.jpg`). */
+export function extractS3KeyOrStoredPath(urlOrPath: string): string | null {
+  const trimmed = String(urlOrPath || '').trim();
+  if (!trimmed || trimmed.startsWith('blob:') || trimmed.startsWith('data:')) {
+    return null;
+  }
+  const fromUrl = extractS3Key(trimmed);
+  if (fromUrl) return fromUrl;
+  if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://') && !trimmed.startsWith('//')) {
+    return trimmed.replace(/^\//, '');
+  }
+  return null;
+}
+
+/** Stable value to persist in DB (prefer object key over expiring presigned URL). */
+export function persistableMediaReference(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  return extractS3KeyOrStoredPath(value);
+}
+
+/** Browser-usable URL for private buckets (presigned GET). Never returns unsigned private S3 URLs. */
+export async function resolveBrowsableMediaUrl(
+  value: unknown,
+  expiresIn: number = Number(process.env.AWS_S3_SIGNED_URL_TTL_SECONDS || 604800)
+): Promise<string | null> {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const trimmed = value.trim();
+  if (isPresignedS3GetUrl(trimmed)) return trimmed;
+
+  const key = extractS3KeyOrStoredPath(trimmed);
+  if (!key) {
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+      return null;
+    }
+    try {
+      return await generatePublicUrl(trimmed.replace(/^\//, ''), expiresIn);
+    } catch {
+      return null;
+    }
+  }
+
+  try {
+    return await generatePublicUrl(key, expiresIn);
+  } catch {
+    return null;
+  }
+}
+
+export async function resolveBrowsableMediaUrls(
+  values: unknown,
+  expiresIn?: number
+): Promise<string[]> {
+  if (!Array.isArray(values)) return [];
+  const resolved = await Promise.all(values.map((v) => resolveBrowsableMediaUrl(v, expiresIn)));
+  return resolved.filter((u): u is string => !!u);
+}
+
 export function extractS3Key(urlOrPath: string): string | null {
   const trimmed = String(urlOrPath || '').trim();
   if (!trimmed) return null;

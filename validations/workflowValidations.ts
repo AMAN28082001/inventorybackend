@@ -37,7 +37,11 @@ export const installerUploadMetaSchema = z
     installerRemarks: z.string().max(5000).optional(),
     remarks: z.string().max(5000).optional(),
     /** JSON array of logical keys aligned with repeated `installerCompletionImages` file parts (admin aggregate upload). */
-    installerCompletionImageFieldOrderJson: z.string().max(50000).optional()
+    installerCompletionImageFieldOrderJson: z.string().max(50000).optional(),
+    /** JSON object: logical field → URL string[] for slots kept from server (admin partial re-upload). */
+    existingInstallationImageUrlsJson: z.string().max(500000).optional(),
+    /** Single retained PI document URL when no new `piUpload` file is sent. */
+    existingPiUploadUrl: z.string().max(8000).optional()
   })
   .passthrough();
 

@@ -2,9 +2,7 @@ import { Request, Response } from 'express';
 import { Visit, VisitAssignment, Quotation, Customer, Dealer, Visitor } from '../models/index-quotation';
 import { Op } from 'sequelize';
 import { logError } from '../utils/loggerHelper';
-import { extractS3Key, generatePublicUrl } from '../utils/s3Service';
-
-const VISIT_MEDIA_PRESIGN_TTL_SECONDS = Number(process.env.AWS_S3_SIGNED_URL_TTL_SECONDS || 604800);
+import { resolveBrowsableMediaUrl, resolveBrowsableMediaUrls } from '../utils/s3Service';
 
 const toSafeString = (value: unknown): string => {
   if (typeof value === 'string') return value;
@@ -76,22 +74,8 @@ const applyNoCacheHeaders = (res: Response) => {
   res.set('Expires', '0');
 };
 
-const resolveMediaUrl = async (url: unknown): Promise<string | null> => {
-  if (typeof url !== 'string' || !url.trim()) return null;
-  const key = extractS3Key(url);
-  if (!key) return url;
-  try {
-    return await generatePublicUrl(key, VISIT_MEDIA_PRESIGN_TTL_SECONDS);
-  } catch {
-    return url;
-  }
-};
-
-const resolveMediaUrls = async (urls: unknown): Promise<string[]> => {
-  if (!Array.isArray(urls)) return [];
-  const resolved = await Promise.all(urls.map((u) => resolveMediaUrl(u)));
-  return resolved.filter((u): u is string => !!u);
-};
+const resolveMediaUrl = resolveBrowsableMediaUrl;
+const resolveMediaUrls = resolveBrowsableMediaUrls;
 
 const mapAssignmentSummary = (assignments: any[]) =>
   (assignments || []).map((a: any) => {

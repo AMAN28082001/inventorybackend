@@ -1,11 +1,15 @@
 import { Request, Response } from 'express';
-import { Quotation, QuotationPaymentPhase, Dealer, Customer, Visitor } from '../models/index-quotation';
+import { Quotation, QuotationPaymentPhase, QuotationInstallationDoc, Dealer, Customer, Visitor } from '../models/index-quotation';
 import { Op } from 'sequelize';
 import { logError, logInfo } from '../utils/loggerHelper';
 import { normalizePaymentModeInput } from '../utils/paymentMode';
 import { quotationPaymentApiFields, quotationAdminMetadataFields, readStatusHistoryFromRow } from '../utils/quotationApiJson';
 import { emitRealtime, realtimeEvents } from '../utils/realtime';
 import { INSTALLER_RELEASE_STATUSES } from '../constants/workflowQueues';
+import {
+  batchLoadInstallationDocsByQuotationId,
+  mapInstallationDocumentsForApi
+} from '../utils/installationDocumentsApi';
 
 const sumPhasePaidAmounts = (phases: { paidAmount?: number }[]): number =>
   phases.reduce((sum, p) => sum + Number((p as any).paidAmount || 0), 0);
@@ -213,6 +217,10 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
       where: { quotationId: { [Op.in]: quotations.rows.map((q: any) => q.id) } },
       order: [['quotationId', 'ASC'], ['phaseNumber', 'ASC']]
     });
+    const installationDocMap = await batchLoadInstallationDocsByQuotationId(
+      quotations.rows.map((q: any) => String(q.id))
+    );
+
     const phaseMap = new Map<string, any[]>();
     for (const phase of phaseRows as any[]) {
       const qid = String(phase.quotationId);
@@ -234,7 +242,7 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
     res.json({
       success: true,
       data: {
-        quotations: quotations.rows.map(q => {
+        quotations: await Promise.all(quotations.rows.map(async (q) => {
           const qAny = q as any;
           const phases = phaseMap.get(String(q.id)) || qAny.paymentPhases || [];
           const subtotalNum = Number(q.subtotal || 0);
@@ -245,6 +253,9 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
             typeof qAny.get === 'function'
               ? (qAny.get({ plain: true }) as Record<string, unknown>)
               : (q as unknown as Record<string, unknown>);
+          const installationPayload = await mapInstallationDocumentsForApi(
+            installationDocMap.get(String(q.id)) || []
+          );
           return {
             id: q.id,
             dealer: qAny.dealer ? {
@@ -280,6 +291,7 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
             installation_ready_for_installer: Boolean((q as any).installationReadyForInstaller),
             approvedAt: (q as any).approvedAt || null,
             installerApprovedAt: (q as any).installerApprovedAt || null,
+            installer_approved_at: (q as any).installerApprovedAt || null,
             meteringApprovedAt: (q as any).meteringApprovedAt || null,
             mcoAt: (q as any).mcoAt || null,
             completionAt: (q as any).completionAt || null,
@@ -288,9 +300,14 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
             meteringStage: (q as any).installationStatus || null,
             mcoStatus: (q as any).installationStatus === 'mco' ? 'mco' : null,
             mco_status: (q as any).installationStatus === 'mco' ? 'mco' : null,
+            documents: installationPayload.documents,
+            installationDocuments: installationPayload.installationDocuments,
+            installationPhotoUrls: installationPayload.installationPhotoUrls,
+            installation_photo_urls: installationPayload.installationPhotoUrls,
+            ...installationPayload.installationFieldUrls,
             createdAt: q.createdAt
           };
-        }),
+        })),
         pagination: {
           page,
           limit: limit || quotations.count,
@@ -767,6 +784,14 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
       phases.length > 0 ? sumPhasePaidAmounts(phases) : Number(quotation.paidAmount || 0);
     const remainingAmount = remainingAgainstSubtotal(subtotalNum, totalPaidForRemaining);
     const row = quotation.get({ plain: true }) as unknown as Record<string, unknown>;
+    const installationDocs = await QuotationInstallationDoc.findAll({
+      where: { quotationId: quotation.id },
+      order: [
+        ['uploadedAt', 'ASC'],
+        ['createdAt', 'ASC']
+      ]
+    });
+    const installationPayload = await mapInstallationDocumentsForApi(installationDocs);
     res.json({
       success: true,
       data: {
@@ -787,6 +812,8 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
         finalAmount: subtotalNum,
         createdAt: quotation.createdAt,
         approvedAt: quotationAny.approvedAt || null,
+        installerApprovedAt: quotationAny.installerApprovedAt || null,
+        installer_approved_at: quotationAny.installerApprovedAt || null,
         installationStatus: quotationAny.installationStatus || 'pending_installer',
         installation_status: quotationAny.installationStatus || 'pending_installer',
         meteringStatus: quotationAny.installationStatus || null,
@@ -799,6 +826,11 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
         installation_ready_for_installer: Boolean(quotationAny.installationReadyForInstaller),
         mcoStatus: quotationAny.installationStatus === 'mco' ? 'mco' : null,
         mco_status: quotationAny.installationStatus === 'mco' ? 'mco' : null,
+        documents: installationPayload.documents,
+        installationDocuments: installationPayload.installationDocuments,
+        installationPhotoUrls: installationPayload.installationPhotoUrls,
+        installation_photo_urls: installationPayload.installationPhotoUrls,
+        ...installationPayload.installationFieldUrls,
         updatedAt: quotation.updatedAt
       }
     });

@@ -9,9 +9,15 @@ import { Product } from '../models';
 import { Op, Sequelize } from 'sequelize';
 import { logError, logInfo } from '../utils/loggerHelper';
 import { deleteFileFromS3IfExists } from '../middleware/upload';
-import { decodeS3UrlPathToKey, generatePublicUrl } from '../utils/s3Service';
+import { decodeS3UrlPathToKey, generatePublicUrl, isPresignedS3GetUrl } from '../utils/s3Service';
 import { normalizePaymentModeInput } from '../utils/paymentMode';
 import { quotationPaymentApiFields, quotationAdminMetadataFields } from '../utils/quotationApiJson';
+import {
+  mapInstallationDocumentsForApi,
+  quotationIdFromInstallationMediaRef,
+  resolveInstallationMediaViewUrl
+} from '../utils/installationDocumentsApi';
+import { extractS3KeyOrStoredPath } from '../utils/s3Service';
 
 // Helper function to normalize catalog data - ensures all arrays are arrays (never null/undefined)
 const normalizeCatalog = (catalog: any): any => {
@@ -1355,6 +1361,10 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         (row as any).customer_type ??
         null;
 
+      const installationPayload = await mapInstallationDocumentsForApi(
+        installationDocs.map((doc: any) => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc))
+      );
+
       return {
         id: q.id,
         dealerId: q.dealerId,
@@ -1402,10 +1412,14 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         meteringStage: (q as any).installationStatus || null,
         mcoStatus: (q as any).installationStatus === 'mco' ? 'mco' : null,
         mco_status: (q as any).installationStatus === 'mco' ? 'mco' : null,
-        installationDocuments: groupInstallationDocsByType(
-          installationDocs.map((doc: any) => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc))
-        ),
-        documents: resolvedDocuments,
+        installationDocuments: installationPayload.installationDocuments,
+        installationPhotoUrls: installationPayload.installationPhotoUrls,
+        installation_photo_urls: installationPayload.installationPhotoUrls,
+        documents: {
+          ...(resolvedDocuments || {}),
+          ...installationPayload.documents
+        },
+        ...installationPayload.installationFieldUrls,
         phoneNumber: prefillPhoneNumber,
         phone_number: prefillPhoneNumber,
         emailId: prefillEmailId,
@@ -1761,6 +1775,9 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
       };
     });
     const primaryVisit = serializedVisits[0] || null;
+    const installationPayload = await mapInstallationDocumentsForApi(
+      installationDocs.map((doc: any) => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc))
+    );
 
     res.json({
       success: true,
@@ -1844,9 +1861,10 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
         netMeterNo: quotationAny.netMeterNo || null,
         meterDocumentImageUrl: quotationAny.meterDocumentImageUrl || null,
         discount: quotation.discount,
-        installationDocuments: groupInstallationDocsByType(
-          installationDocs.map((doc: any) => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc))
-        ),
+        installationDocuments: installationPayload.installationDocuments,
+        installationPhotoUrls: installationPayload.installationPhotoUrls,
+        installation_photo_urls: installationPayload.installationPhotoUrls,
+        ...installationPayload.installationFieldUrls,
         visits: serializedVisits,
         location: primaryVisit?.location || null,
         visitLocation: primaryVisit?.visitLocation || null,
@@ -1854,7 +1872,10 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
         visitors: primaryVisit?.visitors || [],
         otherVisitors: primaryVisit?.assignedVisitors || [],
         assignedVisitors: primaryVisit?.assignedVisitors || [],
-        documents: resolvedDocuments,
+        documents: {
+          ...(resolvedDocuments || {}),
+          ...installationPayload.documents
+        },
         phoneNumber: prefillPhoneNumber,
         phone_number: prefillPhoneNumber,
         emailId: prefillEmailId,
@@ -3168,16 +3189,6 @@ export const uploadQuotationDocument = async (req: Request, res: Response): Prom
   }
 };
 
-const groupInstallationDocsByType = (docs: any[]) => {
-  const grouped: Record<string, any[]> = {};
-  for (const doc of docs || []) {
-    const key = doc.docType || 'other';
-    if (!grouped[key]) grouped[key] = [];
-    grouped[key].push(doc);
-  }
-  return grouped;
-};
-
 // Save quotation documents (upsert)
 export const saveQuotationDocuments = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -3639,6 +3650,123 @@ const fetchS3ObjectBuffer = async (key: string): Promise<Buffer | null> => {
   } catch (error) {
     logError('Failed to fetch S3 object for zip', error, { key });
     return null;
+  }
+};
+
+const isQuotationScopedMediaRef = (urlOrKey: string, quotationId: string): boolean => {
+  if (quotationIdFromInstallationMediaRef(urlOrKey, quotationId)) {
+    return true;
+  }
+  const key = extractS3KeyOrStoredPath(urlOrKey);
+  if (!key) return false;
+  return (
+    key.includes(`quotation-documents/${quotationId}/`) ||
+    key.startsWith(`quotations/${quotationId}/documents/`)
+  );
+};
+
+/** Presigned GET for private S3 installation/KYC media (§6.4.C.8). */
+export const getQuotationDocumentViewUrl = async (req: Request, res: Response): Promise<void> => {
+  try {
+    if (!req.dealer && !req.user && !req.visitor) {
+      res.status(401).json({
+        success: false,
+        error: { code: 'AUTH_003', message: 'User not authenticated' }
+      });
+      return;
+    }
+
+    const { quotationId } = req.params;
+    const urlParam = String(req.query.url ?? req.query.fileUrl ?? req.query.file_url ?? '').trim();
+    if (!urlParam) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'url query parameter is required',
+          details: [{ field: 'url', message: 'Provide url (encoded private S3 URL or object key)' }]
+        }
+      });
+      return;
+    }
+
+    if (isPresignedS3GetUrl(urlParam) && isQuotationScopedMediaRef(urlParam, quotationId)) {
+      res.json({
+        success: true,
+        data: {
+          publicUrl: urlParam,
+          url: urlParam,
+          public_url: urlParam
+        }
+      });
+      return;
+    }
+
+    const where: Record<string, unknown> = { id: quotationId };
+    if (req.dealer && req.dealer.role !== 'admin') {
+      where.dealerId = req.dealer.id;
+    }
+    if (req.user) {
+      const isInventoryAdmin =
+        req.user.role === 'admin' ||
+        req.user.role === 'super-admin' ||
+        req.user.role === 'super-admin-manager';
+      const isInventoryAgent = req.user.role === 'agent' || req.user.role === 'account';
+      if (!isInventoryAdmin && isInventoryAgent) {
+        const mappedDealerId = await resolveDealerIdForInventoryUser(req.user.id, req.user.username);
+        if (!mappedDealerId) {
+          res.status(403).json({
+            success: false,
+            error: { code: 'AUTH_004', message: 'Insufficient permissions' }
+          });
+          return;
+        }
+        where.dealerId = mappedDealerId;
+      }
+    }
+
+    const quotation = await Quotation.findOne({ where: where as any });
+    if (!quotation) {
+      res.status(404).json({
+        success: false,
+        error: { code: 'RES_001', message: 'Quotation not found' }
+      });
+      return;
+    }
+
+    if (!isQuotationScopedMediaRef(urlParam, quotationId)) {
+      res.status(403).json({
+        success: false,
+        error: { code: 'AUTH_004', message: 'Media URL is not scoped to this quotation' }
+      });
+      return;
+    }
+
+    const publicUrl = await resolveInstallationMediaViewUrl(urlParam);
+    if (!publicUrl) {
+      res.status(400).json({
+        success: false,
+        error: { code: 'VAL_001', message: 'Could not resolve a viewable URL for the provided media reference' }
+      });
+      return;
+    }
+
+    res.json({
+      success: true,
+      data: {
+        publicUrl,
+        url: publicUrl,
+        public_url: publicUrl
+      }
+    });
+  } catch (error) {
+    logError('Get quotation document view URL error', error, {
+      quotationId: req.params.quotationId
+    });
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
   }
 };
 
