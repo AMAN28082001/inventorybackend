@@ -15,6 +15,7 @@ import {
   getLatestMeterDocMeta,
   resolveMeterStoredRef
 } from '../utils/meteringMediaApi';
+import { meteringWorkflowApiFields } from '../utils/meteringWorkflowApi';
 
 const sumPhasePaidAmounts = (phases: { paidAmount?: number }[]): number =>
   phases.reduce((sum, p) => sum + Number((p as any).paidAmount || 0), 0);
@@ -294,21 +295,25 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
             payment_phases: phases,
             finalAmount: subtotalNum,
             status: q.status,
-            installationStatus: (q as any).installationStatus || 'pending_installer',
-            installation_status: (q as any).installationStatus || 'pending_installer',
             installationReadyForInstaller: Boolean((q as any).installationReadyForInstaller),
             installation_ready_for_installer: Boolean((q as any).installationReadyForInstaller),
             approvedAt: (q as any).approvedAt || null,
             installerApprovedAt: (q as any).installerApprovedAt || null,
             installer_approved_at: (q as any).installerApprovedAt || null,
-            meteringApprovedAt: (q as any).meteringApprovedAt || null,
-            mcoAt: (q as any).mcoAt || null,
-            completionAt: (q as any).completionAt || null,
-            meteringStatus: (q as any).installationStatus || null,
-            metering_status: (q as any).installationStatus || null,
-            meteringStage: (q as any).installationStatus || null,
-            mcoStatus: (q as any).installationStatus === 'mco' ? 'mco' : null,
-            mco_status: (q as any).installationStatus === 'mco' ? 'mco' : null,
+            ...meteringWorkflowApiFields({
+              installationStatus: (q as any).installationStatus || 'pending_installer',
+              meteringApprovedAt: (q as any).meteringApprovedAt,
+              mcoAt: (q as any).mcoAt,
+              completionAt: (q as any).completionAt
+            }),
+            dealerName: qAny.dealer
+              ? `${qAny.dealer.firstName || ''} ${qAny.dealer.lastName || ''}`.trim() || null
+              : null,
+            dealer_name: qAny.dealer
+              ? `${qAny.dealer.firstName || ''} ${qAny.dealer.lastName || ''}`.trim() || null
+              : null,
+            dealerMobile: qAny.dealer?.mobile ?? null,
+            dealer_mobile: qAny.dealer?.mobile ?? null,
             discomName: (q as any).discomName || null,
             meterType: (q as any).meterType || null,
             meterNo: (q as any).meterNo || null,
@@ -516,11 +521,16 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
     }
 
     const body = req.body as Record<string, unknown>;
+    const pickStatus = (...keys: string[]): string | null => {
+      for (const key of keys) {
+        const v = body[key];
+        if (typeof v === 'string' && v.trim()) return v.trim();
+      }
+      return null;
+    };
     const requested =
-      (typeof body.installationStatus === 'string' && body.installationStatus.trim()) ||
-      (typeof body.installation_status === 'string' && body.installation_status.trim()) ||
-      (typeof body.meteringStatus === 'string' && body.meteringStatus.trim()) ||
-      (typeof body.status === 'string' && body.status.trim()) ||
+      pickStatus('installationStatus', 'installation_status') ||
+      pickStatus('meteringStatus', 'metering_status', 'status') ||
       null;
 
     if (!requested) {
@@ -540,23 +550,47 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
       return;
     }
 
-    const nextStatus = requested as any;
+    const nextStatus = requested;
     const now = new Date();
     const patch: Record<string, unknown> = {
       installationStatus: nextStatus
     };
 
-    if (nextStatus === 'metering_approved' && !quotation.meteringApprovedAt) {
-      patch.meteringApprovedAt = now;
+    const preMeteringApproved = new Set([
+      'pending_installer',
+      'installer_in_progress',
+      'installer_approved',
+      'installer_rejected',
+      'pending_baldev',
+      'baldev_rejected',
+      'baldev_approved',
+      'pending_metering',
+      'metering_in_progress'
+    ]);
+
+    if (preMeteringApproved.has(nextStatus)) {
+      patch.meteringApprovedAt = null;
+      patch.mcoAt = null;
     }
-    if (nextStatus === 'mco' && !quotation.mcoAt) {
-      patch.mcoAt = now;
+
+    if (nextStatus === 'installer_approved' && !quotation.installerApprovedAt) {
+      patch.installerApprovedAt = now;
+    }
+    if (nextStatus === 'metering_approved') {
+      patch.meteringApprovedAt = quotation.meteringApprovedAt || now;
+      patch.mcoAt = null;
+    }
+    if (nextStatus === 'mco') {
+      patch.mcoAt = quotation.mcoAt || now;
+      if (!quotation.meteringApprovedAt) {
+        patch.meteringApprovedAt = now;
+      }
     }
     if (nextStatus === 'completed' && !quotation.completionAt) {
       patch.completionAt = now;
     }
     if (nextStatus === 'pending_baldev') {
-      patch.baldevActionAt = now;
+      patch.baldevActionAt = quotation.baldevActionAt || now;
     }
 
     await quotation.update(patch as any);
@@ -566,13 +600,12 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
       success: true,
       data: {
         id: quotation.id,
-        installationStatus: quotation.installationStatus || null,
-        installation_status: quotation.installationStatus || null,
-        meteringStatus: quotation.installationStatus || null,
-        mcoStatus: quotation.installationStatus === 'mco' ? 'mco' : null,
-        meteringApprovedAt: quotation.meteringApprovedAt || null,
-        mcoAt: quotation.mcoAt || null,
-        completionAt: quotation.completionAt || null,
+        ...meteringWorkflowApiFields({
+          installationStatus: quotation.installationStatus,
+          meteringApprovedAt: quotation.meteringApprovedAt,
+          mcoAt: quotation.mcoAt,
+          completionAt: quotation.completionAt
+        }),
         updatedAt: quotation.updatedAt
       }
     });
@@ -839,18 +872,14 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
         approvedAt: quotationAny.approvedAt || null,
         installerApprovedAt: quotationAny.installerApprovedAt || null,
         installer_approved_at: quotationAny.installerApprovedAt || null,
-        installationStatus: quotationAny.installationStatus || 'pending_installer',
-        installation_status: quotationAny.installationStatus || 'pending_installer',
-        meteringStatus: quotationAny.installationStatus || null,
-        metering_status: quotationAny.installationStatus || null,
-        meteringStage: quotationAny.installationStatus || null,
-        meteringApprovedAt: quotationAny.meteringApprovedAt || null,
-        mcoAt: quotationAny.mcoAt || null,
-        completionAt: quotationAny.completionAt || null,
+        ...meteringWorkflowApiFields({
+          installationStatus: quotationAny.installationStatus || 'pending_installer',
+          meteringApprovedAt: quotationAny.meteringApprovedAt,
+          mcoAt: quotationAny.mcoAt,
+          completionAt: quotationAny.completionAt
+        }),
         installationReadyForInstaller: Boolean(quotationAny.installationReadyForInstaller),
         installation_ready_for_installer: Boolean(quotationAny.installationReadyForInstaller),
-        mcoStatus: quotationAny.installationStatus === 'mco' ? 'mco' : null,
-        mco_status: quotationAny.installationStatus === 'mco' ? 'mco' : null,
         discomName: quotationAny.discomName || null,
         meterType: quotationAny.meterType || null,
         meterNo: quotationAny.meterNo || null,

@@ -44,22 +44,26 @@ const safeStringify = format((info: any) => {
 });
 
 const transportArray: any[] = [];
+const logToConsole = process.env.LOG_CONSOLE === 'true';
 
-// Add console transport for development
-if (process.env.NODE_ENV !== 'production') {
+// Terminal output is opt-in only (LOG_CONSOLE=true). Default: Loki / silent sink.
+if (logToConsole) {
   transportArray.push(
     new transports.Console({
       format: format.combine(
         format.colorize(),
         format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
         format.printf(({ timestamp, level, message, ...meta }) => {
-          return `${timestamp} [${level}]: ${message} ${Object.keys(meta).length ? JSON.stringify(meta, null, 2) : ''
-            }`;
+          return `${timestamp} [${level}]: ${message} ${
+            Object.keys(meta).length ? JSON.stringify(meta, null, 2) : ''
+          }`;
         })
       )
     })
   );
 }
+
+let skippedInvalidLokiHost: string | null = null;
 
 // Add Loki transport if host is configured
 if (lokiHostip) {
@@ -74,20 +78,13 @@ if (lokiHostip) {
       })
     );
   } else {
-    console.warn(`Skipping Loki transport due to invalid LOKI_HOST_IP: ${lokiHostip}`);
+    skippedInvalidLokiHost = lokiHostip;
   }
 }
 
-// If no transports configured, add console as fallback
+// Keep logger callable without printing to stdout (no console spam in dev)
 if (transportArray.length === 0) {
-  transportArray.push(
-    new transports.Console({
-      format: format.combine(
-        format.timestamp(),
-        format.simple()
-      )
-    })
-  );
+  transportArray.push(new transports.Console({ silent: true }));
 }
 
 const options = {
@@ -102,6 +99,12 @@ const options = {
 };
 
 const logger = createLogger(options);
+
+if (skippedInvalidLokiHost) {
+  logger.warn('Skipping Loki transport due to invalid LOKI_HOST_IP', {
+    lokiHostIp: skippedInvalidLokiHost
+  });
+}
 
 export default logger;
 

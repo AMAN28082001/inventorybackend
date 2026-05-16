@@ -31,7 +31,8 @@ import {
 import { authenticate, authorizeAdmin } from '../middleware/authQuotation';
 import { validate } from '../middleware/validate';
 import { handleInstallerMultipart, handleSingleInstallerUploadMultipart } from './installerRoutes';
-import { installerUploadDocuments, uploadInstallerDocument } from '../controllers/workflowController';
+import { installerUploadDocuments, meteringStatusUpdate, uploadInstallerDocument } from '../controllers/workflowController';
+import { meteringStatusSchema } from '../validations/workflowValidations';
 import { installerUploadMetaSchema } from '../validations/workflowValidations';
 import {
   updateStatusSchema,
@@ -115,6 +116,11 @@ router.post(
 
 router.patch('/quotations/:quotationId/installation-status', validate(updateInstallationStatusSchema), updateQuotationInstallationStatus);
 router.patch('/quotations/:quotationId/workflow-status', validate(updateInstallationStatusSchema), updateQuotationInstallationStatus);
+router.patch(
+  '/quotations/:quotationId/metering-status',
+  validate(meteringStatusSchema),
+  meteringStatusUpdate
+);
 router.patch('/quotations/:quotationId/installation-scheduled-at', validate(updateInstallationScheduledAtSchema), updateQuotationInstallationScheduledAt);
 router.patch('/quotations/:quotationId/installation-schedule', validate(updateInstallationScheduledAtSchema), updateQuotationInstallationScheduledAt);
 router.patch('/quotations/:quotationId/file-login', validate(fileLoginSchema), updateQuotationFileLogin);

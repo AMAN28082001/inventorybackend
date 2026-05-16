@@ -14,10 +14,14 @@ import {
   mapInstallationDocumentsForApi
 } from '../utils/installationDocumentsApi';
 import {
+  buildMcoDocApiFields,
   buildMeterDocumentApiFields,
+  getLatestMcoDocMeta,
   getLatestMeterDocMeta,
+  MCO_DOC_FIELDS,
   resolveMeterStoredRef
 } from '../utils/meteringMediaApi';
+import { meteringWorkflowApiFields } from '../utils/meteringWorkflowApi';
 
 const assertInstallationTeamQuotationScope = (req: Request, quotation: Quotation, res: Response): boolean => {
   const tid = getInstallationTeamIdFromRequest(req);
@@ -97,44 +101,6 @@ const normalizeWorkflowFileUrl = (value: unknown): string | null => buildPublicW
 
 const mapWorkflowDocumentsForFrontend = async (docs: any[]) =>
   (await mapInstallationDocumentsForApi(docs)).documents;
-
-const MCO_DOC_FIELDS = [
-  'workCompleteReportImage',
-  'meterInstalledPhoto',
-  'completeDcrReportImage'
-] as const;
-
-const getLatestMcoDocMeta = (docs: any[]) => {
-  const latestByField: Record<string, any> = {};
-  for (const field of MCO_DOC_FIELDS) {
-    const matching = (docs || [])
-      .filter((doc: any) => doc?.metadata?.mcoField === field && typeof doc?.fileUrl === 'string')
-      .sort((a: any, b: any) => {
-        const ta = new Date(a.uploadedAt || a.createdAt || 0).getTime();
-        const tb = new Date(b.uploadedAt || b.createdAt || 0).getTime();
-        return tb - ta;
-      });
-    latestByField[field] = matching[0] || null;
-  }
-
-  const readName = (doc: any): string | null => {
-    const metadata = doc?.metadata || {};
-    return (
-      (typeof metadata.originalName === 'string' && metadata.originalName.trim()) ||
-      (typeof metadata.original_name === 'string' && metadata.original_name.trim()) ||
-      null
-    );
-  };
-
-  return {
-    workCompleteReportImageUrl: latestByField.workCompleteReportImage?.fileUrl || null,
-    meterInstalledPhotoUrl: latestByField.meterInstalledPhoto?.fileUrl || null,
-    completeDcrReportImageUrl: latestByField.completeDcrReportImage?.fileUrl || null,
-    workCompleteReportImageName: readName(latestByField.workCompleteReportImage),
-    meterInstalledPhotoName: readName(latestByField.meterInstalledPhoto),
-    completeDcrReportImageName: readName(latestByField.completeDcrReportImage)
-  };
-};
 
 const mapAssignedVisitors = (assignments: any[]) =>
   (assignments || []).map((a: any) => {
@@ -357,7 +323,7 @@ const getWorkflowQueue = async (
           );
           const installationPayload = await mapInstallationDocumentsForApi(rawInstallationDocs);
           const latestMeterDoc = getLatestMeterDocMeta(rawInstallationDocs);
-          const latestMcoDocs = getLatestMcoDocMeta(rawInstallationDocs);
+          const mcoDocFields = await buildMcoDocApiFields(rawInstallationDocs);
           const meterStoredRef = resolveMeterStoredRef(q.meterDocumentImageUrl, rawInstallationDocs);
           const meterDocumentFields = await buildMeterDocumentApiFields(
             meterStoredRef,
@@ -366,8 +332,6 @@ const getWorkflowQueue = async (
           return {
             id: q.id,
             status: q.status,
-            installationStatus: q.installationStatus,
-            installation_status: q.installationStatus,
             installationReadyForInstaller: Boolean(q.installationReadyForInstaller),
             installation_ready_for_installer: Boolean(q.installationReadyForInstaller),
             installationReleasedAt: q.installationReleasedAt || null,
@@ -377,33 +341,20 @@ const getWorkflowQueue = async (
             installation_team_id: q.installationTeamId ?? null,
             meteringId: q.meteringId || null,
             meteringActionAt: q.meteringActionAt || null,
-            meteringApprovedAt: q.meteringApprovedAt || null,
             meteringRemarks: q.meteringRemarks || null,
-            meteringStatus: q.installationStatus || null,
-            metering_status: q.installationStatus || null,
-            meteringStage: q.installationStatus || null,
-            mcoStatus: q.installationStatus === 'mco' ? 'mco' : null,
-            mco_status: q.installationStatus === 'mco' ? 'mco' : null,
-            mcoAt: q.mcoAt || null,
-            completionAt: q.completionAt || null,
+            ...meteringWorkflowApiFields({
+              installationStatus: q.installationStatus,
+              meteringApprovedAt: q.meteringApprovedAt,
+              mcoAt: q.mcoAt,
+              completionAt: q.completionAt
+            }),
             discomName: q.discomName || null,
             meterType: q.meterType || null,
             meterNo: q.meterNo || null,
             solarMeterNo: q.solarMeterNo || null,
             netMeterNo: q.netMeterNo || null,
             ...meterDocumentFields,
-            workCompleteReportImageUrl: latestMcoDocs.workCompleteReportImageUrl,
-            work_complete_report_image_url: latestMcoDocs.workCompleteReportImageUrl,
-            meterInstalledPhotoUrl: latestMcoDocs.meterInstalledPhotoUrl,
-            meter_installed_photo_url: latestMcoDocs.meterInstalledPhotoUrl,
-            completeDcrReportImageUrl: latestMcoDocs.completeDcrReportImageUrl,
-            complete_dcr_report_image_url: latestMcoDocs.completeDcrReportImageUrl,
-            workCompleteReportImageName: latestMcoDocs.workCompleteReportImageName,
-            work_complete_report_image_name: latestMcoDocs.workCompleteReportImageName,
-            meterInstalledPhotoName: latestMcoDocs.meterInstalledPhotoName,
-            meter_installed_photo_name: latestMcoDocs.meterInstalledPhotoName,
-            completeDcrReportImageName: latestMcoDocs.completeDcrReportImageName,
-            complete_dcr_report_image_name: latestMcoDocs.completeDcrReportImageName,
+            ...mcoDocFields,
             dealer: q.dealer
               ? {
                 id: q.dealer.id,
@@ -413,6 +364,14 @@ const getWorkflowQueue = async (
                 email: q.dealer.email || null
               }
               : null,
+            dealerName: q.dealer
+              ? `${q.dealer.firstName || ''} ${q.dealer.lastName || ''}`.trim() || null
+              : null,
+            dealer_name: q.dealer
+              ? `${q.dealer.firstName || ''} ${q.dealer.lastName || ''}`.trim() || null
+              : null,
+            dealerMobile: q.dealer?.mobile || null,
+            dealer_mobile: q.dealer?.mobile || null,
             customer: q.customer
               ? {
                 id: q.customer.id,
@@ -564,22 +523,41 @@ export const meteringStatusUpdate = async (req: Request, res: Response): Promise
     const valid: Record<string, string[]> = {
       // Fallback compatibility: when queue includes pre-metering records,
       // allow metering to move via start -> approve (or direct approve).
-      start: ['pending_metering', 'pending_installer', 'installer_in_progress'],
-      approve: ['metering_in_progress', 'pending_metering', 'pending_installer', 'installer_in_progress'],
+      start: ['pending_metering', 'pending_installer', 'installer_in_progress', 'installer_approved'],
+      approve: [
+        'metering_in_progress',
+        'pending_metering',
+        'pending_installer',
+        'installer_in_progress',
+        'installer_approved'
+      ],
       send_to_mco: ['metering_approved'],
       mark_completed: ['mco', 'metering_approved'],
       move_back: ['metering_in_progress', 'metering_approved', 'mco']
     };
 
     const patch: Record<string, unknown> = {
-      meteringId: req.user?.id || quotation.meteringId || null,
+      meteringId: req.user?.id || req.dealer?.id || quotation.meteringId || null,
       meteringActionAt: new Date(),
       meteringRemarks: (remarks as string | undefined) || null
     };
 
+    const wf003Message = (act: string, stage: string): string => {
+      if (act === 'send_to_mco' && stage !== 'metering_approved') {
+        return 'Metering must be approved before MCO. Save metering details, then use approve (Move to Approved) while status is installer_approved or pending_metering.';
+      }
+      if (act === 'approve' && !valid.approve.includes(stage)) {
+        return 'Metering approve is not allowed for the current installation stage.';
+      }
+      return 'Metering action not allowed for current stage';
+    };
+
     if (action) {
       if (!valid[action] || !valid[action].includes(current)) {
-        res.status(409).json({ success: false, error: { code: 'WF_003', message: 'Metering action not allowed for current stage' } });
+        res.status(409).json({
+          success: false,
+          error: { code: 'WF_003', message: wf003Message(action, current) }
+        });
         return;
       }
 
@@ -659,7 +637,10 @@ export const meteringStatusUpdate = async (req: Request, res: Response): Promise
 
       if (target === 'metering_approved') {
         if (!valid.approve.includes(current)) {
-          res.status(409).json({ success: false, error: { code: 'WF_003', message: 'Metering action not allowed for current stage' } });
+          res.status(409).json({
+            success: false,
+            error: { code: 'WF_003', message: wf003Message('approve', current) }
+          });
           return;
         }
         const detailsErrors = await collectMeteringApproveErrors(quotation, quotationId);
@@ -678,7 +659,10 @@ export const meteringStatusUpdate = async (req: Request, res: Response): Promise
         patch.meteringApprovedAt = new Date();
       } else if (target === 'mco') {
         if (!valid.send_to_mco.includes(current)) {
-          res.status(409).json({ success: false, error: { code: 'WF_003', message: 'Metering action not allowed for current stage' } });
+          res.status(409).json({
+            success: false,
+            error: { code: 'WF_003', message: wf003Message('send_to_mco', current) }
+          });
           return;
         }
         patch.installationStatus = 'mco';
@@ -689,21 +673,19 @@ export const meteringStatusUpdate = async (req: Request, res: Response): Promise
     await quotation.update(patch as any);
     await quotation.reload();
 
-    const inst = quotation.installationStatus || null;
     res.json({
       success: true,
       data: {
         id: quotation.id,
-        installationStatus: inst,
-        installation_status: inst,
-        meteringStatus: inst,
-        meteringStage: inst,
+        ...meteringWorkflowApiFields({
+          installationStatus: quotation.installationStatus,
+          meteringApprovedAt: quotation.meteringApprovedAt,
+          mcoAt: quotation.mcoAt,
+          completionAt: quotation.completionAt
+        }),
         meteringId: quotation.meteringId || null,
         meteringActionAt: quotation.meteringActionAt || null,
-        meteringApprovedAt: quotation.meteringApprovedAt || null,
         meteringRemarks: quotation.meteringRemarks || null,
-        mcoAt: quotation.mcoAt || null,
-        completionAt: quotation.completionAt || null,
         updatedAt: quotation.updatedAt
       }
     });
@@ -1433,25 +1415,15 @@ export const saveMeteringMcoDocuments = async (req: Request, res: Response): Pro
       where: { quotationId, docType: 'other' },
       order: [['uploadedAt', 'DESC'], ['createdAt', 'DESC']]
     });
-    const latestMcoDocs = getLatestMcoDocMeta(docs.map((d) => (typeof (d as any).toJSON === 'function' ? (d as any).toJSON() : d)));
+    const docRows = docs.map((d) => (typeof (d as any).toJSON === 'function' ? (d as any).toJSON() : d));
+    const mcoDocFields = await buildMcoDocApiFields(docRows);
 
     res.json({
       success: true,
       data: {
         id: quotation.id,
         quotationId: quotation.id,
-        workCompleteReportImageUrl: latestMcoDocs.workCompleteReportImageUrl,
-        work_complete_report_image_url: latestMcoDocs.workCompleteReportImageUrl,
-        meterInstalledPhotoUrl: latestMcoDocs.meterInstalledPhotoUrl,
-        meter_installed_photo_url: latestMcoDocs.meterInstalledPhotoUrl,
-        completeDcrReportImageUrl: latestMcoDocs.completeDcrReportImageUrl,
-        complete_dcr_report_image_url: latestMcoDocs.completeDcrReportImageUrl,
-        workCompleteReportImageName: latestMcoDocs.workCompleteReportImageName,
-        work_complete_report_image_name: latestMcoDocs.workCompleteReportImageName,
-        meterInstalledPhotoName: latestMcoDocs.meterInstalledPhotoName,
-        meter_installed_photo_name: latestMcoDocs.meterInstalledPhotoName,
-        completeDcrReportImageName: latestMcoDocs.completeDcrReportImageName,
-        complete_dcr_report_image_name: latestMcoDocs.completeDcrReportImageName,
+        ...mcoDocFields,
         updatedAt: quotation.updatedAt
       }
     });

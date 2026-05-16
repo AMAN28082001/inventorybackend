@@ -3,7 +3,6 @@ import fs from 'fs';
 import path from 'path';
 import mime from 'mime-types';
 import { logInfo, logError } from '../utils/loggerHelper';
-import logger from '../config/logger';
 
 const normalizeAwsEnvValue = (value: string | undefined, fallback = ''): string => {
   const normalized = String(value || '')
@@ -43,13 +42,6 @@ export const resolveAwsStorageConfig = (): AwsStorageConfig => {
   const bucketName = normalizeAwsEnvValue(process.env.AWS_BUCKET_NAME, 'cbpl-bajaj-node');
   const accessKeyId = normalizeAwsEnvValue(process.env.AWS_ACCESS_KEY);
   const secretAccessKey = normalizeAwsEnvValue(process.env.AWS_SECRET_KEY);
-
-  logger.info('AWS Storage Config', {
-    region,
-    bucketName,
-    hasAccessKeyId: Boolean(accessKeyId),
-    hasSecretAccessKey: Boolean(secretAccessKey)
-  });
 
   if (!region) {
     throw createStorageConfigError('AWS_REGION is not configured.');

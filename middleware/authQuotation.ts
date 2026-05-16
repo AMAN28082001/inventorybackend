@@ -431,6 +431,10 @@ export const authorizeBaldev = (req: Request, res: Response, next: NextFunction)
 };
 
 export const authorizeMetering = (req: Request, res: Response, next: NextFunction): void => {
+  if (req.dealer?.role === 'admin') {
+    next();
+    return;
+  }
   if (req.user && (
     req.user.role === 'admin' ||
     req.user.role === 'metering' ||
@@ -449,6 +453,10 @@ export const authorizeMetering = (req: Request, res: Response, next: NextFunctio
 
 /** Metering workflow updates from quotation-scoped fallback routes (metering team or admin). */
 export const authorizeMeteringOrAdmin = (req: Request, res: Response, next: NextFunction): void => {
+  if (req.dealer?.role === 'admin') {
+    next();
+    return;
+  }
   if (req.user && (
     req.user.role === 'admin' ||
     req.user.role === 'metering' ||

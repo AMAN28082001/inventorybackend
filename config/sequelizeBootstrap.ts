@@ -46,13 +46,11 @@ export const sequelizeBootstrap = (async (): Promise<void> => {
     await ensureInstallationScheduledAtColumn();
     await ensureInstallationTeamsSchema();
     logger.info('PostgreSQL database connected successfully');
-    console.log('✅ PostgreSQL database connected successfully');
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     logger.error('Database connection error', {
       error: errorMessage,
       stack: error instanceof Error ? error.stack : undefined
     });
-    console.error('❌ Database connection error:', errorMessage);
   }
 })();

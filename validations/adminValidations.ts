@@ -41,12 +41,20 @@ export const updateInstallationStatusSchema = z.object({
   installationStatus: installationStatusEnum.optional(),
   installation_status: installationStatusEnum.optional(),
   meteringStatus: installationStatusEnum.optional(),
+  metering_status: installationStatusEnum.optional(),
   status: installationStatusEnum.optional(),
   remarks: z.string().max(5000).optional()
 }).refine((data) => {
-  return Boolean(data.installationStatus || data.installation_status || data.meteringStatus || data.status);
+  return Boolean(
+    data.installationStatus ||
+      data.installation_status ||
+      data.meteringStatus ||
+      data.metering_status ||
+      data.status
+  );
 }, {
-  message: 'One of installationStatus, installation_status, meteringStatus, or status is required'
+  message:
+    'One of installationStatus, installation_status, meteringStatus, metering_status, or status is required'
 });
 
 /** PATCH /admin/quotations/:id/file-login — body validated loosely; controller enforces rules. */

@@ -22,6 +22,7 @@ import {
   getLatestMeterDocMeta,
   resolveMeterStoredRef
 } from '../utils/meteringMediaApi';
+import { meteringWorkflowApiFields } from '../utils/meteringWorkflowApi';
 import { extractS3KeyOrStoredPath } from '../utils/s3Service';
 
 // Helper function to normalize catalog data - ensures all arrays are arrays (never null/undefined)
@@ -1412,17 +1413,14 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         paymentPhases: phaseRows,
         payment_phases: phaseRows,
         finalAmount: subtotalNum,
-        installationStatus: (q as any).installationStatus || 'pending_installer',
-        installation_status: (q as any).installationStatus || 'pending_installer',
         approvedAt: (q as any).approvedAt || null,
         installerApprovedAt: (q as any).installerApprovedAt || null,
-        meteringApprovedAt: (q as any).meteringApprovedAt || null,
-        mcoAt: (q as any).mcoAt || null,
-        meteringStatus: (q as any).installationStatus || null,
-        metering_status: (q as any).installationStatus || null,
-        meteringStage: (q as any).installationStatus || null,
-        mcoStatus: (q as any).installationStatus === 'mco' ? 'mco' : null,
-        mco_status: (q as any).installationStatus === 'mco' ? 'mco' : null,
+        ...meteringWorkflowApiFields({
+          installationStatus: (q as any).installationStatus || 'pending_installer',
+          meteringApprovedAt: (q as any).meteringApprovedAt,
+          mcoAt: (q as any).mcoAt,
+          completionAt: (q as any).completionAt
+        }),
         discomName: (q as any).discomName || null,
         meterType: (q as any).meterType || null,
         meterNo: (q as any).meterNo || null,
@@ -1866,17 +1864,14 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
         } : null,
         pricing: finalPricing,
         status: quotation.status,
-        installationStatus: quotationAny.installationStatus || 'pending_installer',
-        installation_status: quotationAny.installationStatus || 'pending_installer',
         approvedAt: quotationAny.approvedAt || null,
         installerApprovedAt: quotationAny.installerApprovedAt || null,
-        meteringApprovedAt: quotationAny.meteringApprovedAt || null,
-        mcoAt: quotationAny.mcoAt || null,
-        meteringStatus: quotationAny.installationStatus || null,
-        metering_status: quotationAny.installationStatus || null,
-        meteringStage: quotationAny.installationStatus || null,
-        mcoStatus: quotationAny.installationStatus === 'mco' ? 'mco' : null,
-        mco_status: quotationAny.installationStatus === 'mco' ? 'mco' : null,
+        ...meteringWorkflowApiFields({
+          installationStatus: quotationAny.installationStatus || 'pending_installer',
+          meteringApprovedAt: quotationAny.meteringApprovedAt,
+          mcoAt: quotationAny.mcoAt,
+          completionAt: quotationAny.completionAt
+        }),
         discomName: quotationAny.discomName || null,
         meterType: quotationAny.meterType || null,
         meterNo: quotationAny.meterNo || null,

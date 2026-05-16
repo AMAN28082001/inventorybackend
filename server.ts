@@ -107,14 +107,16 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 
   res.on('finish', () => {
     const duration = Date.now() - start;
-    logger.info('HTTP Request', {
-      method: req.method,
-      url: requestPath,
-      statusCode: res.statusCode,
-      duration: `${duration}ms`,
-      ip: req.ip,
-      userAgent: req.get('user-agent')
-    });
+    if (process.env.HTTP_REQUEST_LOGGING !== 'false') {
+      logger.info('HTTP Request', {
+        method: req.method,
+        url: requestPath,
+        statusCode: res.statusCode,
+        duration: `${duration}ms`,
+        ip: req.ip,
+        userAgent: req.get('user-agent')
+      });
+    }
 
     if (!MUTATION_METHODS.has(req.method)) return;
     if (res.statusCode < 200 || res.statusCode >= 400) return;
@@ -238,11 +240,6 @@ void sequelizeBootstrap.then(() => {
       swaggerUrl: `http://localhost:${PORT}/api-docs`,
       websocketPath: `http://localhost:${PORT}/socket.io`
     });
-
-    console.log(`🚀 Server is running on port ${PORT}`);
-    console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
-    console.log(`🔗 API Base URL: http://localhost:${PORT}/api`);
-    console.log(`📚 Swagger UI: http://localhost:${PORT}/api-docs`);
   });
 });
 
