@@ -10,6 +10,11 @@ import {
   batchLoadInstallationDocsByQuotationId,
   mapInstallationDocumentsForApi
 } from '../utils/installationDocumentsApi';
+import {
+  buildMeterDocumentApiFields,
+  getLatestMeterDocMeta,
+  resolveMeterStoredRef
+} from '../utils/meteringMediaApi';
 
 const sumPhasePaidAmounts = (phases: { paidAmount?: number }[]): number =>
   phases.reduce((sum, p) => sum + Number((p as any).paidAmount || 0), 0);
@@ -253,8 +258,12 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
             typeof qAny.get === 'function'
               ? (qAny.get({ plain: true }) as Record<string, unknown>)
               : (q as unknown as Record<string, unknown>);
-          const installationPayload = await mapInstallationDocumentsForApi(
-            installationDocMap.get(String(q.id)) || []
+          const rawInstallationDocs = installationDocMap.get(String(q.id)) || [];
+          const installationPayload = await mapInstallationDocumentsForApi(rawInstallationDocs);
+          const latestMeterDoc = getLatestMeterDocMeta(rawInstallationDocs);
+          const meterDocumentFields = await buildMeterDocumentApiFields(
+            resolveMeterStoredRef((q as any).meterDocumentImageUrl, rawInstallationDocs),
+            latestMeterDoc.name
           );
           return {
             id: q.id,
@@ -300,6 +309,12 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
             meteringStage: (q as any).installationStatus || null,
             mcoStatus: (q as any).installationStatus === 'mco' ? 'mco' : null,
             mco_status: (q as any).installationStatus === 'mco' ? 'mco' : null,
+            discomName: (q as any).discomName || null,
+            meterType: (q as any).meterType || null,
+            meterNo: (q as any).meterNo || null,
+            solarMeterNo: (q as any).solarMeterNo || null,
+            netMeterNo: (q as any).netMeterNo || null,
+            ...meterDocumentFields,
             documents: installationPayload.documents,
             installationDocuments: installationPayload.installationDocuments,
             installationPhotoUrls: installationPayload.installationPhotoUrls,
@@ -791,7 +806,17 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
         ['createdAt', 'ASC']
       ]
     });
-    const installationPayload = await mapInstallationDocumentsForApi(installationDocs);
+    const rawInstallationDocs = installationDocs.map((doc) =>
+      typeof (doc as { toJSON?: () => Record<string, unknown> }).toJSON === 'function'
+        ? (doc as { toJSON: () => Record<string, unknown> }).toJSON()
+        : (doc as unknown as Record<string, unknown>)
+    );
+    const installationPayload = await mapInstallationDocumentsForApi(rawInstallationDocs);
+    const latestMeterDoc = getLatestMeterDocMeta(rawInstallationDocs);
+    const meterDocumentFields = await buildMeterDocumentApiFields(
+      resolveMeterStoredRef(quotationAny.meterDocumentImageUrl, rawInstallationDocs),
+      latestMeterDoc.name
+    );
     res.json({
       success: true,
       data: {
@@ -826,6 +851,12 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
         installation_ready_for_installer: Boolean(quotationAny.installationReadyForInstaller),
         mcoStatus: quotationAny.installationStatus === 'mco' ? 'mco' : null,
         mco_status: quotationAny.installationStatus === 'mco' ? 'mco' : null,
+        discomName: quotationAny.discomName || null,
+        meterType: quotationAny.meterType || null,
+        meterNo: quotationAny.meterNo || null,
+        solarMeterNo: quotationAny.solarMeterNo || null,
+        netMeterNo: quotationAny.netMeterNo || null,
+        ...meterDocumentFields,
         documents: installationPayload.documents,
         installationDocuments: installationPayload.installationDocuments,
         installationPhotoUrls: installationPayload.installationPhotoUrls,

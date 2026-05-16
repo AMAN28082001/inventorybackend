@@ -13,6 +13,11 @@ import {
   buildPublicWorkflowFileUrl,
   mapInstallationDocumentsForApi
 } from '../utils/installationDocumentsApi';
+import {
+  buildMeterDocumentApiFields,
+  getLatestMeterDocMeta,
+  resolveMeterStoredRef
+} from '../utils/meteringMediaApi';
 
 const assertInstallationTeamQuotationScope = (req: Request, quotation: Quotation, res: Response): boolean => {
   const tid = getInstallationTeamIdFromRequest(req);
@@ -92,29 +97,6 @@ const normalizeWorkflowFileUrl = (value: unknown): string | null => buildPublicW
 
 const mapWorkflowDocumentsForFrontend = async (docs: any[]) =>
   (await mapInstallationDocumentsForApi(docs)).documents;
-
-const getLatestMeterDocMeta = (docs: any[]): { url: string | null; name: string | null } => {
-  const meterDocs = (docs || []).filter((doc: any) => doc?.docType === 'meter_doc');
-  if (meterDocs.length === 0) return { url: null, name: null };
-
-  const sorted = [...meterDocs].sort((a: any, b: any) => {
-    const ta = new Date(a.uploadedAt || a.createdAt || 0).getTime();
-    const tb = new Date(b.uploadedAt || b.createdAt || 0).getTime();
-    return tb - ta;
-  });
-
-  const latest = sorted[0];
-  const metadata = latest?.metadata || {};
-  const originalName =
-    (typeof metadata.originalName === 'string' && metadata.originalName.trim()) ||
-    (typeof metadata.original_name === 'string' && metadata.original_name.trim()) ||
-    null;
-
-  return {
-    url: typeof latest?.fileUrl === 'string' && latest.fileUrl.trim() ? latest.fileUrl : null,
-    name: originalName
-  };
-};
 
 const MCO_DOC_FIELDS = [
   'workCompleteReportImage',
@@ -376,7 +358,11 @@ const getWorkflowQueue = async (
           const installationPayload = await mapInstallationDocumentsForApi(rawInstallationDocs);
           const latestMeterDoc = getLatestMeterDocMeta(rawInstallationDocs);
           const latestMcoDocs = getLatestMcoDocMeta(rawInstallationDocs);
-          const meterDocumentImageUrl = q.meterDocumentImageUrl || latestMeterDoc.url || null;
+          const meterStoredRef = resolveMeterStoredRef(q.meterDocumentImageUrl, rawInstallationDocs);
+          const meterDocumentFields = await buildMeterDocumentApiFields(
+            meterStoredRef,
+            latestMeterDoc.name
+          );
           return {
             id: q.id,
             status: q.status,
@@ -405,11 +391,7 @@ const getWorkflowQueue = async (
             meterNo: q.meterNo || null,
             solarMeterNo: q.solarMeterNo || null,
             netMeterNo: q.netMeterNo || null,
-            meterDocumentImageUrl,
-            meterDocumentUrl: meterDocumentImageUrl,
-            meter_document_url: meterDocumentImageUrl,
-            meterDocumentName: latestMeterDoc.name,
-            meter_document_name: latestMeterDoc.name,
+            ...meterDocumentFields,
             workCompleteReportImageUrl: latestMcoDocs.workCompleteReportImageUrl,
             work_complete_report_image_url: latestMcoDocs.workCompleteReportImageUrl,
             meterInstalledPhotoUrl: latestMcoDocs.meterInstalledPhotoUrl,
@@ -1373,6 +1355,11 @@ export const saveMeteringDetails = async (req: Request, res: Response): Promise<
         null;
     }
 
+    const meterDocumentFields = await buildMeterDocumentApiFields(
+      quotation.meterDocumentImageUrl,
+      meterDocumentName
+    );
+
     res.json({
       success: true,
       data: {
@@ -1384,11 +1371,7 @@ export const saveMeteringDetails = async (req: Request, res: Response): Promise<
         meterNo: quotation.meterNo || null,
         solarMeterNo: quotation.solarMeterNo || null,
         netMeterNo: quotation.netMeterNo || null,
-        meterDocumentImageUrl: quotation.meterDocumentImageUrl || null,
-        meterDocumentUrl: quotation.meterDocumentImageUrl || null,
-        meter_document_url: quotation.meterDocumentImageUrl || null,
-        meterDocumentName,
-        meter_document_name: meterDocumentName,
+        ...meterDocumentFields,
         meteringApprovedAt: quotation.meteringApprovedAt || null,
         updatedAt: quotation.updatedAt
       }

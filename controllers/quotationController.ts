@@ -17,6 +17,11 @@ import {
   quotationIdFromInstallationMediaRef,
   resolveInstallationMediaViewUrl
 } from '../utils/installationDocumentsApi';
+import {
+  buildMeterDocumentApiFields,
+  getLatestMeterDocMeta,
+  resolveMeterStoredRef
+} from '../utils/meteringMediaApi';
 import { extractS3KeyOrStoredPath } from '../utils/s3Service';
 
 // Helper function to normalize catalog data - ensures all arrays are arrays (never null/undefined)
@@ -1361,8 +1366,14 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         (row as any).customer_type ??
         null;
 
-      const installationPayload = await mapInstallationDocumentsForApi(
-        installationDocs.map((doc: any) => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc))
+      const rawInstallationDocs = installationDocs.map((doc: any) =>
+        typeof doc.toJSON === 'function' ? doc.toJSON() : doc
+      );
+      const installationPayload = await mapInstallationDocumentsForApi(rawInstallationDocs);
+      const latestMeterDoc = getLatestMeterDocMeta(rawInstallationDocs);
+      const meterDocumentFields = await buildMeterDocumentApiFields(
+        resolveMeterStoredRef((q as any).meterDocumentImageUrl, rawInstallationDocs),
+        latestMeterDoc.name
       );
 
       return {
@@ -1412,6 +1423,12 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         meteringStage: (q as any).installationStatus || null,
         mcoStatus: (q as any).installationStatus === 'mco' ? 'mco' : null,
         mco_status: (q as any).installationStatus === 'mco' ? 'mco' : null,
+        discomName: (q as any).discomName || null,
+        meterType: (q as any).meterType || null,
+        meterNo: (q as any).meterNo || null,
+        solarMeterNo: (q as any).solarMeterNo || null,
+        netMeterNo: (q as any).netMeterNo || null,
+        ...meterDocumentFields,
         installationDocuments: installationPayload.installationDocuments,
         installationPhotoUrls: installationPayload.installationPhotoUrls,
         installation_photo_urls: installationPayload.installationPhotoUrls,
@@ -1775,8 +1792,14 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
       };
     });
     const primaryVisit = serializedVisits[0] || null;
-    const installationPayload = await mapInstallationDocumentsForApi(
-      installationDocs.map((doc: any) => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc))
+    const rawInstallationDocs = installationDocs.map((doc: any) =>
+      typeof doc.toJSON === 'function' ? doc.toJSON() : doc
+    );
+    const installationPayload = await mapInstallationDocumentsForApi(rawInstallationDocs);
+    const latestMeterDoc = getLatestMeterDocMeta(rawInstallationDocs);
+    const meterDocumentFields = await buildMeterDocumentApiFields(
+      resolveMeterStoredRef(quotationAny.meterDocumentImageUrl, rawInstallationDocs),
+      latestMeterDoc.name
     );
 
     res.json({
@@ -1859,7 +1882,7 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
         meterNo: quotationAny.meterNo || null,
         solarMeterNo: quotationAny.solarMeterNo || null,
         netMeterNo: quotationAny.netMeterNo || null,
-        meterDocumentImageUrl: quotationAny.meterDocumentImageUrl || null,
+        ...meterDocumentFields,
         discount: quotation.discount,
         installationDocuments: installationPayload.installationDocuments,
         installationPhotoUrls: installationPayload.installationPhotoUrls,

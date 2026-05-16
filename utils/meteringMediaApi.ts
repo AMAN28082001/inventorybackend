@@ -1,0 +1,91 @@
+import { resolveBrowsableMediaUrl } from './s3Service';
+
+const METER_DOC_PRESIGN_TTL_SECONDS = Math.max(
+  3600,
+  Number(process.env.AWS_S3_SIGNED_URL_TTL_SECONDS || 604800)
+);
+
+export type MeterDocumentApiFields = {
+  meterDocumentImageUrl: string | null;
+  meterDocumentUrl: string | null;
+  meterDocumentPublicUrl: string | null;
+  meter_document_image_url: string | null;
+  meter_document_url: string | null;
+  meter_document_public_url: string | null;
+  meterDocumentName: string | null;
+  meter_document_name: string | null;
+};
+
+export const meterDocumentNameFromStored = (
+  storedRef: string | null | undefined,
+  fallbackName?: string | null
+): string | null => {
+  if (typeof fallbackName === 'string' && fallbackName.trim()) {
+    return fallbackName.trim();
+  }
+  if (typeof storedRef !== 'string' || !storedRef.trim()) return null;
+  const base = storedRef.split('?')[0].split('/').pop() || '';
+  return base || null;
+};
+
+/** Presigned/public browsable meter document URLs for API responses (§J / §6.4.C.8). */
+export const buildMeterDocumentApiFields = async (
+  storedRef: string | null | undefined,
+  fallbackName?: string | null
+): Promise<MeterDocumentApiFields> => {
+  const ref = typeof storedRef === 'string' && storedRef.trim() ? storedRef.trim() : null;
+  const browsable = ref
+    ? await resolveBrowsableMediaUrl(ref, METER_DOC_PRESIGN_TTL_SECONDS)
+    : null;
+  const name = meterDocumentNameFromStored(ref, fallbackName);
+
+  return {
+    meterDocumentImageUrl: browsable,
+    meterDocumentUrl: browsable,
+    meterDocumentPublicUrl: browsable,
+    meter_document_image_url: browsable,
+    meter_document_url: browsable,
+    meter_document_public_url: browsable,
+    meterDocumentName: name,
+    meter_document_name: name
+  };
+};
+
+export const getLatestMeterDocMeta = (
+  docs: Record<string, unknown>[]
+): { storedRef: string | null; name: string | null } => {
+  const meterDocs = (docs || []).filter((doc) => doc?.docType === 'meter_doc');
+  if (meterDocs.length === 0) return { storedRef: null, name: null };
+
+  const sorted = [...meterDocs].sort((a, b) => {
+    const ta = new Date(String(a.uploadedAt || a.createdAt || 0)).getTime();
+    const tb = new Date(String(b.uploadedAt || b.createdAt || 0)).getTime();
+    return tb - ta;
+  });
+
+  const latest = sorted[0];
+  const metadata = (latest?.metadata || {}) as Record<string, unknown>;
+  const originalName =
+    (typeof metadata.originalName === 'string' && metadata.originalName.trim()) ||
+    (typeof metadata.original_name === 'string' && metadata.original_name.trim()) ||
+    null;
+
+  const stored =
+    (typeof latest?.fileUrl === 'string' && latest.fileUrl.trim()) ||
+    (typeof latest?.file_url === 'string' && latest.file_url.trim()) ||
+    null;
+
+  return { storedRef: stored, name: originalName };
+};
+
+export const resolveMeterStoredRef = (
+  quotationMeterRef: string | null | undefined,
+  installationDocs: Record<string, unknown>[]
+): string | null => {
+  const fromQuotation =
+    typeof quotationMeterRef === 'string' && quotationMeterRef.trim()
+      ? quotationMeterRef.trim()
+      : null;
+  if (fromQuotation) return fromQuotation;
+  return getLatestMeterDocMeta(installationDocs).storedRef;
+};
