@@ -17,6 +17,15 @@ const customerSchema = z.object({
   address: addressSchema
 });
 
+const booleanOrString = z.union([
+  z.boolean(),
+  z.string().transform((val) => {
+    if (val.toLowerCase() === 'true') return true;
+    if (val.toLowerCase() === 'false') return false;
+    throw new Error('Invalid boolean');
+  })
+]);
+
 const productsSchema = z.object({
   systemType: z.enum(['on-grid', 'off-grid', 'hybrid', 'dcr', 'non-dcr', 'both', 'customize']),
   phase: z.enum(['1-Phase', '3-Phase'], 'Phase must be 1-Phase or 3-Phase').optional(),
@@ -54,6 +63,10 @@ const productsSchema = z.object({
   batteryPrice: z.number().nonnegative().nullish(),
   centralSubsidy: z.number().nonnegative().default(0),
   stateSubsidy: z.number().nonnegative().default(0),
+  pdfUsePanelSizeRange: booleanOrString.optional(),
+  pdf_use_panel_size_range: booleanOrString.optional(),
+  pdfUseInverterBrandOptions: booleanOrString.optional(),
+  pdf_use_inverter_brand_options: booleanOrString.optional(),
   customPanels: z.array(z.object({
     brand: z.string().min(1),
     size: z.string().min(1),
@@ -71,15 +84,6 @@ const paymentModeEnum = z.enum(
 const paymentStatusEnum = z.enum(['pending', 'partial', 'completed'], {
   message: 'Invalid payment status'
 });
-
-const booleanOrString = z.union([
-  z.boolean(),
-  z.string().transform((val) => {
-    if (val.toLowerCase() === 'true') return true;
-    if (val.toLowerCase() === 'false') return false;
-    throw new Error('Invalid boolean');
-  })
-]);
 
 // Accept number or string that can be converted to number (disallow empty string)
 const numberOrStringNumber = z.union([

@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { Op, Sequelize, WhereOptions } from 'sequelize';
+import { Op, QueryTypes, Sequelize, WhereOptions } from 'sequelize';
 import { v4 as uuidv4 } from 'uuid';
 import XLSX from 'xlsx';
 import {
@@ -69,6 +69,153 @@ const LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE = Sequelize.literal(`
       )
   )
 `);
+
+const HR_UPLOAD_UNASSIGNED_DEALER_SENTINELS = new Set([
+  'unassigned',
+  'null',
+  'none',
+  '-',
+  'na',
+  'n/a',
+  'pool',
+  'open'
+]);
+
+export type HrUploadLeadCounts = {
+  rowCount: number;
+  assignedCount: number;
+  unassignedCount: number;
+  completedCount: number;
+};
+
+export const isValidHrCallingAssigneeDealerId = (dealerId: string | null | undefined): boolean => {
+  if (dealerId === undefined || dealerId === null) return false;
+  const trimmed = String(dealerId).trim();
+  if (!trimmed) return false;
+  return !HR_UPLOAD_UNASSIGNED_DEALER_SENTINELS.has(trimmed.toLowerCase());
+};
+
+/**
+ * Live batch buckets (§7.8): completed | assigned (valid assignee, not completed) | unassigned.
+ * Invariant: assignedCount + unassignedCount + completedCount === rowCount.
+ */
+export const computeHrUploadLeadCounts = (
+  rowCount: number,
+  leadBuckets: { completedCount: number; assignedCount: number }
+): HrUploadLeadCounts => {
+  const completedCount = Math.max(0, leadBuckets.completedCount);
+  const assignedCount = Math.max(0, leadBuckets.assignedCount);
+  const normalizedRowCount = Math.max(0, rowCount);
+  const unassignedCount = Math.max(0, normalizedRowCount - completedCount - assignedCount);
+  return {
+    rowCount: normalizedRowCount,
+    assignedCount,
+    unassignedCount,
+    completedCount
+  };
+};
+
+type HrUploadBatchCountRow = {
+  batchId: string;
+  leadCount: number;
+  completedCount: number;
+  assignedCount: number;
+};
+
+const fetchHrUploadBatchCountRows = async (batchIds: string[]): Promise<Map<string, HrUploadBatchCountRow>> => {
+  if (!batchIds.length) return new Map();
+
+  const rows = await sequelize.query<HrUploadBatchCountRow>(
+    `
+    SELECT
+      cl."batchId" AS "batchId",
+      COUNT(*)::int AS "leadCount",
+      SUM(
+        CASE
+          WHEN LOWER(COALESCE(dla."status"::text, '')) IN ('completed', 'done', 'closed') THEN 1
+          ELSE 0
+        END
+      )::int AS "completedCount",
+      SUM(
+        CASE
+          WHEN LOWER(COALESCE(dla."status"::text, '')) NOT IN ('completed', 'done', 'closed')
+            AND dla."dealerId" IS NOT NULL
+            AND TRIM(dla."dealerId") <> ''
+            AND LOWER(TRIM(dla."dealerId")) NOT IN (
+              'unassigned', 'null', 'none', '-', 'na', 'n/a', 'pool', 'open'
+            )
+          THEN 1
+          ELSE 0
+        END
+      )::int AS "assignedCount"
+    FROM "calling_leads" AS cl
+    LEFT JOIN "dealer_lead_assignments" AS dla
+      ON dla."leadId" = cl."id"
+      AND NOT EXISTS (
+        SELECT 1
+        FROM "dealer_lead_assignments" AS newer
+        WHERE newer."leadId" = dla."leadId"
+          AND (
+            newer."assignedAt" > dla."assignedAt"
+            OR (
+              newer."assignedAt" = dla."assignedAt"
+              AND newer."createdAt" > dla."createdAt"
+            )
+          )
+      )
+    WHERE cl."batchId" IN (:batchIds)
+    GROUP BY cl."batchId"
+    `,
+    {
+      replacements: { batchIds },
+      type: QueryTypes.SELECT
+    }
+  );
+
+  const map = new Map<string, HrUploadBatchCountRow>();
+  for (const row of rows) {
+    map.set(String(row.batchId), {
+      batchId: String(row.batchId),
+      leadCount: Number(row.leadCount) || 0,
+      completedCount: Number(row.completedCount) || 0,
+      assignedCount: Number(row.assignedCount) || 0
+    });
+  }
+  return map;
+};
+
+const buildHrUploadCountsForBatches = async (
+  batches: Array<{ id: string; rowCount: number }>
+): Promise<Map<string, HrUploadLeadCounts>> => {
+  const batchIds = batches.map((batch) => batch.id);
+  const aggregateByBatch = await fetchHrUploadBatchCountRows(batchIds);
+  const countsByBatch = new Map<string, HrUploadLeadCounts>();
+
+  for (const batch of batches) {
+    const aggregate = aggregateByBatch.get(batch.id);
+    countsByBatch.set(
+      batch.id,
+      computeHrUploadLeadCounts(batch.rowCount, {
+        completedCount: aggregate?.completedCount ?? 0,
+        assignedCount: aggregate?.assignedCount ?? 0
+      })
+    );
+  }
+
+  return countsByBatch;
+};
+
+const hrUploadCountsToApi = (counts: HrUploadLeadCounts) => ({
+  rowCount: counts.rowCount,
+  assignedCount: counts.assignedCount,
+  unassignedCount: counts.unassignedCount,
+  completedCount: counts.completedCount,
+  counts: {
+    assigned: counts.assignedCount,
+    unassigned: counts.unassignedCount,
+    completed: counts.completedCount
+  }
+});
 
 const escapeSqlString = (value: string) => value.replace(/'/g, "''");
 
@@ -618,24 +765,6 @@ const promoteQueuedLeadIfSlotAvailable = async (
   // Keep argument for backward compatibility with callers.
   void activeLimitPerDealer;
 
-  const resolveSystemAssignedByUserId = async (): Promise<string> => {
-    const fallback = await User.findOne({
-      where: {
-        role: {
-          [Op.in]: ['super-admin', 'super-admin-manager', 'admin']
-        },
-        is_active: true
-      },
-      attributes: ['id'],
-      order: [['created_at', 'ASC']],
-      transaction
-    });
-    if (!fallback) {
-      throw new Error('No active admin user found for assignment fallback');
-    }
-    return fallback.id;
-  };
-
   const queued = await DealerLeadAssignment.findOne({
     where: {
       dealerId,
@@ -677,7 +806,7 @@ const promoteQueuedLeadIfSlotAvailable = async (
     });
 
     if (unassignedLead) {
-      const assignedBy = await resolveSystemAssignedByUserId();
+      const assignedBy = await resolveSystemAssignedByUserId(transaction);
       await DealerLeadAssignment.create(
         {
           id: uuidv4(),
@@ -739,6 +868,214 @@ const promoteQueuedLeadIfSlotAvailable = async (
     },
     { transaction }
   );
+};
+
+const resolveSystemAssignedByUserId = async (transaction: any): Promise<string> => {
+  const fallback = await User.findOne({
+    where: {
+      role: {
+        [Op.in]: ['super-admin', 'super-admin-manager', 'admin']
+      },
+      is_active: true
+    },
+    attributes: ['id'],
+    order: [['created_at', 'ASC']],
+    transaction
+  });
+  if (!fallback) {
+    throw new Error('No active admin user found for assignment fallback');
+  }
+  return fallback.id;
+};
+
+const isLeadEligibleForDealerPool = async (
+  leadId: string,
+  dealerId: string,
+  transaction: any
+): Promise<boolean> => {
+  const count = await CallingLead.count({
+    where: {
+      id: leadId,
+      [Op.and]: [
+        Sequelize.literal(`
+          (
+            "CallingLead"."batchId" IS NULL
+            OR EXISTS (
+              SELECT 1
+              FROM "calling_lead_upload_batches" AS b
+              WHERE b."id" = "CallingLead"."batchId"
+                AND ${batchDealerEligibilityPredicate(dealerId, 'b')}
+            )
+          )
+        `)
+      ]
+    },
+    transaction
+  });
+  return count > 0;
+};
+
+const claimCallingLeadForDealer = async (
+  leadId: string,
+  dealerId: string,
+  transaction: any
+): Promise<DealerLeadAssignment> => {
+  const latest = await DealerLeadAssignment.findOne({
+    where: {
+      leadId,
+      [Op.and]: [LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE]
+    },
+    transaction,
+    lock: transaction.LOCK.UPDATE
+  });
+
+  if (latest) {
+    if (latest.dealerId === dealerId) {
+      return latest;
+    }
+    const error: any = new Error('LEAD_NOT_ASSIGNED');
+    error.code = 'LEAD_004';
+    throw error;
+  }
+
+  const lead = await CallingLead.findByPk(leadId, {
+    transaction,
+    lock: transaction.LOCK.UPDATE
+  });
+  if (!lead) {
+    const error: any = new Error('LEAD_NOT_FOUND');
+    error.code = 'RES_001';
+    throw error;
+  }
+
+  const eligible = await isLeadEligibleForDealerPool(leadId, dealerId, transaction);
+  if (!eligible) {
+    const error: any = new Error('LEAD_NOT_ASSIGNED');
+    error.code = 'LEAD_004';
+    throw error;
+  }
+
+  const assignedBy = await resolveSystemAssignedByUserId(transaction);
+  return DealerLeadAssignment.create(
+    {
+      id: uuidv4(),
+      leadId,
+      dealerId,
+      assignedBy,
+      assignedAt: new Date(),
+      status: 'assigned'
+    },
+    { transaction }
+  );
+};
+
+const resolveAssignmentForDealerAction = async (
+  leadId: string,
+  dealerId: string,
+  transaction: any,
+  allowClaim: boolean
+): Promise<DealerLeadAssignment> => {
+  const scoped = await DealerLeadAssignment.findOne({
+    where: {
+      [Op.and]: [
+        { leadId, dealerId },
+        LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE
+      ]
+    },
+    transaction,
+    lock: transaction.LOCK.UPDATE
+  });
+  if (scoped) {
+    return scoped;
+  }
+
+  if (!allowClaim) {
+    const error: any = new Error('LEAD_NOT_ASSIGNED');
+    error.code = 'LEAD_004';
+    throw error;
+  }
+
+  return claimCallingLeadForDealer(leadId, dealerId, transaction);
+};
+
+const shouldAllowClaimOnAction = (
+  action: string,
+  body: Record<string, unknown>
+): boolean => {
+  if (action === 'start') return true;
+  const truthy = (value: unknown) =>
+    value === true || value === 'true' || value === 1 || value === '1';
+  return truthy(body.claim) || truthy(body.autoAssign);
+};
+
+export const claimDealerCallingLead = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const dealerId = await resolveDealerIdForQueue(req);
+    if (!dealerId) {
+      res.status(401).json({
+        success: false,
+        error: { code: 'AUTH_003', message: 'User not authenticated' }
+      });
+      return;
+    }
+
+    const { leadId } = req.params;
+    let assignmentPayload: any = null;
+
+    await sequelize.transaction(async (transaction) => {
+      const assignment = await claimCallingLeadForDealer(leadId, dealerId, transaction);
+      await assignment.reload({ transaction });
+      const lead = await CallingLead.findByPk(leadId, { transaction });
+      assignmentPayload = {
+        leadId: assignment.leadId,
+        id: assignment.leadId,
+        name: lead?.name || '',
+        mobile: lead?.mobile || '',
+        altMobile: lead?.altMobile || null,
+        kNumber: lead?.kNumber || null,
+        address: lead?.address || null,
+        city: lead?.city || null,
+        state: lead?.state || null,
+        customerNote: lead?.customerNote || null,
+        assignedDealerId: assignment.dealerId,
+        assigned_dealer_id: assignment.dealerId,
+        assignedToDealerId: assignment.dealerId,
+        assigned_to_dealer_id: assignment.dealerId,
+        status: assignment.status,
+        assignmentStatus: assignment.status
+      };
+    });
+
+    const snapshot = await buildDealerQueueSnapshot(dealerId, 1000);
+    applyNoCacheHeaders(res);
+    res.json({
+      success: true,
+      data: {
+        ...snapshot,
+        lead: assignmentPayload,
+        currentLead: assignmentPayload,
+        nextLead: assignmentPayload
+      }
+    });
+  } catch (error) {
+    const errorCode = (error as any)?.code;
+    if (errorCode === 'LEAD_004') {
+      res.status(403).json({ success: false, error: { code: 'LEAD_004', message: 'Lead not assigned to dealer' } });
+      return;
+    }
+    if (errorCode === 'RES_001') {
+      res.status(404).json({ success: false, error: { code: 'RES_001', message: 'Lead not found' } });
+      return;
+    }
+    logError('Claim dealer calling lead error', error, {
+      dealerId: req.dealer?.id,
+      leadId: req.params.leadId
+    });
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
 };
 
 export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promise<void> => {
@@ -1024,12 +1361,15 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
       data: {
         parsed,
         batchId,
+        uploadId: batchId,
         fileName: file.originalname || 'upload.csv',
         uploadedBy: req.user?.id || 'unknown',
         created,
         skippedDuplicate,
         assigned,
         queued,
+        assignedAtUpload: assigned,
+        queuedAtUpload: queued,
         activeLimitPerDealer,
         rowCount: parsed,
         assignedDealers: dealerIds
@@ -1058,6 +1398,11 @@ const CALLABLE_QUEUE_STATUSES = ['queued', 'assigned', 'active', 'in_progress'] 
 
 const buildCallableQueue = async (dealerId: string, limit = 500) => {
   const now = new Date();
+
+  await sequelize.transaction(async (transaction) => {
+    await promoteQueuedLeadIfSlotAvailable(dealerId, DEFAULT_ACTIVE_LIMIT_PER_DEALER, transaction);
+  });
+
   let rows = await DealerLeadAssignment.findAll({
     where: {
       [Op.and]: [
@@ -1549,13 +1894,6 @@ const buildRecentActions = async (dealerId: string, limit = 1000) => {
   return out;
 };
 
-const normalizeAssignmentLifecycleStatus = (status: string | null | undefined): string => {
-  if (!status) return 'pending';
-  if (status === 'queued') return 'pending';
-  if (status === 'active') return 'assigned';
-  return status;
-};
-
 const buildDealerQueueSnapshot = async (dealerId: string, recentActionsLimit = 1000) => {
   const [queue, counts, scheduledLeads, recentActions] = await Promise.all([
     buildCallableQueue(dealerId),
@@ -1720,6 +2058,7 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
     }
 
     const { leadId } = req.params;
+    const requestBody = req.body as Record<string, unknown>;
     const {
       action,
       callRemark,
@@ -1734,7 +2073,7 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
       editMode,
       status_category,
       status_text
-    } = req.body as {
+    } = requestBody as {
       action: 'start' | 'called' | 'follow_up' | 'not_interested' | 'rescheduled';
       callRemark?: string;
       nextFollowUpAt?: string;
@@ -1748,7 +2087,21 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
       editMode?: boolean;
       status_category?: string;
       status_text?: string;
+      claim?: boolean | string;
+      autoAssign?: boolean | string;
+      assignedDealerId?: string;
     };
+
+    const bodyAssignedDealerId = String(requestBody.assignedDealerId || requestBody.assigned_dealer_id || '').trim();
+    if (bodyAssignedDealerId && bodyAssignedDealerId !== dealerId) {
+      res.status(403).json({
+        success: false,
+        error: { code: 'LEAD_004', message: 'Lead not assigned to dealer' }
+      });
+      return;
+    }
+
+    const allowClaim = shouldAllowClaimOnAction(action, requestBody);
 
     const parsed = parseTaggedCallRemark(callRemark ?? null);
     const hasParsedTags = Boolean(parsed.statusCategory || parsed.status);
@@ -1848,25 +2201,12 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
 
     let updatedData: any = null;
     await sequelize.transaction(async (transaction) => {
-      const assignment = await DealerLeadAssignment.findOne({
-        where: {
-          [Op.and]: [
-            {
-              leadId,
-              dealerId
-            },
-            LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE
-          ]
-        },
+      const assignment = await resolveAssignmentForDealerAction(
+        leadId,
+        dealerId,
         transaction,
-        lock: transaction.LOCK.UPDATE
-      });
-
-      if (!assignment) {
-        const error: any = new Error('LEAD_NOT_ASSIGNED');
-        error.code = 'LEAD_004';
-        throw error;
-      }
+        allowClaim
+      );
 
       const hasStatusUpdatePayload = Boolean(
         callRemark ||
@@ -2123,6 +2463,10 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
       res.status(403).json({ success: false, error: { code: 'LEAD_004', message: 'Lead not assigned to dealer' } });
       return;
     }
+    if (errorCode === 'RES_001') {
+      res.status(404).json({ success: false, error: { code: 'RES_001', message: 'Lead not found' } });
+      return;
+    }
     if (errorCode === 'LEAD_005') {
       res.status(409).json({ success: false, error: { code: 'LEAD_005', message: 'Invalid lead action transition' } });
       return;
@@ -2231,7 +2575,7 @@ export const getHrDealerAssignmentStats = async (_req: Request, res: Response): 
 export const getHrLeadUploadBatches = async (req: Request, res: Response): Promise<void> => {
   try {
     const page = parsePositiveInt(req.query.page, 1);
-    const limit = Math.min(parsePositiveInt(req.query.limit, 50), 500);
+    const limit = Math.min(parsePositiveInt(req.query.limit, 200), 500);
     const offset = (page - 1) * limit;
 
     const batches = await CallingLeadUploadBatch.findAndCountAll({
@@ -2240,100 +2584,50 @@ export const getHrLeadUploadBatches = async (req: Request, res: Response): Promi
       offset
     });
 
-    const batchIds = batches.rows.map((batch) => batch.id);
-    const uploadRows = batchIds.length
-      ? await CallingLeadUploadRow.findAll({
-        where: { batchId: { [Op.in]: batchIds } },
-        order: [['rowIndex', 'ASC']]
-      })
-      : [];
-    const leadIds = uploadRows
-      .map((row) => row.leadId)
-      .filter((leadId): leadId is string => Boolean(leadId));
-    const assignments = leadIds.length
-      ? await DealerLeadAssignment.findAll({
-        where: {
-          leadId: { [Op.in]: leadIds },
-          [Op.and]: [LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE]
-        },
-        attributes: ['leadId', 'dealerId', 'status']
-      })
-      : [];
-    const assignmentByLeadId = new Map<string, DealerLeadAssignment>();
-    for (const assignment of assignments) {
-      assignmentByLeadId.set(assignment.leadId, assignment);
-    }
+    const countsByBatch = await buildHrUploadCountsForBatches(
+      batches.rows.map((batch) => ({ id: batch.id, rowCount: batch.rowCount }))
+    );
 
-    const dealerIds = new Set<string>();
+    const poolDealerIds = new Set<string>();
     for (const batch of batches.rows) {
       const assignedDealers = Array.isArray(batch.assignedDealers) ? batch.assignedDealers : [];
       for (const dealerId of assignedDealers) {
-        dealerIds.add(String(dealerId));
+        poolDealerIds.add(String(dealerId));
       }
     }
-    for (const assignment of assignments) {
-      dealerIds.add(String(assignment.dealerId));
-    }
-    const dealerList = dealerIds.size
+    const dealerList = poolDealerIds.size
       ? await Dealer.findAll({
-        where: { id: { [Op.in]: Array.from(dealerIds) } },
+        where: { id: { [Op.in]: Array.from(poolDealerIds) } },
         attributes: ['id', 'firstName', 'lastName']
       })
       : [];
-    const dealerNameMap = new Map<string, string>();
-    for (const dealer of dealerList) {
-      dealerNameMap.set(dealer.id, `${dealer.firstName || ''} ${dealer.lastName || ''}`.trim());
-    }
-
-    const rowsByBatch = new Map<string, CallingLeadUploadRow[]>();
-    for (const row of uploadRows) {
-      const list = rowsByBatch.get(row.batchId) || [];
-      list.push(row);
-      rowsByBatch.set(row.batchId, list);
-    }
+    const dealerById = new Map(
+      dealerList.map((dealer) => [
+        dealer.id,
+        {
+          id: dealer.id,
+          firstName: dealer.firstName,
+          lastName: dealer.lastName
+        }
+      ])
+    );
 
     const total = batches.count;
     const hrUploadsList = batches.rows.map((batch) => {
       const assignedDealers = Array.isArray(batch.assignedDealers) ? batch.assignedDealers : [];
-      const batchRows = rowsByBatch.get(batch.id) || [];
-      const assignedCount = batchRows.reduce((count, row) => {
-        if (!row.leadId) return count;
-        return assignmentByLeadId.get(row.leadId) ? count + 1 : count;
-      }, 0);
-      const unassignedCount = Math.max(0, batchRows.length - assignedCount);
+      const liveCounts = countsByBatch.get(batch.id) || computeHrUploadLeadCounts(batch.rowCount, {
+        completedCount: 0,
+        assignedCount: 0
+      });
       return {
         id: batch.id,
         uploadedAt: batch.uploadedAt,
         fileName: batch.fileName,
-        rowCount: batch.rowCount,
-        assignedCount,
-        unassignedCount,
         dealerIds: assignedDealers,
-        rows: (rowsByBatch.get(batch.id) || []).map((row) => {
-          const rawPayload = (row.rawPayload || {}) as Record<string, unknown>;
-          const assignment = row.leadId ? assignmentByLeadId.get(row.leadId) : null;
-          const assignedDealerId = assignment?.dealerId || null;
-          const assignedDealerName = assignedDealerId ? (dealerNameMap.get(String(assignedDealerId)) || null) : null;
-          const assignmentStatus = normalizeAssignmentLifecycleStatus(assignment?.status || null);
-          return {
-            id: row.id,
-            name: row.customerName || '',
-            mobile: row.customerMobile || '',
-            altMobile: String(extractCell(rawPayload, ALT_MOBILE_KEYS) || '').trim() || null,
-            kNumber: String(extractCell(rawPayload, K_NUMBER_KEYS) || '').trim() || null,
-            address: row.customerAddress || '',
-            city: String(extractCell(rawPayload, CITY_KEYS) || '').trim() || null,
-            state: String(extractCell(rawPayload, STATE_KEYS) || '').trim() || null,
-            customerNote: String(extractCell(rawPayload, NOTE_KEYS) || '').trim() || null,
-            assignedDealerId,
-            assignedDealerName,
-            assignmentStatus,
-            assigned_dealer_id: assignedDealerId,
-            assigned_dealer_name: assignedDealerName,
-            assignment_status: assignmentStatus,
-            status: assignmentStatus
-          };
-        })
+        dealers: assignedDealers
+          .map((dealerId) => dealerById.get(String(dealerId)))
+          .filter((dealer): dealer is { id: string; firstName: string; lastName: string } => Boolean(dealer)),
+        ...hrUploadCountsToApi(liveCounts)
       };
     });
 
@@ -2344,35 +2638,9 @@ export const getHrLeadUploadBatches = async (req: Request, res: Response): Promi
       data: {
         batches: batches.rows.map((batch) => {
           const assignedDealers = Array.isArray(batch.assignedDealers) ? batch.assignedDealers : [];
-          const rows = (rowsByBatch.get(batch.id) || []).map((row) => {
-            const rawPayload = (row.rawPayload || {}) as Record<string, unknown>;
-            const kNumber = String(extractCell(rawPayload, K_NUMBER_KEYS) || '').trim() || null;
-            const assignment = row.leadId ? assignmentByLeadId.get(row.leadId) : null;
-            const assignedDealerId = assignment?.dealerId || null;
-            const assignedDealerName = assignedDealerId ? (dealerNameMap.get(String(assignedDealerId)) || null) : null;
-            const assignmentStatus = normalizeAssignmentLifecycleStatus(assignment?.status || null);
-            return {
-              id: row.id,
-              rowIndex: row.rowIndex,
-              // normalized keys for Uploaded Data table rendering
-              name: row.customerName || '',
-              mobile: row.customerMobile || '',
-              kNumber,
-              address: row.customerAddress || '',
-              // backward-compatible keys
-              customerName: row.customerName,
-              customerMobile: row.customerMobile,
-              customerAddress: row.customerAddress,
-              status: assignmentStatus,
-              assignedDealerId,
-              assignedDealerName,
-              assignmentStatus,
-              assigned_dealer_id: assignedDealerId,
-              assigned_dealer_name: assignedDealerName,
-              assignment_status: assignmentStatus,
-              leadId: row.leadId,
-              rawPayload: row.rawPayload
-            };
+          const liveCounts = countsByBatch.get(batch.id) || computeHrUploadLeadCounts(batch.rowCount, {
+            completedCount: 0,
+            assignedCount: 0
           });
           return {
             id: batch.id,
@@ -2380,15 +2648,18 @@ export const getHrLeadUploadBatches = async (req: Request, res: Response): Promi
             fileName: batch.fileName,
             uploadedBy: batch.uploadedBy,
             uploadedAt: batch.uploadedAt,
-            rowCount: batch.rowCount,
-            assignedCount: (hrUploadsList.find((upload) => upload.id === batch.id)?.assignedCount) || 0,
-            unassignedCount: (hrUploadsList.find((upload) => upload.id === batch.id)?.unassignedCount) || 0,
+            dealerIds: assignedDealers,
             assignedDealers,
+            dealers: assignedDealers
+              .map((dealerId) => dealerById.get(String(dealerId)))
+              .filter((dealer): dealer is { id: string; firstName: string; lastName: string } => Boolean(dealer)),
             assignedDealerDetails: assignedDealers.map((dealerId) => ({
               dealerId,
-              dealerName: dealerNameMap.get(String(dealerId)) || ''
+              dealerName: dealerById.has(String(dealerId))
+                ? `${dealerById.get(String(dealerId))!.firstName || ''} ${dealerById.get(String(dealerId))!.lastName || ''}`.trim()
+                : ''
             })),
-            rows
+            ...hrUploadCountsToApi(liveCounts)
           };
         }),
         uploads: hrUploadsList,
@@ -2478,7 +2749,13 @@ export const getHrLeadUploadBatchRows = async (req: Request, res: Response): Pro
     for (const assignment of assignments) {
       assignmentByLeadId.set(assignment.leadId, assignment);
     }
-    const dealerIds = Array.from(new Set(assignments.map((assignment) => String(assignment.dealerId))));
+    const assignedDealers = Array.isArray(batch.assignedDealers) ? batch.assignedDealers : [];
+    const dealerIds = Array.from(
+      new Set([
+        ...assignedDealers.map((dealerId) => String(dealerId)),
+        ...assignments.map((assignment) => String(assignment.dealerId))
+      ])
+    );
     const dealers = dealerIds.length
       ? await Dealer.findAll({
         where: { id: { [Op.in]: dealerIds } },
@@ -2486,37 +2763,42 @@ export const getHrLeadUploadBatchRows = async (req: Request, res: Response): Pro
       })
       : [];
     const dealerNameMap = new Map<string, string>();
+    const dealerById = new Map<string, { id: string; firstName: string; lastName: string }>();
     for (const dealer of dealers) {
       dealerNameMap.set(dealer.id, `${dealer.firstName || ''} ${dealer.lastName || ''}`.trim());
+      dealerById.set(dealer.id, {
+        id: dealer.id,
+        firstName: dealer.firstName,
+        lastName: dealer.lastName
+      });
     }
-    const [totalRowsInBatch, allBatchLeadIds] = await Promise.all([
-      CallingLeadUploadRow.count({ where: { batchId } }),
-      CallingLeadUploadRow.findAll({
-      where: { batchId, leadId: { [Op.not]: null } },
-      attributes: ['leadId'],
-      raw: true
-      })
-    ]);
-    const allLeadIds = allBatchLeadIds
-      .map((row: any) => String(row.leadId))
-      .filter(Boolean);
-    const assignedCount = allLeadIds.length
-      ? await DealerLeadAssignment.count({
-        where: {
-          leadId: { [Op.in]: allLeadIds },
-          [Op.and]: [LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE]
-        }
-      })
-      : 0;
-    const unassignedCount = Math.max(0, Number(totalRowsInBatch || 0) - assignedCount);
+    const countsByBatch = await buildHrUploadCountsForBatches([{ id: batch.id, rowCount: batch.rowCount }]);
+    const liveCounts = countsByBatch.get(batch.id) || computeHrUploadLeadCounts(batch.rowCount, {
+      completedCount: 0,
+      assignedCount: 0
+    });
+
+    const resolveRowAssignmentStatus = (
+      assignment: DealerLeadAssignment | null | undefined
+    ): string => {
+      if (!assignment) return 'queued';
+      return assignment.status || 'queued';
+    };
+
+    const resolveRowAssignedDealerId = (
+      assignment: DealerLeadAssignment | null | undefined
+    ): string | null => {
+      if (!assignment) return null;
+      return isValidHrCallingAssigneeDealerId(assignment.dealerId) ? String(assignment.dealerId) : null;
+    };
 
     const total = rows.count;
     const normalizedRows = rows.rows.map((row) => {
       const resolvedLeadId = resolvedLeadIdForRow(row);
       const assignment = resolvedLeadId ? assignmentByLeadId.get(resolvedLeadId) : null;
-      const assignedDealerId = assignment?.dealerId || null;
+      const assignedDealerId = resolveRowAssignedDealerId(assignment);
       const assignedDealerName = assignedDealerId ? (dealerNameMap.get(String(assignedDealerId)) || null) : null;
-      const assignmentStatus = normalizeAssignmentLifecycleStatus(assignment?.status || null);
+      const assignmentStatus = resolveRowAssignmentStatus(assignment);
       const rawPayload = (row.rawPayload || {}) as Record<string, unknown>;
       return {
         id: row.id,
@@ -2531,6 +2813,7 @@ export const getHrLeadUploadBatchRows = async (req: Request, res: Response): Pro
         customerMobile: row.customerMobile,
         customerAddress: row.customerAddress,
         status: assignmentStatus,
+        leadStatus: assignmentStatus,
         assignedDealerId,
         assignedDealerName,
         assignmentStatus,
@@ -2541,28 +2824,27 @@ export const getHrLeadUploadBatchRows = async (req: Request, res: Response): Pro
         rawPayload: row.rawPayload
       };
     });
-    const assignedDealers = Array.isArray(batch.assignedDealers) ? batch.assignedDealers : [];
-    const assignedDealerNames = assignedDealers
-      .map((dealerId) => dealerNameMap.get(String(dealerId)))
-      .filter((dealerName): dealerName is string => Boolean(dealerName));
+    const poolDealers = assignedDealers
+      .map((dealerId) => dealerById.get(String(dealerId)))
+      .filter((dealer): dealer is { id: string; firstName: string; lastName: string } => Boolean(dealer));
+
+    const batchPayload = {
+      id: batch.id,
+      batchId: batch.id,
+      fileName: batch.fileName,
+      uploadedBy: batch.uploadedBy,
+      uploadedAt: batch.uploadedAt,
+      dealerIds: assignedDealers,
+      dealers: poolDealers,
+      ...hrUploadCountsToApi(liveCounts)
+    };
 
     applyNoCacheHeaders(res);
     res.json({
       success: true,
+      batch: batchPayload,
       data: {
-        batch: {
-          id: batch.id,
-          batchId: batch.id,
-          fileName: batch.fileName,
-          uploadedBy: batch.uploadedBy,
-          uploadedAt: batch.uploadedAt,
-          rowCount: totalRowsInBatch,
-          assignedCount,
-          unassignedCount,
-          assignedDealers,
-          dealers: assignedDealerNames,
-          rows: normalizedRows
-        },
+        batch: batchPayload,
         rows: normalizedRows,
         pagination: {
           page,
@@ -2571,8 +2853,19 @@ export const getHrLeadUploadBatchRows = async (req: Request, res: Response): Pro
           totalPages: Math.ceil(total / limit),
           hasNext: page < Math.ceil(total / limit),
           hasPrev: page > 1
-        }
-      }
+        },
+        totalRows: liveCounts.rowCount
+      },
+      rows: normalizedRows,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+        hasNext: page < Math.ceil(total / limit),
+        hasPrev: page > 1
+      },
+      totalRows: liveCounts.rowCount
     });
   } catch (error) {
     logError('Get HR lead upload batch rows error', error, {

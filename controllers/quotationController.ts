@@ -24,6 +24,10 @@ import {
 } from '../utils/meteringMediaApi';
 import { meteringWorkflowApiFields } from '../utils/meteringWorkflowApi';
 import { extractS3KeyOrStoredPath } from '../utils/s3Service';
+import {
+  extractPdfDisplayFlagsFromProducts,
+  quotationProductPdfDisplayApiFields
+} from '../utils/quotationProductPdfDisplay';
 
 // Helper function to normalize catalog data - ensures all arrays are arrays (never null/undefined)
 const normalizeCatalog = (catalog: any): any => {
@@ -970,11 +974,15 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
       quotationId: quotation.id,
       phase: normalizedPhase
     });
+    const pdfDisplayFlags = extractPdfDisplayFlagsFromProducts(products);
+
     await QuotationProduct.create({
       id: uuidv4(),
       quotationId: quotation.id,
       systemType: products.systemType,
       phase: normalizedPhase,
+      pdfUsePanelSizeRange: pdfDisplayFlags.pdfUsePanelSizeRange ?? false,
+      pdfUseInverterBrandOptions: pdfDisplayFlags.pdfUseInverterBrandOptions ?? false,
       panelBrand: products.panelBrand,
       panelSize: products.panelSize,
       panelQuantity: products.panelQuantity,
@@ -1396,10 +1404,13 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
           lastName: customer.lastName ?? '',
           mobile: customer.mobile
         } : null,
-        products: products ? {
-          systemType: products.systemType,
-          phase: products.phase
-        } : null,
+        products: products
+          ? {
+              systemType: products.systemType,
+              phase: products.phase,
+              ...quotationProductPdfDisplayApiFields(products as any)
+            }
+          : null,
         systemType: q.systemType,
         ...quotationPaymentApiFields(row),
         ...quotationAdminMetadataFields(row),
@@ -1860,7 +1871,8 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
               ? Number(products.batteryPrice)
               : null,
           centralSubsidy: Number(products.centralSubsidy || 0),
-          stateSubsidy: Number(products.stateSubsidy || 0)
+          stateSubsidy: Number(products.stateSubsidy || 0),
+          ...quotationProductPdfDisplayApiFields(products as any)
         } : null,
         pricing: finalPricing,
         status: quotation.status,
@@ -2118,6 +2130,8 @@ export const updateQuotationProducts = async (req: Request, res: Response): Prom
       return;
     }
 
+    const pdfDisplayFlags = extractPdfDisplayFlagsFromProducts(products);
+
     // Update quotation system type if provided
     if (products.systemType) {
       await quotation.update({ systemType: products.systemType });
@@ -2143,7 +2157,10 @@ export const updateQuotationProducts = async (req: Request, res: Response): Prom
         subtotal: Number(quotation.subtotal || 0),
         totalAmount: Number(quotation.totalAmount || 0),
         ...products,
-        phase: phaseToSave
+        ...pdfDisplayFlags,
+        phase: phaseToSave,
+        pdfUsePanelSizeRange: pdfDisplayFlags.pdfUsePanelSizeRange ?? false,
+        pdfUseInverterBrandOptions: pdfDisplayFlags.pdfUseInverterBrandOptions ?? false
       });
     } else {
       logInfo('Updating quotation products phase', {
@@ -2152,6 +2169,7 @@ export const updateQuotationProducts = async (req: Request, res: Response): Prom
       });
       await quotationProduct.update({
         ...products,
+        ...pdfDisplayFlags,
         phase: products.phase || quotationProduct.phase || '1-Phase'
       });
     }
@@ -2204,10 +2222,13 @@ export const updateQuotationProducts = async (req: Request, res: Response): Prom
       data: {
         id: updatedQuotation?.id,
         systemType: updatedQuotation?.systemType,
-        products: productsData ? {
-          ...productsData,
-          customPanels: customPanelsData.length > 0 ? customPanelsData : undefined
-        } : null,
+        products: productsData
+          ? {
+              ...productsData,
+              ...quotationProductPdfDisplayApiFields(productsData),
+              customPanels: customPanelsData.length > 0 ? customPanelsData : undefined
+            }
+          : null,
         updatedAt: updatedQuotation?.updatedAt
       }
     });

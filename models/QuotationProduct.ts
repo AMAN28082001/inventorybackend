@@ -55,13 +55,17 @@ interface QuotationProductAttributes {
   centralSubsidy: number;
   stateSubsidy: number;
 
+  /** PDF display only — not used for pricing/catalog validation */
+  pdfUsePanelSizeRange?: boolean;
+  pdfUseInverterBrandOptions?: boolean;
+
   // Totals
   subtotal: number;        // Set price (complete package price)
   totalAmount: number;      // Amount after discount (Subtotal - Subsidy - Discount)
   finalAmount?: number | null;     // Final amount (Subtotal - Subsidy, discount NOT applied)
 }
 
-interface QuotationProductCreationAttributes extends Optional<QuotationProductAttributes, 'id' | 'phase' | 'panelBrand' | 'panelSize' | 'panelQuantity' | 'panelPrice' | 'dcrPanelBrand' | 'dcrPanelSize' | 'dcrPanelQuantity' | 'nonDcrPanelBrand' | 'nonDcrPanelSize' | 'nonDcrPanelQuantity' | 'inverterType' | 'inverterBrand' | 'inverterSize' | 'inverterPrice' | 'structureType' | 'structureSize' | 'structurePrice' | 'meterBrand' | 'meterPrice' | 'acCableBrand' | 'acCableSize' | 'acCablePrice' | 'dcCableBrand' | 'dcCableSize' | 'dcCablePrice' | 'acdb' | 'acdbPrice' | 'dcdb' | 'dcdbPrice' | 'hybridInverter' | 'batteryCapacity' | 'batteryPrice' | 'centralSubsidy' | 'stateSubsidy' | 'finalAmount'> { }
+interface QuotationProductCreationAttributes extends Optional<QuotationProductAttributes, 'id' | 'phase' | 'panelBrand' | 'panelSize' | 'panelQuantity' | 'panelPrice' | 'dcrPanelBrand' | 'dcrPanelSize' | 'dcrPanelQuantity' | 'nonDcrPanelBrand' | 'nonDcrPanelSize' | 'nonDcrPanelQuantity' | 'inverterType' | 'inverterBrand' | 'inverterSize' | 'inverterPrice' | 'structureType' | 'structureSize' | 'structurePrice' | 'meterBrand' | 'meterPrice' | 'acCableBrand' | 'acCableSize' | 'acCablePrice' | 'dcCableBrand' | 'dcCableSize' | 'dcCablePrice' | 'acdb' | 'acdbPrice' | 'dcdb' | 'dcdbPrice' | 'hybridInverter' | 'batteryCapacity' | 'batteryPrice' | 'centralSubsidy' | 'stateSubsidy' | 'pdfUsePanelSizeRange' | 'pdfUseInverterBrandOptions' | 'finalAmount'> { }
 
 class QuotationProduct extends Model<QuotationProductAttributes, QuotationProductCreationAttributes> implements QuotationProductAttributes {
   public id!: string;
@@ -102,6 +106,8 @@ class QuotationProduct extends Model<QuotationProductAttributes, QuotationProduc
   public batteryPrice!: number | null;
   public centralSubsidy!: number;
   public stateSubsidy!: number;
+  public pdfUsePanelSizeRange!: boolean;
+  public pdfUseInverterBrandOptions!: boolean;
   public subtotal!: number;        // Set price (complete package price)
   public totalAmount!: number;      // Amount after discount (Subtotal - Subsidy - Discount)
   public finalAmount!: number | null | undefined; // Final amount (Subtotal - Subsidy, discount NOT applied)
@@ -261,6 +267,16 @@ QuotationProduct.init(
     stateSubsidy: {
       type: DataTypes.DECIMAL(12, 2),
       defaultValue: 0
+    },
+    pdfUsePanelSizeRange: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false
+    },
+    pdfUseInverterBrandOptions: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false
     },
     subtotal: {
       type: DataTypes.DECIMAL(12, 2),

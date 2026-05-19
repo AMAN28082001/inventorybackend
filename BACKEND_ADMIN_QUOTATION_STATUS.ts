@@ -372,6 +372,21 @@ export async function postHrLeadsUploadCsv(req, res, db) {
 }
 
 /**
+ * Live HR upload batch counts (§7.8) — implemented in controllers/callingLeadController.ts
+ *
+ *   computeHrUploadLeadCounts(rowCount, { completedCount, assignedCount })
+ *   buildHrUploadCountsForBatches() — SQL aggregate per batchId (no full row load on list)
+ *
+ * Buckets (mutually exclusive, sum to rowCount):
+ *   completed — assignment status in completed|done|closed
+ *   assigned — not completed + valid calling assignee dealer id (not pool/unassigned sentinels)
+ *   unassigned — remainder (includes CSV rows without a created lead)
+ *
+ * POST upload response uses assignedAtUpload / queuedAtUpload (not list assignedCount).
+ * GET /hr/leads/uploads returns live assignedCount / unassignedCount / completedCount only.
+ */
+
+/**
  * GET /hr/leads/uploads?limit=200
  * Return DB-backed upload history for HR Uploaded Data tab.
  */
