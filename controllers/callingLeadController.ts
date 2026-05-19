@@ -915,12 +915,10 @@ const isLeadEligibleForDealerPool = async (
   return count > 0;
 };
 
-const claimCallingLeadForDealer = async (
-  leadId: string,
-  dealerId: string,
-  transaction: any
-): Promise<DealerLeadAssignment> => {
-  const latest = await DealerLeadAssignment.findOne({
+const REASSIGNABLE_ASSIGNMENT_STATUSES = new Set(['queued', 'assigned', 'active']);
+
+const findLatestLeadAssignment = async (leadId: string, transaction: any) =>
+  DealerLeadAssignment.findOne({
     where: {
       leadId,
       [Op.and]: [LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE]
@@ -929,9 +927,74 @@ const claimCallingLeadForDealer = async (
     lock: transaction.LOCK.UPDATE
   });
 
+/** Move a pool / queued row from another dealer when this dealer is batch-eligible (same rules as promote). */
+const tryReassignLatestAssignmentToDealer = async (
+  leadId: string,
+  dealerId: string,
+  transaction: any
+): Promise<DealerLeadAssignment | null> => {
+  const latest = await findLatestLeadAssignment(leadId, transaction);
+  if (!latest || latest.dealerId === dealerId) {
+    return latest;
+  }
+  if (!REASSIGNABLE_ASSIGNMENT_STATUSES.has(String(latest.status))) {
+    return null;
+  }
+  const eligible = await isLeadEligibleForDealerPool(leadId, dealerId, transaction);
+  if (!eligible) {
+    return null;
+  }
+  await latest.update(
+    {
+      dealerId,
+      status: 'assigned',
+      assignedAt: new Date(),
+      action: null,
+      callRemark: null,
+      nextFollowUpAt: null,
+      actionAt: null
+    },
+    { transaction }
+  );
+  await latest.reload({ transaction });
+  return latest;
+};
+
+/** Body may send username or legacy id; map to authenticated dealer when it is the same account. */
+const resolveEffectiveCallingDealerId = async (
+  bodyDealerIdRaw: string | undefined,
+  authDealerId: string
+): Promise<string> => {
+  const bodyDealerId = String(bodyDealerIdRaw || '').trim();
+  if (!bodyDealerId || bodyDealerId === authDealerId) {
+    return authDealerId;
+  }
+  const dealer = await Dealer.findOne({
+    attributes: ['id'],
+    where: {
+      [Op.or]: [{ id: bodyDealerId }, { username: bodyDealerId }]
+    }
+  });
+  if (dealer?.id === authDealerId) {
+    return authDealerId;
+  }
+  return bodyDealerId;
+};
+
+const claimCallingLeadForDealer = async (
+  leadId: string,
+  dealerId: string,
+  transaction: any
+): Promise<DealerLeadAssignment> => {
+  const latest = await findLatestLeadAssignment(leadId, transaction);
+
   if (latest) {
     if (latest.dealerId === dealerId) {
       return latest;
+    }
+    const reassigned = await tryReassignLatestAssignmentToDealer(leadId, dealerId, transaction);
+    if (reassigned) {
+      return reassigned;
     }
     const error: any = new Error('LEAD_NOT_ASSIGNED');
     error.code = 'LEAD_004';
@@ -1003,12 +1066,65 @@ const shouldAllowClaimOnAction = (
   body: Record<string, unknown>
 ): boolean => {
   if (action === 'start') return true;
+  if (['called', 'follow_up', 'not_interested', 'rescheduled'].includes(action)) return true;
   const truthy = (value: unknown) =>
     value === true || value === 'true' || value === 1 || value === '1';
   return truthy(body.claim) || truthy(body.autoAssign);
 };
 
-export const claimDealerCallingLead = async (req: Request, res: Response): Promise<void> => {
+const normalizeAssignmentStatusFromClient = (raw?: unknown): string | null => {
+  if (raw === undefined || raw === null || raw === '') return null;
+  const normalized = String(raw).trim().toLowerCase().replace(/\s+/g, '_');
+  if (normalized === 'pending') return 'queued';
+  if (normalized === 'inprogress') return 'in_progress';
+  if (['queued', 'assigned', 'active', 'in_progress', 'rescheduled', 'completed'].includes(normalized)) {
+    return normalized;
+  }
+  return 'assigned';
+};
+
+const buildCallingLeadQueuePayload = async (
+  assignment: DealerLeadAssignment,
+  transaction: any
+) => {
+  const [lead, dealer] = await Promise.all([
+    CallingLead.findByPk(assignment.leadId, { transaction }),
+    Dealer.findByPk(assignment.dealerId, {
+      attributes: ['firstName', 'lastName'],
+      transaction
+    })
+  ]);
+  const assignedDealerName = dealer
+    ? `${dealer.firstName || ''} ${dealer.lastName || ''}`.trim()
+    : null;
+
+  return {
+    leadId: assignment.leadId,
+    id: assignment.leadId,
+    name: lead?.name || '',
+    mobile: lead?.mobile || '',
+    altMobile: lead?.altMobile || null,
+    kNumber: lead?.kNumber || null,
+    address: lead?.address || null,
+    city: lead?.city || null,
+    state: lead?.state || null,
+    customerNote: lead?.customerNote || null,
+    assignedDealerId: assignment.dealerId,
+    assigned_dealer_id: assignment.dealerId,
+    assignedDealerName,
+    assigned_dealer_name: assignedDealerName,
+    assignedToDealerId: assignment.dealerId,
+    assigned_to_dealer_id: assignment.dealerId,
+    status: assignment.status,
+    assignmentStatus: assignment.status
+  };
+};
+
+const assignCallingLeadToDealerFromRequest = async (
+  req: Request,
+  res: Response,
+  logLabel: string
+): Promise<void> => {
   try {
     const dealerId = await resolveDealerIdForQueue(req);
     if (!dealerId) {
@@ -1020,30 +1136,32 @@ export const claimDealerCallingLead = async (req: Request, res: Response): Promi
     }
 
     const { leadId } = req.params;
+    const body = (req.body || {}) as Record<string, unknown>;
+    const requestedDealerId = String(
+      body.assignedDealerId || body.assigned_dealer_id || body.dealerId || body.dealer_id || ''
+    ).trim();
+    const targetDealerId = await resolveEffectiveCallingDealerId(
+      requestedDealerId || dealerId,
+      dealerId
+    );
+    if (targetDealerId !== dealerId) {
+      res.status(403).json({
+        success: false,
+        error: { code: 'LEAD_004', message: 'Lead not assigned to dealer' }
+      });
+      return;
+    }
+
     let assignmentPayload: any = null;
 
     await sequelize.transaction(async (transaction) => {
-      const assignment = await claimCallingLeadForDealer(leadId, dealerId, transaction);
-      await assignment.reload({ transaction });
-      const lead = await CallingLead.findByPk(leadId, { transaction });
-      assignmentPayload = {
-        leadId: assignment.leadId,
-        id: assignment.leadId,
-        name: lead?.name || '',
-        mobile: lead?.mobile || '',
-        altMobile: lead?.altMobile || null,
-        kNumber: lead?.kNumber || null,
-        address: lead?.address || null,
-        city: lead?.city || null,
-        state: lead?.state || null,
-        customerNote: lead?.customerNote || null,
-        assignedDealerId: assignment.dealerId,
-        assigned_dealer_id: assignment.dealerId,
-        assignedToDealerId: assignment.dealerId,
-        assigned_to_dealer_id: assignment.dealerId,
-        status: assignment.status,
-        assignmentStatus: assignment.status
-      };
+      let assignment = await claimCallingLeadForDealer(leadId, dealerId, transaction);
+      const requestedStatus = normalizeAssignmentStatusFromClient(body.status);
+      if (requestedStatus && requestedStatus !== assignment.status) {
+        await assignment.update({ status: requestedStatus as any }, { transaction });
+        await assignment.reload({ transaction });
+      }
+      assignmentPayload = await buildCallingLeadQueuePayload(assignment, transaction);
     });
 
     const snapshot = await buildDealerQueueSnapshot(dealerId, 1000);
@@ -1067,7 +1185,7 @@ export const claimDealerCallingLead = async (req: Request, res: Response): Promi
       res.status(404).json({ success: false, error: { code: 'RES_001', message: 'Lead not found' } });
       return;
     }
-    logError('Claim dealer calling lead error', error, {
+    logError(logLabel, error, {
       dealerId: req.dealer?.id,
       leadId: req.params.leadId
     });
@@ -1076,6 +1194,18 @@ export const claimDealerCallingLead = async (req: Request, res: Response): Promi
       error: { code: 'SYS_001', message: 'Internal server error' }
     });
   }
+};
+
+export const claimDealerCallingLead = async (req: Request, res: Response): Promise<void> => {
+  await assignCallingLeadToDealerFromRequest(req, res, 'Claim dealer calling lead error');
+};
+
+export const assignDealerCallingLead = async (req: Request, res: Response): Promise<void> => {
+  await assignCallingLeadToDealerFromRequest(req, res, 'Assign dealer calling lead error');
+};
+
+export const patchDealerCallingLead = async (req: Request, res: Response): Promise<void> => {
+  await assignCallingLeadToDealerFromRequest(req, res, 'Patch dealer calling lead error');
 };
 
 export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promise<void> => {
@@ -2092,15 +2222,6 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
       assignedDealerId?: string;
     };
 
-    const bodyAssignedDealerId = String(requestBody.assignedDealerId || requestBody.assigned_dealer_id || '').trim();
-    if (bodyAssignedDealerId && bodyAssignedDealerId !== dealerId) {
-      res.status(403).json({
-        success: false,
-        error: { code: 'LEAD_004', message: 'Lead not assigned to dealer' }
-      });
-      return;
-    }
-
     const allowClaim = shouldAllowClaimOnAction(action, requestBody);
 
     const parsed = parseTaggedCallRemark(callRemark ?? null);
@@ -2201,6 +2322,8 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
 
     let updatedData: any = null;
     await sequelize.transaction(async (transaction) => {
+      await promoteQueuedLeadIfSlotAvailable(dealerId, DEFAULT_ACTIVE_LIMIT_PER_DEALER, transaction);
+
       const assignment = await resolveAssignmentForDealerAction(
         leadId,
         dealerId,
@@ -2329,9 +2452,32 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
 
       const now = new Date();
 
-      // --- start: idempotent when already in_progress; allow queued | assigned | active ---
+      // --- start: idempotent when already in_progress; allow queued | assigned | active | due rescheduled ---
       if (action === 'start') {
         if (assignment.status === 'in_progress') {
+          await assignment.reload({ transaction });
+          updatedData = {
+            leadId: assignment.leadId,
+            status: assignment.status,
+            assignmentStatus: assignment.status,
+            action: assignment.action,
+            callRemark: assignment.callRemark,
+            nextFollowUpAt: assignment.nextFollowUpAt,
+            actionAt: assignment.actionAt
+          };
+          return;
+        }
+        const rescheduledDueForStart = isRescheduledDue(assignment, now);
+        if (assignment.status === 'rescheduled' && rescheduledDueForStart) {
+          await assignment.update(
+            {
+              status: 'in_progress',
+              action: null,
+              callRemark: effectiveCallRemarkForStart,
+              actionAt: effectiveActionAt
+            },
+            { transaction }
+          );
           await assignment.reload({ transaction });
           updatedData = {
             leadId: assignment.leadId,

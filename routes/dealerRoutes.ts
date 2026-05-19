@@ -5,6 +5,8 @@ import {
   getDealerCallingQueueCurrent,
   getDealerCallingQueueNext,
   claimDealerCallingLead,
+  assignDealerCallingLead,
+  patchDealerCallingLead,
   updateDealerCallingQueueAction,
   getDealerScheduledQueue,
   getDealerDialledActions,
@@ -300,6 +302,8 @@ router.get('/me/calling-actions/dialled', getDealerDialledActions);
 router.get('/me/calling-actions/connected', getDealerConnectedActions);
 router.get('/me/calling-actions/not-connected', getDealerNotConnectedActions);
 router.post('/me/calling-queue/:leadId/claim', claimDealerCallingLead);
+router.post('/me/calling-queue/:leadId/assign', assignDealerCallingLead);
+router.patch('/me/calling-queue/:leadId', patchDealerCallingLead);
 router.patch('/me/calling-queue/:leadId/action', validate(dealerLeadActionSchema), updateDealerCallingQueueAction);
 
 /** Dealer dashboard: same behavior as `PATCH /api/visits/:visitId/reschedule` (frontend fallbacks). */

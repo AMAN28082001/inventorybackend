@@ -1,6 +1,6 @@
 # Backend changes handoff (May 2026)
 
-Action items from recent frontend work. Full detail: `BACKEND_CHANGES_REQUIRED.md` (**§7.7–7.8**, dealer queue ~2307, **§X**). Reference: `BACKEND_ADMIN_QUOTATION_STATUS.ts`, `controllers/callingLeadController.ts`.
+Action items from recent frontend work. Full detail: `BACKEND_CHANGES_REQUIRED.md` (**§7.7–7.8**, dealer queue ~2307, **§X**). Reference: `BACKEND_ADMIN_QUOTATION_STATUS.ts`, `controllers/callingLeadController.ts`, `utils/quotationProductPdfDisplay.ts`.
 
 ---
 
@@ -8,39 +8,52 @@ Action items from recent frontend work. Full detail: `BACKEND_CHANGES_REQUIRED.m
 
 **Status: implemented**
 
-- `GET /api/hr/leads/uploads` — SQL aggregates; `assignedCount` / `unassignedCount` / `completedCount` (not upload-time `assigned`)
-- `GET /api/hr/leads/uploads/:batchId` — full-batch counts + paginated rows
-- `POST /api/hr/leads/upload-csv` — `assignedAtUpload` / `queuedAtUpload`
-- Latest assignment per lead in count SQL; `dla.status::text` for enum safety
+| Method | Path | Notes |
+|--------|------|--------|
+| `GET` | `/api/hr/leads/uploads` | Live `assignedCount`, `unassignedCount`, `completedCount` (SQL, not upload-time `assigned`) |
+| `GET` | `/api/hr/leads/uploads/:uploadId` | Full-batch counts + paginated rows with assignee fields |
+| `POST` | `/api/hr/leads/upload-csv` | `assignedAtUpload` / `queuedAtUpload` only on POST |
+
+**Invariant:** `assignedCount + unassignedCount + completedCount === rowCount`
+
+**QA:** Upload 1000, 3 at upload → GET `assignedCount: 3`, `unassignedCount: 997`; modal queued rows match header.
 
 ---
 
 ## 2. Quotation PDF display flags (§X)
 
-**Status: implemented** (run `yarn migrate` if columns missing)
+**Status: implemented** — run `yarn migrate` if columns missing.
 
-- `pdfUsePanelSizeRange`, `pdfUseInverterBrandOptions` on `quotation_products`
-- Create / PATCH products + GET echo; not used in pricing/validation
+| Field | PDF when `true` |
+|-------|-----------------|
+| `pdfUsePanelSizeRange` | **540W-620W** |
+| `pdfUseInverterBrandOptions` | **Inverter Brand- Vsole/Xwatt/Saatvik** |
+
+- `POST` / `PATCH …/products` / `GET` quotations — persist and echo on `quotation_products`
+- Not used in pricing or `validateProductSelection`
+- Server PDFs: use `utils/quotationProductPdfDisplay.ts` if API generates PDFs
 
 ---
 
-## 3. Dealer calling queue — `LEAD_004` on Start Call
+## 3. Dealer calling queue — `LEAD_004` (Priority 1)
 
 **Status: implemented**
 
 ### Problem
 
-`GET /dealers/me/calling-queue/next` could show a pool lead, but `PATCH .../action` with `start` returned **403 / `LEAD_004`** when no `dealer_lead_assignments` row existed for that dealer.
+Dealer sees a lead from `/next` but `PATCH …/action` returned **403 / `LEAD_004`** when `assigned_dealer_id` was missing or owned by another dealer. Frontend may hide the error optimistically; **call outcomes still need a real assignment in DB**.
 
-### Backend behavior (A + B + C)
+### Implemented options
 
-| Option | Implementation |
-|--------|----------------|
-| **A — Auto-assign on `start`** | `PATCH /api/dealers/me/calling-queue/:leadId/action` with `action: "start"` claims eligible pool leads (creates assignment + moves to `in_progress`) |
-| **B — Claim endpoint** | `POST /api/dealers/me/calling-queue/:leadId/claim` |
-| **C — Assign in `/next`** | `buildCallableQueue` runs `promoteQueuedLeadIfSlotAvailable` before returning queue |
+| Option | Endpoint | Behavior |
+|--------|----------|----------|
+| **A** | `PATCH /api/dealers/me/calling-queue/:leadId/action` | On `start` (and outcome actions), auto-claim eligible pool lead → assign → transition |
+| **B — claim** | `POST /api/dealers/me/calling-queue/:leadId/claim` | Assign pool lead to JWT dealer |
+| **B — assign** | `POST /api/dealers/me/calling-queue/:leadId/assign` | Body `{ assignedDealerId, status: "assigned" }` |
+| **B — patch** | `PATCH /api/dealers/me/calling-queue/:leadId` | Same body as assign |
+| **C** | `GET …/calling-queue/next` & `/current` | `promoteQueuedLeadIfSlotAvailable` before building queue |
 
-### Optional body hints (honored on `start` or when `claim` / `autoAssign` is true)
+### Optional body on `start` / assign
 
 ```json
 {
@@ -51,36 +64,50 @@ Action items from recent frontend work. Full detail: `BACKEND_CHANGES_REQUIRED.m
 }
 ```
 
-If `assignedDealerId` is sent and does not match the authenticated dealer → `LEAD_004`.
+If `assignedDealerId` ≠ authenticated dealer → **`LEAD_004`**.
 
-### Assignee fields
+### Field rules
 
-- `assignedDealerId` / `assigned_dealer_id` = calling assignee (must match JWT dealer id when set)
-- `dealerId` / `dealerName` on lead = CRM/uploader only — not used for queue ownership
+| Field | Use |
+|-------|-----|
+| `assignedDealerId` / `assigned_dealer_id` | Calling assignee (must match JWT when set) |
+| `assignedDealerName` | From `dealers` join |
+| `dealerId` / `dealerName` on lead | CRM/uploader only — **not** calling assignee |
 
 ### Rules
 
-- Lead already assigned to **another** dealer → `LEAD_004` (no steal)
-- No assignment + dealer in upload pool → create assignment for this dealer
-- `/next` and `/current` return the same snapshot; queue rows always include `assignedDealerId` for the authenticated dealer
+- Another dealer’s lead → **`LEAD_004`** (no steal)
+- Pool lead + eligible batch → create assignment for this dealer
+- Outcome actions (`called`, `follow_up`, …) also auto-claim when needed so saves persist after Start Call
 
 ### QA
 
-1. Dealer opens Calling Data → current lead visible
-2. **Start Call** → **200**, status `in_progress` (no `LEAD_004`)
-3. Second dealer cannot start the same in-progress lead
-4. Pool lead: first `start` assigns; second dealer gets `LEAD_004` or a different lead
+1. Dealer A → current lead → **Start Call** → **200**, `in_progress`
+2. Submit **called** / follow-up → **200**, persisted
+3. Dealer B does not get A’s in-progress lead from `/next`
+4. `POST …/assign` with `{ assignedDealerId, status: "assigned" }` → **200** (frontend retry path)
 
 ---
 
-## 4. Frontend (reference)
+## 4. Frontend (reference only)
 
 | File | Role |
 |------|------|
-| `lib/calling-lead-assignee.ts` | Assignee normalization + `LEAD_004` detection |
-| `lib/api.ts` | `claimCallingLead`, `updateCallingLeadAction` retries |
-| `app/dashboard/calling-data/page.tsx` | Queue filter + claim retry |
-| `app/dashboard/hr/page.tsx` | HR upload counts UI |
+| `lib/calling-lead-assignee.ts` | Assignee + `LEAD_004` detection |
+| `lib/api.ts` | `claimCallingLead`, `assignCallingLeadToMe`, action retries |
+| `app/dashboard/calling-data/page.tsx` | Dial + assign retries; optimistic UI if `LEAD_004` |
+| `lib/hr-upload-lead-display.ts` | HR count/table labels |
+| `lib/quotation-pdf-display.ts` | PDF display helpers |
+
+---
+
+## Priority summary for backend team
+
+| Priority | Topic | Status |
+|----------|--------|--------|
+| **1** | Calling queue `LEAD_004` | **Done** — A + B (claim/assign/patch) + C |
+| **2** | HR upload live counts | **Done** |
+| **3** | PDF flags on products | **Done** (+ migrate) |
 
 ---
 
