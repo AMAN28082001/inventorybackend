@@ -17,7 +17,7 @@ interface CustomerAttributes {
   updatedAt?: Date;
 }
 
-interface CustomerCreationAttributes extends Optional<CustomerAttributes, 'id' | 'dealerId' | 'createdAt' | 'updatedAt'> {}
+interface CustomerCreationAttributes extends Optional<CustomerAttributes, 'id' | 'notes' | 'dealerId' | 'createdAt' | 'updatedAt'> {}
 
 class Customer extends Model<CustomerAttributes, CustomerCreationAttributes> implements CustomerAttributes {
   public id!: string;

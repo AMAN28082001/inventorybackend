@@ -4,6 +4,36 @@ import { Customer, Quotation } from '../models/index-quotation';
 import { Op } from 'sequelize';
 import { logError, logInfo } from '../utils/loggerHelper';
 
+const isMissingNotesColumnError = (error: unknown): boolean => {
+  const message = String((error as any)?.parent?.message || (error as any)?.original?.message || (error as Error)?.message || '');
+  return /column\s+"notes"\s+does not exist/i.test(message) || /column\s+"notes"\s+of relation\s+"customers"/i.test(message);
+};
+
+const createCustomerRecord = async (payload: {
+  id: string;
+  firstName: string;
+  lastName: string;
+  mobile: string;
+  email: string | null;
+  streetAddress: string;
+  city: string;
+  state: string;
+  pincode: string;
+  notes?: string | null;
+  dealerId: string;
+}) => {
+  try {
+    return await Customer.create(payload);
+  } catch (error) {
+    if (payload.notes && isMissingNotesColumnError(error)) {
+      const { notes: _notes, ...withoutNotes } = payload;
+      logError('customers.notes column missing — create without notes (run yarn migrate)', error);
+      return Customer.create(withoutNotes);
+    }
+    throw error;
+  }
+};
+
 // Create customer
 export const createCustomer = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -34,7 +64,7 @@ export const createCustomer = async (req: Request, res: Response): Promise<void>
       return;
     }
 
-    const customer = await Customer.create({
+    const customer = await createCustomerRecord({
       id: uuidv4(),
       firstName,
       lastName: normalizedLastName,

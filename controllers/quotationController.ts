@@ -618,22 +618,44 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
       const normalizedLastName = (customer.lastName ?? '').trim();
       const normalizedEmail = (customer.email ?? '').trim();
       // Check if customer exists by mobile
+      const customerNotes = String(customer.notes ?? customer.remarks ?? '').trim() || null;
       let existingCustomer = await Customer.findOne({ where: { mobile: customer.mobile } });
       if (!existingCustomer) {
-        existingCustomer = await Customer.create({
-          id: uuidv4(),
-          firstName: customer.firstName,
-          lastName: normalizedLastName,
-          mobile: customer.mobile,
-          email: normalizedEmail !== '' ? normalizedEmail : null,
-          streetAddress: customer.address.street,
-          city: customer.address.city,
-          state: customer.address.state,
-          pincode: customer.address.pincode,
-          dealerId: req.dealer.id
-        });
+        try {
+          existingCustomer = await Customer.create({
+            id: uuidv4(),
+            firstName: customer.firstName,
+            lastName: normalizedLastName,
+            mobile: customer.mobile,
+            email: normalizedEmail !== '' ? normalizedEmail : null,
+            streetAddress: customer.address.street,
+            city: customer.address.city,
+            state: customer.address.state,
+            pincode: customer.address.pincode,
+            notes: customerNotes,
+            dealerId: req.dealer.id
+          });
+        } catch (createErr: any) {
+          const msg = String(createErr?.parent?.message || createErr?.message || '');
+          if (customerNotes && /column\s+"notes"/i.test(msg)) {
+            existingCustomer = await Customer.create({
+              id: uuidv4(),
+              firstName: customer.firstName,
+              lastName: normalizedLastName,
+              mobile: customer.mobile,
+              email: normalizedEmail !== '' ? normalizedEmail : null,
+              streetAddress: customer.address.street,
+              city: customer.address.city,
+              state: customer.address.state,
+              pincode: customer.address.pincode,
+              dealerId: req.dealer.id
+            });
+          } else {
+            throw createErr;
+          }
+        }
       } else {
-        await existingCustomer.update({
+        const updatePayload: Record<string, unknown> = {
           firstName: customer.firstName,
           lastName: normalizedLastName,
           email: normalizedEmail !== '' ? normalizedEmail : null,
@@ -641,7 +663,21 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
           city: customer.address.city,
           state: customer.address.state,
           pincode: customer.address.pincode
-        });
+        };
+        if (customerNotes) {
+          updatePayload.notes = customerNotes;
+        }
+        try {
+          await existingCustomer.update(updatePayload);
+        } catch (updateErr: any) {
+          const msg = String(updateErr?.parent?.message || updateErr?.message || '');
+          if (customerNotes && /column\s+"notes"/i.test(msg)) {
+            delete updatePayload.notes;
+            await existingCustomer.update(updatePayload);
+          } else {
+            throw updateErr;
+          }
+        }
       }
       finalCustomerId = existingCustomer.id;
     }
@@ -714,7 +750,13 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
 
     const isAgentPricing = req.user?.role === 'agent' || (req.user?.role === 'dealer' && req.dealer?.role !== 'admin');
     if (isAgentPricing) {
-      products = await applySellingPricesForAgent(products);
+      try {
+        products = await applySellingPricesForAgent(products);
+      } catch (agentPriceError) {
+        logError('Agent selling price lookup failed; using submitted product prices', agentPriceError, {
+          dealerId: req.dealer?.id
+        });
+      }
     }
 
     const discountAmountInput = discountAmount ?? req.body.pricing?.discountAmount;
@@ -1075,10 +1117,18 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
       }
     });
   } catch (error) {
-    logError('Create quotation error', error, { dealerId: req.dealer?.id });
+    const errMessage = error instanceof Error ? error.message : String(error);
+    logError('Create quotation error', error, {
+      dealerId: req.dealer?.id,
+      message: errMessage
+    });
+    const exposeDetail = process.env.NODE_ENV === 'development' || process.env.EXPOSE_API_ERRORS === 'true';
     res.status(500).json({
       success: false,
-      error: { code: 'SYS_001', message: 'Internal server error' }
+      error: {
+        code: 'SYS_001',
+        message: exposeDetail ? errMessage : 'Internal server error'
+      }
     });
   }
 };

@@ -14,7 +14,9 @@ const customerSchema = z.object({
   lastName: z.string().trim().optional().nullable().default(''),
   mobile: z.string().regex(/^\d{10}$/),
   email: z.string().trim().email('Invalid email format').optional().or(z.literal('')).nullable().default(''),
-  address: addressSchema
+  address: addressSchema,
+  notes: z.string().max(10000).optional().nullable(),
+  remarks: z.string().max(10000).optional().nullable()
 });
 
 const booleanOrString = z.union([
