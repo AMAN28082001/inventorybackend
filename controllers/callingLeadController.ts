@@ -360,9 +360,46 @@ const callingActionToApiJson = (row: any) => {
     kNumber: row.kNumber ?? row.k_number ?? row.lead?.kNumber ?? row.lead?.k_number ?? null,
     address: row.address ?? row.leadAddress ?? row.lead_address ?? row.lead?.address ?? null,
     nextFollowUpAt: toIsoStringOrNull(row.nextFollowUpAt),
-    assignmentStatus: row.status
+    assignmentStatus: row.status,
+    customerNote: row.lead?.customerNote ?? row.customerNote ?? null,
+    customer_note: row.lead?.customerNote ?? row.customerNote ?? null,
+    city: row.lead?.city ?? row.city ?? null,
+    state: row.lead?.state ?? row.state ?? null
   };
 };
+
+const isFutureScheduledFollowUp = (row: { nextFollowUpAt?: string | Date | null }, nowMs = Date.now()): boolean => {
+  if (!row.nextFollowUpAt) return false;
+  const at = new Date(row.nextFollowUpAt).getTime();
+  return Number.isFinite(at) && at > nowMs;
+};
+
+const filterDialledActions = (recentActions: any[]) => {
+  const nowMs = Date.now();
+  return recentActions.filter((row: any) => {
+    const actionName = String(row.action || '');
+    if (!['called', 'follow_up', 'not_interested', 'rescheduled'].includes(actionName)) {
+      return false;
+    }
+    if (actionName === 'rescheduled' && isFutureScheduledFollowUp(row, nowMs)) {
+      return false;
+    }
+    return true;
+  });
+};
+
+const buildQueueCountsPayload = (counts: Awaited<ReturnType<typeof buildDealerQueueCounts>>) => ({
+  pendingCount: counts.pendingCount,
+  queuedCount: counts.queuedCount,
+  scheduledCount: counts.scheduledCount,
+  completedCount: counts.completedCount,
+  counts: {
+    pending: counts.pendingCount,
+    queued: counts.queuedCount,
+    scheduled: counts.scheduledCount,
+    completed: counts.completedCount
+  }
+});
 
 const NOT_CONNECTED_STATUS_TEXTS = new Set([
   'call unanswered',
@@ -1116,8 +1153,94 @@ const buildCallingLeadQueuePayload = async (
     assignedToDealerId: assignment.dealerId,
     assigned_to_dealer_id: assignment.dealerId,
     status: assignment.status,
-    assignmentStatus: assignment.status
+    assignmentStatus: assignment.status,
+    callRemark: assignment.callRemark,
+    call_remark: assignment.callRemark,
+    nextFollowUpAt: toIsoStringOrNull(assignment.nextFollowUpAt),
+    actionAt: toIsoStringOrNull(assignment.actionAt),
+    customer_note: lead?.customerNote || null
   };
+};
+
+const patchDealerCallingLeadCustomerNote = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const dealerId = await resolveDealerIdForQueue(req);
+    if (!dealerId) {
+      res.status(401).json({
+        success: false,
+        error: { code: 'AUTH_003', message: 'User not authenticated' }
+      });
+      return;
+    }
+
+    const { leadId } = req.params;
+    const body = (req.body || {}) as Record<string, unknown>;
+    const noteRaw = body.customerNote ?? body.customer_note;
+    const customerNote =
+      noteRaw === null || noteRaw === undefined ? null : String(noteRaw).trim() || null;
+
+    let leadPayload: any = null;
+
+    await sequelize.transaction(async (transaction) => {
+      await resolveAssignmentForDealerAction(leadId, dealerId, transaction, true);
+      const lead = await CallingLead.findByPk(leadId, {
+        transaction,
+        lock: transaction.LOCK.UPDATE
+      });
+      if (!lead) {
+        const error: any = new Error('LEAD_NOT_FOUND');
+        error.code = 'RES_001';
+        throw error;
+      }
+      await lead.update({ customerNote }, { transaction });
+      const assignment = await DealerLeadAssignment.findOne({
+        where: {
+          [Op.and]: [{ leadId, dealerId }, LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE]
+        },
+        transaction
+      });
+      if (assignment) {
+        leadPayload = await buildCallingLeadQueuePayload(assignment, transaction);
+      } else {
+        await lead.reload({ transaction });
+        leadPayload = {
+          id: lead.id,
+          leadId: lead.id,
+          name: lead.name,
+          mobile: lead.mobile,
+          customerNote: lead.customerNote,
+          customer_note: lead.customerNote
+        };
+      }
+    });
+
+    applyNoCacheHeaders(res);
+    res.json({
+      success: true,
+      data: {
+        lead: leadPayload,
+        currentLead: leadPayload
+      }
+    });
+  } catch (error) {
+    const errorCode = (error as any)?.code;
+    if (errorCode === 'LEAD_004') {
+      res.status(403).json({ success: false, error: { code: 'LEAD_004', message: 'Lead not assigned to dealer' } });
+      return;
+    }
+    if (errorCode === 'RES_001') {
+      res.status(404).json({ success: false, error: { code: 'RES_001', message: 'Lead not found' } });
+      return;
+    }
+    logError('Patch dealer calling lead customer note error', error, {
+      dealerId: req.dealer?.id,
+      leadId: req.params.leadId
+    });
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
 };
 
 const assignCallingLeadToDealerFromRequest = async (
@@ -1205,6 +1328,19 @@ export const assignDealerCallingLead = async (req: Request, res: Response): Prom
 };
 
 export const patchDealerCallingLead = async (req: Request, res: Response): Promise<void> => {
+  const body = (req.body || {}) as Record<string, unknown>;
+  const hasCustomerNote = body.customerNote !== undefined || body.customer_note !== undefined;
+  const hasAssignIntent = Boolean(
+    body.assignedDealerId ||
+      body.assigned_dealer_id ||
+      body.dealerId ||
+      body.dealer_id ||
+      body.status
+  );
+  if (hasCustomerNote && !hasAssignIntent) {
+    await patchDealerCallingLeadCustomerNote(req, res);
+    return;
+  }
   await assignCallingLeadToDealerFromRequest(req, res, 'Patch dealer calling lead error');
 };
 
@@ -2033,9 +2169,7 @@ const buildDealerQueueSnapshot = async (dealerId: string, recentActionsLimit = 1
   ]);
   const lead = queue.length ? queue[0] : null;
 
-  const dialledActions = recentActions.filter((row: any) =>
-    ['called', 'follow_up', 'not_interested', 'rescheduled'].includes(String(row.action || ''))
-  );
+  const dialledActions = filterDialledActions(recentActions);
   const connectedActions = dialledActions.filter((row: any) => classifyActionStage(row) === 'connected');
   const notConnectedActions = dialledActions.filter((row: any) => classifyActionStage(row) === 'not_connected');
 
@@ -2054,6 +2188,8 @@ const buildDealerQueueSnapshot = async (dealerId: string, recentActionsLimit = 1
       completed: counts.completedCount
     },
     scheduledLeads,
+    upcomingFollowUps: scheduledLeads,
+    rescheduledLeads: scheduledLeads,
     recentActions,
     dialledActions,
     connectedActions,
@@ -2217,6 +2353,9 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
       editMode?: boolean;
       status_category?: string;
       status_text?: string;
+      statusText?: string;
+      remark?: string;
+      call_remark?: string;
       claim?: boolean | string;
       autoAssign?: boolean | string;
       assignedDealerId?: string;
@@ -2224,23 +2363,33 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
 
     const allowClaim = shouldAllowClaimOnAction(action, requestBody);
 
-    const parsed = parseTaggedCallRemark(callRemark ?? null);
+    const rawCallRemarkInput =
+      String(callRemark ?? requestBody.call_remark ?? '').trim() || null;
+    const parsed = parseTaggedCallRemark(rawCallRemarkInput);
     const hasParsedTags = Boolean(parsed.statusCategory || parsed.status);
+    const freeRemark = String(requestBody.remark ?? '').trim() || null;
 
     const effectiveStatusCategory =
       normalizeStatusCategory(statusCategoryKey) ||
       normalizeStatusCategory(status_category) ||
       normalizeStatusCategory(statusCategory) ||
       normalizeStatusCategory(parsed.statusCategory) ||
-      inferStatusCategoryFromRemark(callRemark) ||
+      inferStatusCategoryFromRemark(rawCallRemarkInput) ||
       null;
     const effectiveStatusLabel =
-      statusCategoryLabel || statusLabel || status_text || parsed.status || null;
-    const effectiveStatusReason = (hasParsedTags ? parsed.remark : null) || statusReason || null;
+      statusCategoryLabel ||
+      statusLabel ||
+      status_text ||
+      String(requestBody.statusText ?? '').trim() ||
+      parsed.status ||
+      null;
+    const effectiveStatusReason =
+      (hasParsedTags ? parsed.remark : null) || statusReason || freeRemark || null;
     const legacyCallRemark =
-      effectiveStatusCategory && effectiveStatusLabel
+      rawCallRemarkInput ||
+      (effectiveStatusCategory && effectiveStatusLabel
         ? `[${effectiveStatusCategory}] ${effectiveStatusLabel}${effectiveStatusReason ? ` | ${effectiveStatusReason}` : ''}`
-        : null;
+        : null);
 
     if (effectiveStatusCategory && !(ALLOWED_STATUS_CATEGORIES as readonly string[]).includes(effectiveStatusCategory)) {
       res.status(400).json({
@@ -2296,7 +2445,7 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
     }
 
     const requiresManualReason = effectiveStatusReason === 'Others' || isCustomReason === true;
-    if (requiresManualReason && (!callRemark || !callRemark.trim())) {
+    if (requiresManualReason && !rawCallRemarkInput && !(effectiveStatusCategory && effectiveStatusLabel)) {
       res.status(400).json({
         success: false,
         error: {
@@ -2306,6 +2455,28 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
         }
       });
       return;
+    }
+
+    const isOutcomeAction = action !== 'start';
+    const isEditModeRequest = Boolean(editMode);
+    if (isOutcomeAction && !isEditModeRequest) {
+      const hasRemarkPayload = Boolean(
+        rawCallRemarkInput || (effectiveStatusCategory && effectiveStatusLabel)
+      );
+      if (!hasRemarkPayload) {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'VAL_001',
+            message: 'Validation error',
+            details: [{
+              field: 'callRemark',
+              message: 'callRemark or statusCategory + statusText is required for this action'
+            }]
+          }
+        });
+        return;
+      }
     }
 
     const OUTCOME_ACTIONS: Array<'called' | 'follow_up' | 'not_interested' | 'rescheduled'> = [
@@ -2456,15 +2627,7 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
       if (action === 'start') {
         if (assignment.status === 'in_progress') {
           await assignment.reload({ transaction });
-          updatedData = {
-            leadId: assignment.leadId,
-            status: assignment.status,
-            assignmentStatus: assignment.status,
-            action: assignment.action,
-            callRemark: assignment.callRemark,
-            nextFollowUpAt: assignment.nextFollowUpAt,
-            actionAt: assignment.actionAt
-          };
+          updatedData = await buildCallingLeadQueuePayload(assignment, transaction);
           return;
         }
         const rescheduledDueForStart = isRescheduledDue(assignment, now);
@@ -2479,15 +2642,7 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
             { transaction }
           );
           await assignment.reload({ transaction });
-          updatedData = {
-            leadId: assignment.leadId,
-            status: assignment.status,
-            assignmentStatus: assignment.status,
-            action: assignment.action,
-            callRemark: assignment.callRemark,
-            nextFollowUpAt: assignment.nextFollowUpAt,
-            actionAt: assignment.actionAt
-          };
+          updatedData = await buildCallingLeadQueuePayload(assignment, transaction);
           return;
         }
         if (['queued', 'assigned', 'active'].includes(assignment.status)) {
@@ -2501,15 +2656,7 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
             { transaction }
           );
           await assignment.reload({ transaction });
-          updatedData = {
-            leadId: assignment.leadId,
-            status: assignment.status,
-            assignmentStatus: assignment.status,
-            action: assignment.action,
-            callRemark: assignment.callRemark,
-            nextFollowUpAt: assignment.nextFollowUpAt,
-            actionAt: assignment.actionAt
-          };
+          updatedData = await buildCallingLeadQueuePayload(assignment, transaction);
           return;
         }
         const error: any = new Error('INVALID_TRANSITION');
@@ -2587,13 +2734,27 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
     });
 
     applyNoCacheHeaders(res);
-    res.json({
-      success: true,
-      data: {
-        ...updatedData,
-        ...(await buildDealerQueueSnapshot(dealerId, 1000))
-      }
-    });
+
+    if (action === 'start') {
+      const counts = await buildDealerQueueCounts(dealerId);
+      res.json({
+        success: true,
+        data: {
+          lead: updatedData,
+          currentLead: updatedData,
+          ...buildQueueCountsPayload(counts)
+        }
+      });
+    } else {
+      const snapshot = await buildDealerQueueSnapshot(dealerId, 1000);
+      res.json({
+        success: true,
+        data: {
+          ...updatedData,
+          ...snapshot
+        }
+      });
+    }
 
     if (action !== 'start') {
       emitRealtime(realtimeEvents.callingActionsUpdated, {

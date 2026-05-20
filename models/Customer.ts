@@ -11,6 +11,7 @@ interface CustomerAttributes {
   city: string;
   state: string;
   pincode: string;
+  notes?: string | null;
   dealerId?: string | null;
   createdAt?: Date;
   updatedAt?: Date;
@@ -28,6 +29,7 @@ class Customer extends Model<CustomerAttributes, CustomerCreationAttributes> imp
   public city!: string;
   public state!: string;
   public pincode!: string;
+  public notes!: string | null;
   public dealerId!: string | null;
   public readonly createdAt!: Date;
   public readonly updatedAt!: Date;
@@ -71,6 +73,10 @@ Customer.init(
     pincode: {
       type: DataTypes.STRING(6),
       allowNull: false
+    },
+    notes: {
+      type: DataTypes.TEXT,
+      allowNull: true
     },
     dealerId: {
       type: DataTypes.STRING(50),

@@ -15,9 +15,10 @@ export const createCustomer = async (req: Request, res: Response): Promise<void>
       return;
     }
 
-    const { firstName, lastName, mobile, email, address } = req.body;
+    const { firstName, lastName, mobile, email, address, notes, remarks } = req.body;
     const normalizedLastName = (lastName ?? '').trim();
     const normalizedEmail = (email ?? '').trim();
+    const normalizedNotes = String(notes ?? remarks ?? '').trim() || null;
 
     // Check if customer with mobile already exists
     const existingCustomer = await Customer.findOne({ where: { mobile } });
@@ -43,6 +44,7 @@ export const createCustomer = async (req: Request, res: Response): Promise<void>
       city: address.city,
       state: address.state,
       pincode: address.pincode,
+      notes: normalizedNotes,
       dealerId: req.dealer.id
     });
 
@@ -63,6 +65,8 @@ export const createCustomer = async (req: Request, res: Response): Promise<void>
           state: customerData.state || '',
           pincode: customerData.pincode || ''
         },
+        notes: customerData.notes ?? '',
+        remarks: customerData.notes ?? '',
         createdAt: customerData.createdAt,
         updatedAt: customerData.updatedAt
       }

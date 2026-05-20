@@ -64,7 +64,7 @@ Dealer sees a lead from `/next` but `PATCH …/action` returned **403 / `LEAD_00
 }
 ```
 
-If `assignedDealerId` ≠ authenticated dealer → **`LEAD_004`**.
+Assign/claim endpoints reject a different dealer’s `assignedDealerId`; **`PATCH …/action`** auto-claims on `start` (no early body-id 403).
 
 ### Field rules
 
@@ -89,15 +89,63 @@ If `assignedDealerId` ≠ authenticated dealer → **`LEAD_004`**.
 
 ---
 
-## 4. Frontend (reference only)
+## 4. Calling remarks, queue tabs & start vs submit
+
+**Status: implemented**
+
+### 4.1 Remarks on `PATCH …/calling-queue/{leadId}/action`
+
+Accepts: `callRemark` / `call_remark`, `statusCategory` / `status_category`, `statusText` / `status_text`, `statusLabel`, `remark`, tagged `[category] label | free text`.
+
+- **`start`:** remark optional; sets `in_progress` + assignee.
+- **Outcomes** (`called`, `follow_up`, `not_interested`, `rescheduled`): require `callRemark` **or** `statusCategory` + `statusText` (unless `editMode`).
+- Persists on assignment + `calling_action_history`; echoed on GET queue/history.
+
+### 4.2 Customer note
+
+`PATCH /api/dealers/me/calling-queue/{leadId}` with body `{ "customerNote": "..." }` only (no assign fields) → updates `calling_leads.customerNote`.
+
+### 4.3 Quotation prefill
+
+`POST /api/customers` accepts optional `notes` and `remarks` (same value). Migration: `20260520120000-add-notes-to-customers.js`.
+
+### 4.4 Queue tab arrays (`GET …/next` & `/current`)
+
+| Key | Tab |
+|-----|-----|
+| `scheduledLeads`, `upcomingFollowUps`, `rescheduledLeads` | Scheduled (future `nextFollowUpAt`) |
+| `dialledActions` | Dialled (excludes future scheduled follow-ups) |
+| `connectedActions` / `notConnectedActions` | Connected / Not connected subsets |
+| `recentActions` / `actionHistory` | Analytics / history |
+
+### 4.5 `start` vs completion response
+
+| Action | Response |
+|--------|----------|
+| `start` | `lead` + `currentLead` (same row, `in_progress`) + `counts` — **no** `nextLead`, **no** full queue snapshot |
+| Outcomes | Full queue snapshot + `nextLead` = new queue head after promote |
+
+### QA
+
+1. Submit with remarks → visible in history GET.
+2. Scheduled tab ≠ Dialled (no future follow-ups only under Dialled).
+3. Double **Start** → same lead until Submit.
+4. **Create Quotation** from calling → customer `notes` saved.
+5. `PATCH` customer note on lead → echoed on next queue GET.
+
+---
+
+## 5. Frontend (reference only)
 
 | File | Role |
 |------|------|
 | `lib/calling-lead-assignee.ts` | Assignee + `LEAD_004` detection |
+| `lib/calling-remark-payload.ts` | Remark PATCH body enrichment |
 | `lib/api.ts` | `claimCallingLead`, `assignCallingLeadToMe`, action retries |
-| `app/dashboard/calling-data/page.tsx` | Dial + assign retries; optimistic UI if `LEAD_004` |
+| `app/dashboard/calling-data/page.tsx` | Queue tabs, remarks, Start/Submit |
 | `lib/hr-upload-lead-display.ts` | HR count/table labels |
 | `lib/quotation-pdf-display.ts` | PDF display helpers |
+| `lib/phone-dialer.ts` | Desktop: copy number (no `tel:` app picker) |
 
 ---
 
@@ -108,6 +156,7 @@ If `assignedDealerId` ≠ authenticated dealer → **`LEAD_004`**.
 | **1** | Calling queue `LEAD_004` | **Done** — A + B (claim/assign/patch) + C |
 | **2** | HR upload live counts | **Done** |
 | **3** | PDF flags on products | **Done** (+ migrate) |
+| **4** | Remarks, tabs, start vs submit, customer note | **Done** (+ customer `notes` migrate) |
 
 ---
 
