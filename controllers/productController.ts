@@ -359,7 +359,7 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
         attributes: ['serial_number']
       });
       if (existingSerials.length > 0) {
-        const duplicates = existingSerials.map((s) => (s as any).serial_number);
+        const duplicates = existingSerials.map((s) => s.serial_number);
         res.status(400).json({ error: `Duplicate serial numbers found: ${duplicates.join(', ')}` });
         return;
       }
@@ -730,7 +730,7 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
           transaction
         });
         if (existingSerials.length > 0) {
-          const duplicates = existingSerials.map((s) => (s as any).serial_number);
+          const duplicates = existingSerials.map((s) => s.serial_number);
           throw new Error(`Duplicate serial numbers found: ${duplicates.join(', ')}`);
         }
 

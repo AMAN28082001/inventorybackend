@@ -118,6 +118,7 @@ export {
   SaleItem,
   InventoryTransaction,
   StockReturn,
+  ProductSerialNumber,
   AccountManager,
   AccountManagerHistory,
   CallingLead,

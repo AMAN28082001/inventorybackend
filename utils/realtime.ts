@@ -1,5 +1,5 @@
 import { createServer, Server as HttpServer } from 'http';
-import { Server as SocketIOServer } from 'socket.io';
+import { Server as SocketIOServer, Socket } from 'socket.io';
 import jwt from 'jsonwebtoken';
 
 let io: SocketIOServer | null = null;
@@ -14,7 +14,7 @@ export const attachRealtimeServer = (app: any, allowedOrigins: string[]): HttpSe
 
   io = new SocketIOServer(httpServer, {
     cors: {
-      origin: (origin, callback) => {
+      origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
         if (!origin) return callback(null, true);
         if (allowed.has(origin)) return callback(null, true);
         return callback(new Error('Not allowed by CORS'));
@@ -23,7 +23,7 @@ export const attachRealtimeServer = (app: any, allowedOrigins: string[]): HttpSe
     }
   });
 
-  io.use((socket, next) => {
+  io.use((socket: Socket, next: (err?: Error) => void) => {
     const authToken = socket.handshake.auth?.token;
     const headerToken = socket.handshake.headers.authorization;
     const rawToken = typeof authToken === 'string'
@@ -57,7 +57,7 @@ export const attachRealtimeServer = (app: any, allowedOrigins: string[]): HttpSe
     next();
   });
 
-  io.on('connection', (socket) => {
+  io.on('connection', (socket: Socket) => {
     const identity = socket.data.identity as { id: string; role: string } | null;
     if (identity) {
       socket.join(`user:${identity.id}`);
