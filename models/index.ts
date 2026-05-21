@@ -11,6 +11,7 @@ import Sale from './Sale';
 import SaleItem from './SaleItem';
 import InventoryTransaction from './InventoryTransaction';
 import StockReturn from './StockReturn';
+import Review from './Review';
 
 // Define all associations
 // User associations
@@ -89,7 +90,8 @@ export {
   Sale,
   SaleItem,
   InventoryTransaction,
-  StockReturn
+  StockReturn,
+  Review
 };
 
 

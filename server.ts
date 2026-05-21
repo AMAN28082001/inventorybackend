@@ -18,6 +18,7 @@ import stockRequestRoutes from './routes/stockRequestRoutes';
 import salesRoutes from './routes/salesRoutes';
 import inventoryTransactionRoutes from './routes/inventoryTransactionRoutes';
 import stockReturnRoutes from './routes/stockReturnRoutes';
+import reviewRoutes from './routes/reviewRoutes';
 
 // Import routes (Quotation System)
 import quotationAuthRoutes from './routes/quotationAuthRoutes';
@@ -33,7 +34,7 @@ const app: Application = express();
 const PORT = process.env.PORT || 3000;
 
 // Middleware
-const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3000', 'http://localhost:3050', 'http://localhost:3001', 'http://43.204.133.228:3051', 'http://43.204.133.228:3050', 'http://localhost:3002', 'http://localhost:3003','http://quotation.chairbordsolar.com'];
+const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:5173', 'http://localhost:3000', 'http://localhost:3050', 'http://localhost:3001', 'http://43.204.133.228:3051', 'http://43.204.133.228:3050', 'http://localhost:3002', 'http://localhost:3003','http://quotation.chairbordsolar.com'];
 app.use(cors({
   origin: (origin, callback) => {
     // Allow requests with no origin (like mobile apps or curl requests)
@@ -91,6 +92,7 @@ app.use('/api/stock-requests', stockRequestRoutes);
 app.use('/api/sales', salesRoutes);
 app.use('/api/inventory-transactions', inventoryTransactionRoutes);
 app.use('/api/stock-returns', stockReturnRoutes);
+app.use('/api/reviews', reviewRoutes);
 
 // 404 handler res
 app.use((_: Request, res: Response) => {
