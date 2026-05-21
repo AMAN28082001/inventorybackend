@@ -20,6 +20,7 @@ import CallingActionHistory from './CallingActionHistory';
 import CallingLeadUploadBatch from './CallingLeadUploadBatch';
 import CallingLeadUploadRow from './CallingLeadUploadRow';
 import QuotationPaymentPhase from './QuotationPaymentPhase';
+import Review from './Review';
 
 // Define all associations
 // User associations
@@ -119,14 +120,13 @@ export {
   StockReturn,
   AccountManager,
   AccountManagerHistory,
-  ProductSerialNumber,
   CallingLead,
   DealerLeadAssignment,
   CallingActionHistory,
   CallingLeadUploadBatch,
   CallingLeadUploadRow,
-  QuotationPaymentPhase
-};
-
+  QuotationPaymentPhase,
+  Review
+}
 
 

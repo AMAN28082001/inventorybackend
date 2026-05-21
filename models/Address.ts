@@ -66,6 +66,3 @@ Address.init(
 );
 
 export default Address;
-
-
-
