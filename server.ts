@@ -231,7 +231,7 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction): void =>
   });
 });
 
-// Start HTTP + WebSocket server after DB is ready (avoids 500s when schema lags the Sequelize model)
+// Start HTTP + WebSocket server after DB is ready (avoids 500s when schema lags the Sequelize )
 const httpServer = attachRealtimeServer(app, allowedOrigins);
 void sequelizeBootstrap.then(() => {
   httpServer.listen(PORT, () => {
