@@ -24,7 +24,7 @@ const CITY_KEYS = ['city'];
 const STATE_KEYS = ['state', 'data ref. / state', 'data ref/state', 'data ref state'];
 const NOTE_KEYS = ['customernote', 'customer note', 'note', 'notes', 'remark', 'remarks'];
 const DEFAULT_ACTIVE_LIMIT_PER_DEALER = Number(process.env.ACTIVE_LIMIT_PER_DEALER || 1);
-const CALLING_ACTION_FILTER_RANGES = ['daily', 'weekly', 'monthly', 'last_month', 'all'] as const;
+const CALLING_ACTION_FILTER_RANGES = ['daily', 'weekly', 'monthly', 'last_month', 'custom', 'all'] as const;
 const REPORT_ACTIONS = ['called', 'follow_up', 'not_interested', 'rescheduled'] as const;
 const ALLOWED_STATUS_CATEGORIES = [
   'call_connectivity',
@@ -424,13 +424,37 @@ const parsePositiveInt = (value: unknown, fallback: number): number => {
   return normalized > 0 ? normalized : fallback;
 };
 
-const parseDateBoundary = (value: unknown, boundary: 'start' | 'end'): Date | null => {
+/**
+ * HR/Admin calling-actions GET (§J): supports ISO timestamps from the SPA and plain YYYY-MM-DD.
+ * Plain dates use local start/end-of-day; full ISO strings are used as parsed (inclusive window on action_at).
+ */
+const parseReportDateQueryParam = (value: unknown, boundary: 'start' | 'end'): Date | null => {
   if (value === undefined || value === null || value === '') return null;
-  const parsed = new Date(String(value));
-  if (Number.isNaN(parsed.getTime())) return null;
-  if (boundary === 'start') parsed.setHours(0, 0, 0, 0);
-  if (boundary === 'end') parsed.setHours(23, 59, 59, 999);
-  return parsed;
+  const s = String(value).trim();
+  if (!s) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    const [y, m, d] = s.split('-').map(Number);
+    const parsed = new Date(y, m - 1, d);
+    if (Number.isNaN(parsed.getTime())) return null;
+    if (boundary === 'start') parsed.setHours(0, 0, 0, 0);
+    else parsed.setHours(23, 59, 59, 999);
+    return parsed;
+  }
+  const parsed = new Date(s);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+/** Monday 00:00:00.000 — Sunday 23:59:59.999 in the server's local timezone (§J weekly alignment). */
+const getMondayThroughSundayWeekBounds = (reference: Date): { from: Date; to: Date } => {
+  const from = new Date(reference);
+  const dow = from.getDay();
+  const diffToMonday = dow === 0 ? -6 : 1 - dow;
+  from.setDate(from.getDate() + diffToMonday);
+  from.setHours(0, 0, 0, 0);
+  const to = new Date(from);
+  to.setDate(to.getDate() + 6);
+  to.setHours(23, 59, 59, 999);
+  return { from, to };
 };
 
 const getMonthRange = (reference: Date): { from: Date; to: Date } => {
@@ -490,6 +514,10 @@ const resolveReportDateRange = (
   let rangeEnd: Date | null = endDate;
   const reqDateRange = reqDateRangeRaw.toLowerCase();
 
+  if (range === 'custom' && (startDate || endDate)) {
+    return { rangeStart, rangeEnd };
+  }
+
   if (reqDateRange === 'custom' && (startDate || endDate)) {
     return { rangeStart, rangeEnd };
   }
@@ -505,11 +533,9 @@ const resolveReportDateRange = (
       rangeEnd = new Date(now);
       rangeEnd.setHours(23, 59, 59, 999);
     } else if (effectivePreset === 'weekly' || effectivePreset === 'week') {
-      rangeStart = new Date(now);
-      rangeStart.setDate(now.getDate() - 6);
-      rangeStart.setHours(0, 0, 0, 0);
-      rangeEnd = new Date(now);
-      rangeEnd.setHours(23, 59, 59, 999);
+      const week = getMondayThroughSundayWeekBounds(now);
+      rangeStart = week.from;
+      rangeEnd = week.to;
     } else if (effectivePreset === 'monthly' || effectivePreset === 'month') {
       const monthRange = getMonthRange(now);
       rangeStart = monthRange.from;
@@ -566,6 +592,7 @@ const buildCallingActionsFilter = (req: Request): WhereOptions => {
     monthly: 'monthly',
     lastmonth: 'last_month',
     last_month: 'last_month',
+    custom: 'custom',
     all: 'all'
   };
   const requestedRange = rangeAliases[rawRange] || 'all';
@@ -590,8 +617,8 @@ const buildCallingActionsFilter = (req: Request): WhereOptions => {
   const action = req.query.action ? String(req.query.action).trim() : '';
   const search = req.query.search ? String(req.query.search).trim() : '';
   const dateRange = req.query.dateRange ? String(req.query.dateRange).trim().toLowerCase() : '';
-  const startDate = parseDateBoundary(req.query.startDate ?? req.query.start_date, 'start');
-  const endDate = parseDateBoundary(req.query.endDate ?? req.query.end_date, 'end');
+  const startDate = parseReportDateQueryParam(req.query.startDate ?? req.query.start_date, 'start');
+  const endDate = parseReportDateQueryParam(req.query.endDate ?? req.query.end_date, 'end');
 
   const { rangeStart, rangeEnd } = resolveReportDateRange(range, dateRange, startDate, endDate);
 
@@ -649,7 +676,7 @@ const buildCallingActionsFilter = (req: Request): WhereOptions => {
 
 const buildCallingActionsResponse = async (req: Request) => {
   const page = parsePositiveInt(req.query.page, 1);
-  const limit = Math.min(parsePositiveInt(req.query.limit, 20), 100);
+  const limit = Math.min(parsePositiveInt(req.query.limit, 20), 2000);
   const offset = (page - 1) * limit;
   const where = buildCallingActionsFilter(req);
 
@@ -735,9 +762,11 @@ const buildCallingActionsResponse = async (req: Request) => {
     // Primary list key
     actions: actionRows,
     // Compatibility aliases for different frontend integrations
+    callingActions: actionRows,
     list: actionRows,
     rows: actionRows,
     items: actionRows,
+    logs: actionRows,
     summary: {
       interested: summary.interested,
       followUp: summary.follow_up,

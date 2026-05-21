@@ -327,6 +327,8 @@ router.patch('/dealers/:dealerId/activate', activateDealer);
  */
 router.get('/statistics', getSystemStatistics);
 router.get('/calling-actions', getAdminCallingActions);
+router.get('/calling-queue/actions', getAdminCallingActions);
+router.get('/leads/actions', getAdminCallingActions);
 
 /**
  * @swagger

@@ -1,6 +1,36 @@
 # Backend changes handoff (May 2026)
 
-Action items from recent frontend work. Full detail: `BACKEND_CHANGES_REQUIRED.md` (**§7.7–7.8**, dealer queue ~2307, **§X**). Reference: `BACKEND_ADMIN_QUOTATION_STATUS.ts`, `controllers/callingLeadController.ts`, `utils/quotationProductPdfDisplay.ts`.
+**Single handoff doc for the API team.** Full specs: `BACKEND_CHANGES_REQUIRED.md` (§7.8, dealer queue §E–§H, §J, §X, §Y). Reference contracts: `BACKEND_ADMIN_QUOTATION_STATUS.ts`. Implementation: `controllers/callingLeadController.ts`, `controllers/quotationController.ts`, `controllers/customerController.ts`, `utils/quotationProductPdfDisplay.ts`.
+
+## Sprint checklist (copy for tracking)
+
+| # | Priority | Area | Status | Handoff § |
+|---|----------|------|--------|-----------|
+| 1 | High | HR upload GET live counts | **Done** | §1 |
+| 2 | High | PATCH calling action + remarks | **Done** | §4.1 |
+| 3 | High | Queue GET tab buckets | **Done** | §4.4 |
+| 4 | High | `start` without `nextLead` | **Done** | §4.5 |
+| 5 | High | Claim on `start` / `LEAD_004` | **Done** | §3 |
+| 6 | High | HR + Admin calling-actions GET | **Done** | §4.8 / §J |
+| 7 | Medium | Customer note on lead PATCH | **Done** | §4.2 |
+| 8 | Medium | `POST /customers` `notes` / `remarks` | **Done** | §4.3 |
+| 9 | Medium | PDF flags on products (not in validation) | **Done** | §2 |
+| 10 | Medium | Quotation create stability | **Done** | §5 |
+
+**Deploy before QA:**
+
+```bash
+yarn migrate
+```
+
+| Migration | Purpose |
+|-----------|---------|
+| `20260519120000-add-pdf-display-flags-to-quotation-products.js` | `pdfUsePanelSizeRange`, `pdfUseInverterBrandOptions` |
+| `20260520120000-add-notes-to-customers.js` | `customers.notes` for calling → quotation prefill |
+
+Optional: `TZ=Asia/Kolkata` if weekly HR reports must match SPA Mon–Sun in IST.
+
+**Not required on backend:** logout console noise (frontend); dealer analytics date filter (client-side on queue `recentActions`).
 
 ---
 
@@ -133,9 +163,40 @@ Accepts: `callRemark` / `call_remark`, `statusCategory` / `status_category`, `st
 4. **Create Quotation** from calling → customer `notes` saved.
 5. `PATCH` customer note on lead → echoed on next queue GET.
 
+### 4.8 HR / Admin — `GET` calling-actions (date & dealer filters) — **§J**
+
+**Status: implemented**
+
+| Role | Paths |
+|------|--------|
+| HR | `GET /api/hr/calling-actions`, `GET /api/hr/calling-queue/actions` |
+| Admin | `GET /api/admin/calling-actions`, `GET /api/admin/calling-queue/actions`, `GET /api/admin/leads/actions` |
+
+**Query params:** `limit` (default 20, max **2000**), optional `dealerId` / `dealer_id`, `range` (`daily` \| `weekly` \| `monthly` \| `last_month` \| `all` \| **`custom`**), `startDate` / `endDate` / snake_case mirrors.
+
+**Filtering**
+
+- When **`startDate` and `endDate`** are both present, rows are filtered to **`action_at`** (with fallback to `created_at` for legacy rows missing `action_at`) within that inclusive window — including when `range=all` or `range=custom`.
+- **`range=all`** with no dates → no date filter (subject to `limit` / pagination).
+- **`range=weekly`** with no dates → **Monday 00:00:00** through **Sunday 23:59:59.999** in the **server’s local timezone** (document TZ in ops runbooks; align with `lib/calling-report-date-range.ts` on the frontend).
+- **`range=custom`** relies on `startDate` / `endDate`; if omitted, no date window is applied.
+
+**Response:** same handler returns `actions`, **`callingActions`**, `list`, `rows`, `items`, **`logs`**, plus `summary`, `dealers`, `pagination`.
+
 ---
 
-## 5. Frontend (reference only)
+## 5. Quotation create stability (sprint #10)
+
+**Status: implemented**
+
+- `POST /api/quotations` — product catalog validation returns **400** `VAL_003` with `details[]` (not unhandled throw).
+- `pdfUsePanelSizeRange` / `pdfUseInverterBrandOptions` extracted via `extractPdfDisplayFlagsFromProducts`; **not** passed into `validateProductSelection` or `calculatePricing`.
+- Agent selling-price lookup wrapped in try/catch so pricing service failures do not abort create.
+- Customer embed on create uses `notes` / `remarks` with fallback if `customers.notes` column missing (run migration).
+
+---
+
+## 6. Frontend (reference only)
 
 | File | Role |
 |------|------|
@@ -157,6 +218,18 @@ Accepts: `callRemark` / `call_remark`, `statusCategory` / `status_category`, `st
 | **2** | HR upload live counts | **Done** |
 | **3** | PDF flags on products | **Done** (+ migrate) |
 | **4** | Remarks, tabs, start vs submit, customer note | **Done** (+ customer `notes` migrate) |
+| **5** | HR/Admin `GET` calling-actions (`dealerId`, dates, `custom`, aliases) | **Done** — §4.8 |
+| **6** | Quotation create stability | **Done** — §5 |
+
+### HR/Admin GET example
+
+```http
+GET /api/hr/calling-actions?limit=2000&dealerId={uuid}&range=weekly&startDate=2026-05-19T00:00:00.000Z&endDate=2026-05-25T23:59:59.999Z
+```
+
+When both `startDate` and `endDate` are sent, filtering uses that window on `action_at` (legacy rows may fall back to `created_at`). `range=weekly` without dates uses **Mon–Sun** in server local TZ.
+
+**Assignee rule:** `assignedDealerId` = who is calling; `dealerId` on lead = uploader/CRM only.
 
 ---
 
@@ -164,5 +237,5 @@ Accepts: `callRemark` / `call_remark`, `statusCategory` / `status_category`, `st
 
 | Doc | Section |
 |-----|---------|
-| `BACKEND_CHANGES_REQUIRED.md` | §7.7–7.8, dealer queue, §X |
+| `BACKEND_CHANGES_REQUIRED.md` | §7.7–7.8, dealer queue, §J, §X |
 | `BACKEND_ADMIN_QUOTATION_STATUS.ts` | Reference contracts |
