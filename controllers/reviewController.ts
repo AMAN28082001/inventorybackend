@@ -116,6 +116,7 @@ export const getReviews = async (req: Request, res: Response): Promise<void> => 
       order: sequelize.random(),
       attributes: ['id', 'content']
     });
+    
 
     const reviewsPlain = rows.map((r) => r.get({ plain: true }));
     logInfo('Get reviews', {
