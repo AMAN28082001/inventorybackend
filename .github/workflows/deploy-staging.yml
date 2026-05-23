@@ -44,10 +44,10 @@ jobs:
       - name: Create .env file on staging server
         uses: appleboy/ssh-action@v1.0.0
         with:
-          host: ${{ secrets.STAGING_HOST }}
-          username: ${{ secrets.STAGING_USER }}
-          key: ${{ secrets.STAGING_SSH_KEY }}
-          port: ${{ secrets.STAGING_PORT || 22 }}
+          host: ${{ secrets.HOSTINGER_HOST }}
+          username: ${{ secrets.HOSTINGER_USER }}
+          key: ${{ secrets.HOSTINGER_SSH_KEY }}
+          port: ${{ secrets.HOSTINGER_PORT || 22 }}
           script: |
             cd ${{ secrets.STAGING_DEPLOY_PATH || '/opt/chairbord-api' }}
             cat > .env << EOF
