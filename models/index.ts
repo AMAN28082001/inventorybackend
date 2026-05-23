@@ -23,6 +23,7 @@ import QuotationPaymentPhase from './QuotationPaymentPhase';
 import Review from './Review';
 
 // Define all associations
+
 // User associations
 User.hasMany(Product, { foreignKey: 'created_by', as: 'createdProducts' });
 User.hasMany(AdminInventory, { foreignKey: 'admin_id', as: 'inventory' });
