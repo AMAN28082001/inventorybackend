@@ -59,7 +59,6 @@ const getActor = (req: Request): { id?: string; role?: string; username?: string
     role: actor.role,
     username: actor.username
   };
-  
 };
 
 // Middleware
