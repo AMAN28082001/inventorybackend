@@ -1,6 +1,6 @@
 # Backend changes handoff (May 2026)
 
-**Single handoff doc for the API team.** Full specs: `BACKEND_CHANGES_REQUIRED.md` (§7.8, dealer queue §E–§H, §J, §X, §Y). Reference contracts: `BACKEND_ADMIN_QUOTATION_STATUS.ts`. Implementation: `controllers/callingLeadController.ts`, `controllers/quotationController.ts`, `controllers/customerController.ts`, `utils/quotationProductPdfDisplay.ts`.
+**Single handoff doc for the API team.** Full specs: `BACKEND_CHANGES_REQUIRED.md` (§7.8, dealer queue §E–§H, §J, §X, §Y). Reference contracts: `BACKEND_ADMIN_QUOTATION_STATUS.ts`. Implementation: `controllers/callingLeadController.ts`, `controllers/quotationController.ts`, `controllers/visitController.ts`, `controllers/customerController.ts`, `utils/quotationProductPdfDisplay.ts`, `utils/s3Service.ts`.
 
 ## Sprint checklist (copy for tracking)
 
@@ -14,8 +14,11 @@
 | 6 | High | HR + Admin calling-actions GET | **Done** | §4.8 / §J |
 | 7 | Medium | Customer note on lead PATCH | **Done** | §4.2 |
 | 8 | Medium | `POST /customers` `notes` / `remarks` | **Done** | §4.3 |
-| 9 | Medium | PDF flags on products (not in validation) | **Done** | §2 |
+| 9 | Medium | PDF panel range keys on products (not in validation) | **Done** | §2 |
 | 10 | Medium | Quotation create stability | **Done** | §5 |
+| 11 | High | Visitor complete visit (S3 + presigned URLs) | **Done** | §6 |
+| 12 | High | Quotation documents PATCH + ZIP | **Done** | §7 |
+| 13 | Medium | `meterBrand` combined label + `validUntil` +7d | **Done** | §2 |
 
 **Deploy before QA:**
 
@@ -25,7 +28,8 @@ yarn migrate
 
 | Migration | Purpose |
 |-----------|---------|
-| `20260519120000-add-pdf-display-flags-to-quotation-products.js` | `pdfUsePanelSizeRange`, `pdfUseInverterBrandOptions` |
+| `20260519120000-add-pdf-display-flags-to-quotation-products.js` | Legacy booleans (old quotations) |
+| `20260521120000-add-pdf-panel-range-keys-to-quotation-products.js` | `pdfPanelRangeKey`, `pdfDcrPanelRangeKey`, `pdfNonDcrPanelRangeKey` |
 | `20260520120000-add-notes-to-customers.js` | `customers.notes` for calling → quotation prefill |
 
 Optional: `TZ=Asia/Kolkata` if weekly HR reports must match SPA Mon–Sun in IST.
@@ -50,18 +54,58 @@ Optional: `TZ=Asia/Kolkata` if weekly HR reports must match SPA Mon–Sun in IST
 
 ---
 
-## 2. Quotation PDF display flags (§X)
+## 2. Quotation PDF display — panel range keys (§X, May 2026 update)
 
-**Status: implemented** — run `yarn migrate` if columns missing.
+**Status: implemented** — run `yarn migrate` (includes range-key columns).
 
-| Field | PDF when `true` |
-|-------|-----------------|
-| `pdfUsePanelSizeRange` | **540W-620W** |
-| `pdfUseInverterBrandOptions` | **Inverter Brand- Vsole/Xwatt/Saatvik** |
+### No backend change needed (frontend-only)
 
-- `POST` / `PATCH …/products` / `GET` quotations — persist and echo on `quotation_products`
-- Not used in pricing or `validateProductSelection`
-- Server PDFs: use `utils/quotationProductPdfDisplay.ts` if API generates PDFs
+| Area | Why |
+|------|-----|
+| Inverter dropdown (Goodwe, Vsole, Xwatt, Saatvik, …) | Still `products.inverterBrand` string from catalog |
+| Combined labels (`Vsole/Xwatt/Saatvik`, `Vsole/Xwatt`) | Same field — allowed extra strings (see below) |
+| Removed `pdfUseInverterBrandOptions` checkbox | PDF uses `inverterBrand` directly; flag not sent on new quotes |
+| Pricing / subsidies / system size | Unchanged — PDF fields must not affect calculations |
+
+### New optional fields on `products` JSON (persist + echo)
+
+| Field | When set |
+|-------|----------|
+| `pdfPanelRangeKey` | DCR / Non-DCR / single panel line |
+| `pdfDcrPanelRangeKey` | BOTH — DCR line |
+| `pdfNonDcrPanelRangeKey` | BOTH — Non-DCR line |
+
+**Allowed values:** `waaree_540_560_bifacial`, `waaree_580_700_bifacial_topcon`, `adani_540_580_bifacial`, `adani_610_625_bifacial_topcon` (unknown keys stored as `null`).
+
+**Snake_case aliases:** `pdf_panel_range_key`, `pdf_dcr_panel_range_key`, `pdf_non_dcr_panel_range_key`.
+
+**Endpoints:** `POST /api/quotations`, `PATCH /api/quotations/{id}/products`, `GET` list/detail — same as before.
+
+**Deprecated (legacy quotations only):** `pdfUsePanelSizeRange` / `pdf_use_panel_size_range` — still stored/echoed; frontend maps to a default range when loading old data. `pdfUseInverterBrandOptions` — ignore on new quotes.
+
+**Example:**
+
+```json
+{
+  "panelBrand": "Adani",
+  "panelSize": "610W",
+  "panelQuantity": 0,
+  "inverterBrand": "Vsole/Xwatt/Saatvik",
+  "pdfPanelRangeKey": "adani_610_625_bifacial_topcon"
+}
+```
+
+**Validation tweaks:**
+
+- `panelQuantity` / `dcrPanelQuantity` / `nonDcrPanelQuantity` may be **0** (nonnegative) when a range key is used for PDF-only rows.
+- `inverterBrand` catalog check allows **`Vsole/Xwatt/Saatvik`** and **`Vsole/Xwatt`** in addition to catalog brands.
+- `meterBrand` catalog check allows **`L&T/HPL/Genus/Secure`** in addition to catalog brands.
+- Range keys are **not** passed into `validateProductSelection` or `calculatePricing`.
+- **`validUntil`** on create defaults to **`createdAt + 7 days`** (was 5).
+
+**Server PDFs:** use `utils/quotationProductPdfDisplay.ts` (`PDF_PANEL_RANGE_KEYS`, `extractPdfPanelRangeKeysFromProducts`).
+
+**Frontend flow:** create may omit PDF keys on POST; follow-up `PATCH …/products` with range keys — backend must accept that PATCH (this implementation).
 
 ---
 
@@ -196,7 +240,55 @@ Accepts: `callRemark` / `call_remark`, `statusCategory` / `status_category`, `st
 
 ---
 
-## 6. Frontend (reference only)
+## 6. Visitor complete visit — S3 multipart (§P–§U)
+
+**Status: implemented**
+
+| Method | Path | Auth |
+|--------|------|------|
+| `PATCH` | `/api/visits/{visitId}/complete` | Visitor (assigned) |
+| `PATCH` | `/api/visitors/me/visits/{visitId}/complete` | Visitor alias |
+| `PATCH` | `/api/visitors/visits/{visitId}/complete` | Visitor alias |
+
+**Multipart fields:** `length`, `width`, `height`, `unit` (`feet` \| `cm`), `backLegFeet`, `midLegFeet` (optional), `frontLegFeet`, `notes`, `images[]`, `rowDiagramImage`, `existingImages` (JSON array string), `existingRowDiagramImage`.
+
+**Behavior:** uploads to S3 via `uploadToS3FromMemory('visits')`; merges `existingImages` + new files; preserves `existingRowDiagramImage` when no new file; `status = completed`; response + **`GET /api/visitors/me/visits`** return **presigned/browsable URLs** (`resolveBrowsableMediaUrl`), not raw private S3 URLs.
+
+**Response `data`:** `id`, `status`, `length`, `width`, `height`, `unit`, `backLegFeet`, `midLegFeet`, `frontLegFeet`, `images`, `rowDiagramImage`, `notes`, `updatedAt`.
+
+---
+
+## 7. Quotation customer documents — `PATCH` / `POST` + ZIP
+
+**Status: implemented**
+
+### `PATCH` / `POST` `/api/quotations/{quotationId}/documents`
+
+- **Content-Type:** `multipart/form-data` (allowlisted fields only — stray fields → **400**, not **500**).
+- **Auth:** dealer, admin, account-management, hr, baldev/confirmation (see `authorizeQuotationDocumentsEditor`).
+- **Partial updates:** missing file parts keep existing S3 keys/URLs.
+- **Storage:** `quotation-documents/{quotationId}/{field}-{timestamp}.{ext}` on S3.
+- **Response:** `resolveQuotationDocumentUrls` — presigned GET URLs for UI “View file”.
+- **Validation:** `phoneNumber`, `emailId`, `electricityKno` when provided; **`VALIDATION_ERROR`** + `details[]` on bad input; S3/DB errors mapped to **400**/**413** where possible.
+
+**File fields:** `aadharFront`, `aadharBack`, `compliantAadharFront`, `compliantAadharBack`, `compliantPanImage`, `compliantBankPassbookImage`, `panImage`, `electricityBillImage`, `bankPassbookImage`, `geotagRoofPhoto`, `customerWithHousePhoto`, `propertyDocumentPdf`, plus final-confirmation files when used.
+
+**Text fields:** `isCompliantSenior`, `aadharNumber`, `phoneNumber`, `emailId`, `panNumber`, `electricityKno`, bank block, compliant block, etc.
+
+### `GET /api/quotations/{quotationId}/documents/zip`
+
+- **Auth:** dealer (own rows) / admin; account-management/hr on approved quotations.
+- Streams ZIP via S3 IAM (`fetchS3ObjectBuffer`); includes manifest `document-details.txt`; missing files noted, not fatal.
+- **Headers:** `Content-Type: application/zip`, `Content-Disposition: attachment; filename="<Customer>-<QuotationId>.zip"`, `Cache-Control: no-store`.
+
+### Presign helper (optional client refresh)
+
+- `GET /api/quotations/{quotationId}/documents/view-url?url=…`
+- `GET /api/quotations/{quotationId}/documents/presign-url?url=…`
+
+---
+
+## 8. Frontend (reference only)
 
 | File | Role |
 |------|------|
@@ -216,7 +308,7 @@ Accepts: `callRemark` / `call_remark`, `statusCategory` / `status_category`, `st
 |----------|--------|--------|
 | **1** | Calling queue `LEAD_004` | **Done** — A + B (claim/assign/patch) + C |
 | **2** | HR upload live counts | **Done** |
-| **3** | PDF flags on products | **Done** (+ migrate) |
+| **3** | PDF panel range keys on products | **Done** (+ migrate) |
 | **4** | Remarks, tabs, start vs submit, customer note | **Done** (+ customer `notes` migrate) |
 | **5** | HR/Admin `GET` calling-actions (`dealerId`, dates, `custom`, aliases) | **Done** — §4.8 |
 | **6** | Quotation create stability | **Done** — §5 |

@@ -25,8 +25,10 @@ import {
 import { meteringWorkflowApiFields } from '../utils/meteringWorkflowApi';
 import { extractS3KeyOrStoredPath } from '../utils/s3Service';
 import {
-  extractPdfDisplayFlagsFromProducts,
-  quotationProductPdfDisplayApiFields
+  quotationProductPdfDisplayApiFields,
+  buildQuotationProductPdfPersistFields,
+  isAllowedInverterBrandForCatalog,
+  isAllowedMeterBrandForCatalog
 } from '../utils/quotationProductPdfDisplay';
 
 // Helper function to normalize catalog data - ensures all arrays are arrays (never null/undefined)
@@ -174,7 +176,12 @@ const validateProductSelection = (products: any, catalog: any): { isValid: boole
   if (products.inverterType && catalog.inverters?.types && catalog.inverters.types.length > 0 && !catalog.inverters.types.includes(products.inverterType)) {
     errors.push(`Invalid inverter type: ${products.inverterType}`);
   }
-  if (products.inverterBrand && catalog.inverters?.brands && catalog.inverters.brands.length > 0 && !catalog.inverters.brands.includes(products.inverterBrand)) {
+  if (
+    products.inverterBrand &&
+    catalog.inverters?.brands &&
+    catalog.inverters.brands.length > 0 &&
+    !isAllowedInverterBrandForCatalog(products.inverterBrand, catalog.inverters.brands)
+  ) {
     errors.push(`Invalid inverter brand: ${products.inverterBrand}`);
   }
   // Allow custom inverter sizes - only validate if catalog has sizes and user wants strict validation
@@ -193,7 +200,12 @@ const validateProductSelection = (products: any, catalog: any): { isValid: boole
   // }
 
   // Validate meter selection
-  if (products.meterBrand && catalog.meters?.brands && !catalog.meters.brands.includes(products.meterBrand)) {
+  if (
+    products.meterBrand &&
+    catalog.meters?.brands &&
+    catalog.meters.brands.length > 0 &&
+    !isAllowedMeterBrandForCatalog(products.meterBrand, catalog.meters.brands)
+  ) {
     errors.push(`Invalid meter brand: ${products.meterBrand}`);
   }
 
@@ -977,7 +989,7 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
 
     // Calculate valid until date (5 days from now)
     const validUntil = new Date();
-    validUntil.setDate(validUntil.getDate() + 5);
+    validUntil.setDate(validUntil.getDate() + 7);
 
     const normalizedPaidAmount = paidAmount !== undefined && paidAmount !== null
       ? Number(paidAmount)
@@ -1016,15 +1028,14 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
       quotationId: quotation.id,
       phase: normalizedPhase
     });
-    const pdfDisplayFlags = extractPdfDisplayFlagsFromProducts(products);
+    const pdfPersistFields = buildQuotationProductPdfPersistFields(products);
 
     await QuotationProduct.create({
       id: uuidv4(),
       quotationId: quotation.id,
       systemType: products.systemType,
       phase: normalizedPhase,
-      pdfUsePanelSizeRange: pdfDisplayFlags.pdfUsePanelSizeRange ?? false,
-      pdfUseInverterBrandOptions: pdfDisplayFlags.pdfUseInverterBrandOptions ?? false,
+      ...pdfPersistFields,
       panelBrand: products.panelBrand,
       panelSize: products.panelSize,
       panelQuantity: products.panelQuantity,
@@ -2180,7 +2191,7 @@ export const updateQuotationProducts = async (req: Request, res: Response): Prom
       return;
     }
 
-    const pdfDisplayFlags = extractPdfDisplayFlagsFromProducts(products);
+    const pdfPersistFields = buildQuotationProductPdfPersistFields(products);
 
     // Update quotation system type if provided
     if (products.systemType) {
@@ -2207,10 +2218,8 @@ export const updateQuotationProducts = async (req: Request, res: Response): Prom
         subtotal: Number(quotation.subtotal || 0),
         totalAmount: Number(quotation.totalAmount || 0),
         ...products,
-        ...pdfDisplayFlags,
-        phase: phaseToSave,
-        pdfUsePanelSizeRange: pdfDisplayFlags.pdfUsePanelSizeRange ?? false,
-        pdfUseInverterBrandOptions: pdfDisplayFlags.pdfUseInverterBrandOptions ?? false
+        ...pdfPersistFields,
+        phase: phaseToSave
       });
     } else {
       logInfo('Updating quotation products phase', {
@@ -2219,7 +2228,7 @@ export const updateQuotationProducts = async (req: Request, res: Response): Prom
       });
       await quotationProduct.update({
         ...products,
-        ...pdfDisplayFlags,
+        ...pdfPersistFields,
         phase: products.phase || quotationProduct.phase || '1-Phase'
       });
     }

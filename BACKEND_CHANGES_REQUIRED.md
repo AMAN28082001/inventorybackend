@@ -82,3 +82,48 @@ Single-file slot uploads also accept `POST /api/quotations/{quotationId}/install
 
 - On admin-driven `installer_approved`, `installerId` on the quotation is **not** overwritten with the admin user id (preserves the real installer when present).
 - `QuotationInstallationDoc.uploadedBy*` uses `req.user?.id` / `req.dealer?.id` and matching role for attribution.
+
+---
+
+## §X — Quotation PDF display (panel range keys, May 2026)
+
+**Handoff summary:** `BACKEND_CHANGES_HANDOFF.md` §2.
+
+### Persist on `quotation_products`
+
+| Field | Scope |
+|-------|--------|
+| `pdfPanelRangeKey` | Single / DCR / Non-DCR panel line |
+| `pdfDcrPanelRangeKey` | BOTH — DCR |
+| `pdfNonDcrPanelRangeKey` | BOTH — Non-DCR |
+
+Allowed keys: `waaree_540_560_bifacial`, `waaree_580_700_bifacial_topcon`, `adani_540_580_bifacial`, `adani_610_625_bifacial_topcon`.
+
+**Endpoints:** `POST /api/quotations`, `PATCH /api/quotations/{id}/products`, `GET` quotations — echo camelCase + snake_case.
+
+**Legacy:** `pdfUsePanelSizeRange`, `pdfUseInverterBrandOptions` — keep for old rows; new UI does not set inverter PDF flag.
+
+**Not used in:** `validateProductSelection`, `calculatePricing`, pricing/catalog validation.
+
+**Inverter:** `inverterBrand` remains a string; allow `Vsole/Xwatt/Saatvik` and `Vsole/Xwatt` when catalog whitelist is enforced.
+
+**Meter:** `meterBrand` may be `L&T/HPL/Genus/Secure` when catalog whitelist is enforced.
+
+**Quantities:** `panelQuantity` may be `0` when range keys are used (PDF-only form).
+
+**validUntil:** `POST /api/quotations` sets **`validUntil = createdAt + 7 days`**.
+
+**Migration:** `20260521120000-add-pdf-panel-range-keys-to-quotation-products.js`.
+
+**Code:** `utils/quotationProductPdfDisplay.ts`.
+
+---
+
+## Visitor complete visit + quotation documents (implemented)
+
+| Feature | Path | Notes |
+|---------|------|--------|
+| Complete visit | `PATCH /api/visits/{id}/complete` | S3 multipart, presigned URLs on GET |
+| KYC documents | `PATCH /api/quotations/{id}/documents` | Partial multipart, allowlisted fields |
+| Documents ZIP | `GET /api/quotations/{id}/documents/zip` | Server-side S3 fetch |
+| Presign | `GET /api/quotations/{id}/documents/view-url` | Private bucket browse |
