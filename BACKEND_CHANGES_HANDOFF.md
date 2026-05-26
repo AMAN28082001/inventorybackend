@@ -331,3 +331,4 @@ When both `startDate` and `endDate` are sent, filtering uses that window on `act
 |-----|---------|
 | `BACKEND_CHANGES_REQUIRED.md` | §7.7–7.8, dealer queue, §J, §X |
 | `BACKEND_ADMIN_QUOTATION_STATUS.ts` | Reference contracts |
+
