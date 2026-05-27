@@ -11,7 +11,7 @@ import { logError, logInfo } from '../utils/loggerHelper';
 import { deleteFileFromS3IfExists } from '../middleware/upload';
 import { decodeS3UrlPathToKey, generatePublicUrl, isPresignedS3GetUrl } from '../utils/s3Service';
 import { normalizePaymentModeInput } from '../utils/paymentMode';
-import { quotationPaymentApiFields, quotationAdminMetadataFields } from '../utils/quotationApiJson';
+import { quotationAmountApiFields, quotationPaymentApiFields, quotationAdminMetadataFields } from '../utils/quotationApiJson';
 import {
   mapInstallationDocumentsForApi,
   quotationIdFromInstallationMediaRef,
@@ -1475,7 +1475,7 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         systemType: q.systemType,
         ...quotationPaymentApiFields(row),
         ...quotationAdminMetadataFields(row),
-        subtotal: subtotalNum,
+        ...quotationAmountApiFields(row, pricing),
         paidAmount: q.paidAmount !== undefined && q.paidAmount !== null ? Number(q.paidAmount) : null,
         remaining: remainingAmount,
         remainingAmount,
@@ -1484,7 +1484,6 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         installments: phaseRows,
         paymentPhases: phaseRows,
         payment_phases: phaseRows,
-        finalAmount: subtotalNum,
         approvedAt: (q as any).approvedAt || null,
         installerApprovedAt: (q as any).installerApprovedAt || null,
         ...meteringWorkflowApiFields({
@@ -1936,6 +1935,7 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
           ...quotationProductPdfDisplayApiFields(products as any)
         } : null,
         pricing: finalPricing,
+        ...quotationAmountApiFields(rowById, finalPricing),
         status: quotation.status,
         approvedAt: quotationAny.approvedAt || null,
         installerApprovedAt: quotationAny.installerApprovedAt || null,

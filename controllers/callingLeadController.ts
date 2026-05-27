@@ -14,6 +14,11 @@ import {
 import { Dealer } from '../models/index-quotation';
 import { logError, logInfo } from '../utils/loggerHelper';
 import { emitRealtime, realtimeEvents } from '../utils/realtime';
+import {
+  classifyCallingActionSummaryBucket,
+  inferReasonCategoryFromOutcome,
+  resolveCallingActionStatusText
+} from '../utils/callingActionSummary';
 
 const MOBILE_KEYS = ['mobile', 'phone', 'contact', 'contact no', 'contact no.', 'contactnumber', 'phone_number', 'phone number', 'mobile number'];
 const NAME_KEYS = ['name', 'customername', 'customer name', 'full name'];
@@ -352,8 +357,12 @@ const callingActionToApiJson = (row: any) => {
     isCustomReason: row.isCustomReason,
     statusCategoryKey: row.statusCategory,
     statusCategoryLabel: row.statusLabel,
+    statusText: row.statusLabel || parsed.status || null,
+    status_text: row.statusLabel || parsed.status || null,
+    call_remark: row.callRemark ?? row.call_remark ?? null,
     // explicit fields required by frontend
     statusCategory: normalizedCategory,
+    status_category: normalizedCategory,
     status: row.statusLabel || parsed.status || row.action || row.status || null,
     remark: row.statusReason || parsed.remark || null,
     // Required by Calling Data > Recent Actions card
@@ -467,10 +476,26 @@ const getMonthRange = (reference: Date): { from: Date; to: Date } => {
   return { from, to };
 };
 
-const getReasonCategoryFromAction = (action: CallingActionType): ReasonCategory => {
-  if (action === 'called') return 'interested';
-  if (action === 'follow_up') return 'follow_up';
+const getReasonCategoryFromAction = (
+  action: CallingActionType,
+  outcome?: {
+    statusLabel?: string | null;
+    statusReason?: string | null;
+    callRemark?: string | null;
+    statusCategory?: string | null;
+  }
+): ReasonCategory => {
+  if (outcome) {
+    return inferReasonCategoryFromOutcome({
+      action,
+      statusLabel: outcome.statusLabel,
+      statusReason: outcome.statusReason,
+      callRemark: outcome.callRemark,
+      statusCategory: outcome.statusCategory
+    });
+  }
   if (action === 'not_interested') return 'not_interested';
+  if (action === 'follow_up' || action === 'rescheduled') return 'follow_up';
   return 'others';
 };
 
@@ -680,7 +705,7 @@ const buildCallingActionsResponse = async (req: Request) => {
   const offset = (page - 1) * limit;
   const where = buildCallingActionsFilter(req);
 
-  const [rows, groupedCounts] = await Promise.all([
+  const [rows, summarySourceRows] = await Promise.all([
     CallingActionHistory.findAndCountAll({
       where,
       order: [['actionAt', 'DESC'], ['createdAt', 'DESC']],
@@ -688,9 +713,15 @@ const buildCallingActionsResponse = async (req: Request) => {
       offset
     }),
     CallingActionHistory.findAll({
-      attributes: ['action', [Sequelize.fn('COUNT', Sequelize.col('id')), 'count']],
       where,
-      group: ['action']
+      attributes: [
+        'action',
+        'statusLabel',
+        'statusReason',
+        'callRemark',
+        'statusCategory',
+        'reasonCategory'
+      ]
     })
   ]);
 
@@ -719,39 +750,66 @@ const buildCallingActionsResponse = async (req: Request) => {
     follow_up: 0,
     not_interested: 0,
     others: 0,
-    total
+    total: summarySourceRows.length
   };
-  const summary = groupedCounts.reduce((acc, row: any) => {
-    const action = row.get('action') as CallingActionType;
-    const count = Number(row.get('count') || 0);
-    if (action === 'called') acc.interested += count;
-    else if (action === 'follow_up') acc.follow_up += count;
-    else if (action === 'not_interested') acc.not_interested += count;
-    else acc.others += count;
+  const summary = summarySourceRows.reduce((acc, row) => {
+    const bucket = classifyCallingActionSummaryBucket({
+      action: row.action,
+      statusLabel: row.statusLabel,
+      statusReason: row.statusReason,
+      callRemark: row.callRemark,
+      statusCategory: row.statusCategory
+    });
+    if (bucket === 'interested') acc.interested += 1;
+    else if (bucket === 'followUp') acc.follow_up += 1;
+    else if (bucket === 'notInterested') acc.not_interested += 1;
+    else acc.others += 1;
     return acc;
   }, summarySeed);
 
-  const actionRows = rows.rows.map((row) => ({
+  const actionRows = rows.rows.map((row) => {
+    const statusText = resolveCallingActionStatusText({
+      statusLabel: row.statusLabel,
+      statusReason: row.statusReason,
+      callRemark: row.callRemark
+    });
+    const reasonCategory =
+      row.reasonCategory ||
+      inferReasonCategoryFromOutcome({
+        action: row.action,
+        statusLabel: row.statusLabel,
+        statusReason: row.statusReason,
+        callRemark: row.callRemark,
+        statusCategory: row.statusCategory
+      });
+    return {
       id: row.id,
       leadId: row.leadId,
       dealerId: row.dealerId,
       dealerName: row.dealerName || dealerNameMap.get(row.dealerId) || '',
       action: row.action,
-      reasonCategory: row.reasonCategory || getReasonCategoryFromAction(row.action as CallingActionType),
+      reasonCategory,
       callRemark: row.callRemark,
+      call_remark: row.callRemark,
       statusCategory: row.statusCategory,
+      status_category: row.statusCategory,
+      statusText,
+      status_text: statusText,
       statusLabel: row.statusLabel,
       statusReason: row.statusReason,
+      remark: row.statusReason,
       isCustomReason: row.isCustomReason,
       statusCategoryKey: row.statusCategory,
       statusCategoryLabel: row.statusLabel,
       actionAt: toIsoStringOrNull(row.actionAt),
+      action_at: toIsoStringOrNull(row.actionAt),
       nextFollowUpAt: toIsoStringOrNull(row.nextFollowUpAt),
       customerName: row.customerName,
       customerMobile: row.customerMobile,
       customerAddress: row.customerAddress,
       createdAt: toIsoStringOrNull(row.createdAt)
-    }));
+    };
+  });
 
   const dealers = allDealers.map((dealer) => ({
     dealerId: dealer.id,
@@ -2580,7 +2638,12 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
 
         const historyPayload = {
           action: historyAction,
-          reasonCategory: getReasonCategoryFromAction(historyAction),
+          reasonCategory: getReasonCategoryFromAction(historyAction, {
+            statusLabel: effectiveStatusLabel,
+            statusReason: effectiveStatusReason,
+            callRemark: effectiveCallRemarkForOutcome,
+            statusCategory: effectiveStatusCategory
+          }),
           callRemark: effectiveCallRemarkForOutcome,
           statusCategory: effectiveStatusCategory,
           statusLabel: effectiveStatusLabel,

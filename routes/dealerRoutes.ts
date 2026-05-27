@@ -1,5 +1,12 @@
 import express, { Router } from 'express';
-import { registerDealer, getDealerProfile, updateDealerProfile, getDealerStatistics, getVisitors } from '../controllers/dealerController';
+import {
+  registerDealer,
+  getDealerProfile,
+  updateDealerProfile,
+  getDealerStatistics,
+  getDealerDashboardStats,
+  getVisitors
+} from '../controllers/dealerController';
 import { rescheduleVisit } from '../controllers/visitController';
 import {
   getDealerCallingQueueCurrent,
@@ -229,6 +236,7 @@ router.put('/me', validate(updateDealerSchema), updateDealerProfile);
  *         description: Unauthorized
  */
 router.get('/me/statistics', getDealerStatistics);
+router.get('/me/dashboard-stats', getDealerDashboardStats);
 
 /**
  * @swagger

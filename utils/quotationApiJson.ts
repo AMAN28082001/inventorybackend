@@ -45,6 +45,74 @@ export function toDateOnlyStringOrNull(v: unknown): string | null {
  * Mirrors BACKEND_ADMIN_QUOTATION_STATUS.ts → quotationToApiJson (payment/bank slice).
  * Use on Sequelize instances or plain row objects.
  */
+export type QuotationPricingSlice = {
+  subtotal?: number;
+  totalAmount?: number;
+  finalAmount?: number;
+};
+
+/**
+ * Root-level amounts for list/detail (dealer dashboard Total Value: subtotal → totalAmount → finalAmount).
+ */
+export function quotationAmountApiFields(
+  row: Record<string, unknown>,
+  pricing?: QuotationPricingSlice | null
+) {
+  const subtotalRaw = row.subtotal ?? row.sub_total;
+  const subtotal =
+    subtotalRaw !== undefined && subtotalRaw !== null
+      ? Number(subtotalRaw)
+      : pricing?.subtotal !== undefined
+        ? Number(pricing.subtotal)
+        : 0;
+
+  const totalAmountRaw = row.totalAmount ?? row.total_amount;
+  const totalAmount =
+    totalAmountRaw !== undefined && totalAmountRaw !== null
+      ? Number(totalAmountRaw)
+      : pricing?.totalAmount !== undefined
+        ? Number(pricing.totalAmount)
+        : subtotal;
+
+  const finalAmountRaw = row.finalAmount ?? row.final_amount;
+  const finalAmount =
+    finalAmountRaw !== undefined && finalAmountRaw !== null
+      ? Number(finalAmountRaw)
+      : pricing?.finalAmount !== undefined
+        ? Number(pricing.finalAmount)
+        : totalAmount;
+
+  return {
+    subtotal,
+    totalAmount,
+    finalAmount,
+    total_amount: totalAmount,
+    final_amount: finalAmount
+  };
+}
+
+/** Approved-row amount for dealer dashboard (matches AMOUNT column: subtotal → totalAmount → finalAmount). */
+export function approvedQuotationValueFromRow(row: {
+  subtotal?: unknown;
+  sub_total?: unknown;
+  totalAmount?: unknown;
+  total_amount?: unknown;
+  finalAmount?: unknown;
+  final_amount?: unknown;
+}): number {
+  const pick = (value: unknown): number | undefined => {
+    if (value === undefined || value === null || value === '') return undefined;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : undefined;
+  };
+  const amount =
+    pick(row.subtotal ?? row.sub_total) ??
+    pick(row.totalAmount ?? row.total_amount) ??
+    pick(row.finalAmount ?? row.final_amount) ??
+    0;
+  return Math.abs(amount);
+}
+
 export function quotationPaymentApiFields(q: Record<string, unknown>) {
   const paymentMode = (q.paymentMode ?? q.payment_mode ?? null) as string | null;
   const paymentType = (

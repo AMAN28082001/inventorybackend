@@ -1,6 +1,6 @@
 # Backend changes handoff (May 2026)
 
-**Single handoff doc for the API team.** Full specs: `BACKEND_CHANGES_REQUIRED.md` (§7.8, dealer queue §E–§H, §J, §X, §Y). Reference contracts: `BACKEND_ADMIN_QUOTATION_STATUS.ts`. Implementation: `controllers/callingLeadController.ts`, `controllers/quotationController.ts`, `controllers/visitController.ts`, `controllers/customerController.ts`, `utils/quotationProductPdfDisplay.ts`, `utils/s3Service.ts`.
+**Single handoff doc for the API team.** Full specs: `BACKEND_CHANGES_REQUIRED.md` (§7.8–§7.9, dealer queue §E–§H, §J, §X, §Y). Reference contracts: `BACKEND_ADMIN_QUOTATION_STATUS.ts`. Implementation: `controllers/callingLeadController.ts`, `controllers/quotationController.ts`, `controllers/visitController.ts`, `controllers/customerController.ts`, `utils/quotationProductPdfDisplay.ts`, `utils/s3Service.ts`.
 
 ## Sprint checklist (copy for tracking)
 
@@ -19,6 +19,8 @@
 | 11 | High | Visitor complete visit (S3 + presigned URLs) | **Done** | §6 |
 | 12 | High | Quotation documents PATCH + ZIP | **Done** | §7 |
 | 13 | Medium | `meterBrand` combined label + `validUntil` +7d | **Done** | §2 |
+| 14 | Medium | Dealer dashboard **Total Value** (approved only) | **Done** | §6 |
+| 15 | High | HR Dealer Actions summary buckets (`statusText`) | **Done** | §7 / §J.1 |
 
 **Deploy before QA:**
 
@@ -240,7 +242,65 @@ Accepts: `callRemark` / `call_remark`, `statusCategory` / `status_category`, `st
 
 ---
 
-## 6. Visitor complete visit — S3 multipart (§P–§U)
+## 6. Dealer dashboard — Total Value (approved quotations only) — §7.9
+
+**Status: implemented**
+
+**Frontend:** `app/dashboard/page.tsx` — sums approved rows using **`subtotal` → `totalAmount` → `finalAmount`** (same as AMOUNT column / set price).
+
+### `GET /api/quotations` (dealer JWT)
+
+Each row includes **`status`**, **`subtotal`**, **`totalAmount`**, **`finalAmount`** (root and/or `pricing.*`).
+
+### Optional — `GET /api/dealers/me/dashboard-stats`
+
+```json
+{
+  "success": true,
+  "data": {
+    "totalQuotations": 27,
+    "uniqueCustomers": 23,
+    "thisMonthQuotations": 0,
+    "approvedQuotationCount": 5,
+    "approvedQuotationValue": 1250000
+  }
+}
+```
+
+`approvedQuotationValue` = sum of `ABS(COALESCE(subtotal, totalAmount, finalAmount, 0))` where `LOWER(TRIM(status)) = 'approved'` for the authenticated dealer.
+
+**Also on** `GET /api/dealers/me/statistics`: `approvedQuotationCount`, `approvedQuotationValue`, `uniqueCustomers`, `thisMonthQuotations`.
+
+### Admin approve
+
+`PATCH` admin quotation status with `status: "approved"` persists **`approvedAt`** / **`statusApprovedAt`** (existing).
+
+**Code:** `utils/quotationApiJson.ts` → `quotationAmountApiFields`, `approvedQuotationValueFromRow`; `controllers/dealerController.ts` → `getDealerDashboardStats`.
+
+---
+
+## 7. HR Dealer Actions — summary buckets (§J.1)
+
+**Status: implemented**
+
+**Frontend:** `lib/calling-action-summary.ts`, HR **Dealer Actions** tab.
+
+### PATCH `/api/dealers/me/calling-queue/{leadId}/action`
+
+On submit (`called` / `follow_up` / `not_interested` / `rescheduled`), persists **`statusCategory`**, **`statusLabel`** (picker text), **`statusReason`**, **`callRemark`** (tagged format supported).
+
+### GET HR/Admin calling-actions
+
+`GET /api/hr/calling-actions`, `/api/admin/calling-actions` (and aliases) return per row:
+
+- `statusText` / `status_text`, `statusCategory` / `status_category`, `callRemark` / `call_remark`
+- Optional **`summary`**: `{ interested, followUp, notInterested, others, total }` — computed from **statusText** (not `action: called` → Interested).
+
+**Code:** `utils/callingActionSummary.ts`, `controllers/callingLeadController.ts` → `buildCallingActionsResponse`, `updateDealerCallingQueueAction`.
+
+---
+
+## 8. Visitor complete visit — S3 multipart (§P–§U)
 
 **Status: implemented**
 
@@ -258,7 +318,7 @@ Accepts: `callRemark` / `call_remark`, `statusCategory` / `status_category`, `st
 
 ---
 
-## 7. Quotation customer documents — `PATCH` / `POST` + ZIP
+## 8. Quotation customer documents — `PATCH` / `POST` + ZIP
 
 **Status: implemented**
 
@@ -288,7 +348,7 @@ Accepts: `callRemark` / `call_remark`, `statusCategory` / `status_category`, `st
 
 ---
 
-## 8. Frontend (reference only)
+## 9. Frontend (reference only)
 
 | File | Role |
 |------|------|

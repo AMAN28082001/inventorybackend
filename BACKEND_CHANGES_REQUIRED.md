@@ -119,6 +119,16 @@ Allowed keys: `waaree_540_560_bifacial`, `waaree_580_700_bifacial_topcon`, `adan
 
 ---
 
+## §7.9 — Dealer dashboard Total Value (approved quotations)
+
+**Handoff:** `BACKEND_CHANGES_HANDOFF.md` §6.
+
+- `GET /api/quotations` (dealer): each row has `status`, `finalAmount`, `totalAmount`, `pricing.*` amounts.
+- `GET /api/dealers/me/dashboard-stats`: `approvedQuotationCount`, `approvedQuotationValue` (approved rows only).
+- Admin approve sets `status: approved` (existing `updateQuotationStatus`).
+
+---
+
 ## Visitor complete visit + quotation documents (implemented)
 
 | Feature | Path | Notes |

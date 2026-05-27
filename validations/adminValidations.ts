@@ -3,6 +3,10 @@ import { z } from 'zod';
 export const updateStatusSchema = z
   .object({
     status: z.enum(['pending', 'approved', 'rejected', 'completed']),
+    statusApprovedAt: z.string().optional(),
+    status_approved_at: z.string().optional(),
+    approvedAt: z.string().optional(),
+    approved_at: z.string().optional(),
     paymentType: z.enum(['loan', 'cash', 'mix']).optional(),
     paymentMode: z.enum(['loan', 'cash', 'mix']).optional(),
     bankName: z.string().optional(),

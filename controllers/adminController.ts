@@ -3,7 +3,12 @@ import { Quotation, QuotationPaymentPhase, QuotationInstallationDoc, Dealer, Cus
 import { Op } from 'sequelize';
 import { logError, logInfo } from '../utils/loggerHelper';
 import { normalizePaymentModeInput } from '../utils/paymentMode';
-import { quotationPaymentApiFields, quotationAdminMetadataFields, readStatusHistoryFromRow } from '../utils/quotationApiJson';
+import {
+  quotationAmountApiFields,
+  quotationPaymentApiFields,
+  quotationAdminMetadataFields,
+  readStatusHistoryFromRow
+} from '../utils/quotationApiJson';
 import { emitRealtime, realtimeEvents } from '../utils/realtime';
 import { INSTALLER_RELEASE_STATUSES } from '../constants/workflowQueues';
 import {
@@ -69,6 +74,14 @@ function normalizeFileLoginStatus(raw: unknown): 'already_login' | 'login_now' |
   if (v === 'already_login' || v === 'already_logged_in' || v === 'alreadylogin') return 'already_login';
   if (v === 'login_now' || v === 'loginnow') return 'login_now';
   return null;
+}
+
+function parseOptionalTimestamp(value: unknown): Date | null {
+  if (value === undefined || value === null) return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
 // Get all quotations (admin)
@@ -285,15 +298,14 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
             systemType: q.systemType,
             ...quotationPaymentApiFields(row),
             ...quotationAdminMetadataFields(row),
+            ...quotationAmountApiFields(row),
             paymentStatus: (q as any).paymentStatus || null,
-            subtotal: subtotalNum,
             paidAmount: q.paidAmount !== undefined && q.paidAmount !== null ? Number(q.paidAmount) : null,
             remaining: remainingAmount,
             remainingAmount,
             installments: phases,
             paymentPhases: phases,
             payment_phases: phases,
-            finalAmount: subtotalNum,
             status: q.status,
             installationReadyForInstaller: Boolean((q as any).installationReadyForInstaller),
             installation_ready_for_installer: Boolean((q as any).installationReadyForInstaller),
@@ -367,6 +379,10 @@ export const updateQuotationStatus = async (req: Request, res: Response): Promis
 
     const body = req.body as {
       status: 'pending' | 'approved' | 'rejected' | 'completed';
+      statusApprovedAt?: string;
+      status_approved_at?: string;
+      approvedAt?: string;
+      approved_at?: string;
       paymentType?: 'loan' | 'cash' | 'mix';
       paymentMode?: 'loan' | 'cash' | 'mix';
       bankName?: string;
@@ -397,6 +413,13 @@ export const updateQuotationStatus = async (req: Request, res: Response): Promis
     const plainBefore = quotation.get({ plain: true }) as unknown as Record<string, unknown>;
     const prevHistory = readStatusHistoryFromRow(plainBefore);
     const at = new Date().toISOString();
+    const manualApprovedAt =
+      parseOptionalTimestamp(
+        body.statusApprovedAt ??
+        body.status_approved_at ??
+        body.approvedAt ??
+        body.approved_at
+      );
     const updateData: Record<string, unknown> = {
       status: statusRaw,
       statusHistory: [...prevHistory, { status: statusRaw, at }]
@@ -418,7 +441,7 @@ export const updateQuotationStatus = async (req: Request, res: Response): Promis
 
       updateData.paymentMode = paymentTypeResolved;
       updateData.paymentType = paymentTypeResolved;
-      updateData.statusApprovedAt = new Date();
+      updateData.statusApprovedAt = manualApprovedAt || new Date();
 
       if (paymentTypeResolved === 'loan' || paymentTypeResolved === 'mix') {
         const bankName = typeof body.bankName === 'string' ? body.bankName.trim() : '';
@@ -457,7 +480,7 @@ export const updateQuotationStatus = async (req: Request, res: Response): Promis
       }
 
       updateData.installationStatus = 'pending_installer';
-      updateData.approvedAt = new Date();
+      updateData.approvedAt = manualApprovedAt || new Date();
     } else if (statusRaw === 'rejected') {
       updateData.bankName = null;
       updateData.bankIfsc = null;
@@ -648,6 +671,9 @@ export const updateQuotationFileLogin = async (req: Request, res: Response): Pro
     }
 
     const body = req.body as Record<string, unknown>;
+    const manualFileLoginAt = parseOptionalTimestamp(
+      body.fileLoginAt ?? body.file_login_at
+    );
 
     if (body.resetFileLogin === true) {
       await quotation.update({
@@ -698,7 +724,7 @@ export const updateQuotationFileLogin = async (req: Request, res: Response): Pro
     const updatePayload: Record<string, unknown> = {
       fileLoginStatus: fls,
       filePaymentType: paymentType,
-      fileLoginAt: new Date()
+      fileLoginAt: manualFileLoginAt || new Date()
     };
 
     if (paymentType === 'loan' || paymentType === 'mix') {
@@ -857,8 +883,8 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
         status: quotation.status,
         ...quotationPaymentApiFields(row),
         ...quotationAdminMetadataFields(row),
+        ...quotationAmountApiFields(row),
         paymentStatus: quotationAny.paymentStatus || null,
-        subtotal: subtotalNum,
         paidAmount: quotation.paidAmount !== undefined && quotation.paidAmount !== null ? Number(quotation.paidAmount) : null,
         remaining: remainingAmount,
         remainingAmount,
@@ -867,7 +893,6 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
         payment_phases: phases,
         dealer: quotationAny.dealer || null,
         customer: quotationAny.customer || null,
-        finalAmount: subtotalNum,
         createdAt: quotation.createdAt,
         approvedAt: quotationAny.approvedAt || null,
         installerApprovedAt: quotationAny.installerApprovedAt || null,
@@ -919,7 +944,8 @@ export const getAllDealers = async (req: Request, res: Response): Promise<void> 
     const offset = (page - 1) * limit;
     const search = req.query.search as string;
     const isActive = req.query.isActive as string;
-    const includeInactive = String(req.query.includeInactive || '').toLowerCase() === 'true';
+    const includeInactiveRaw = String(req.query.includeInactive ?? '').trim().toLowerCase();
+    const includeInactive = includeInactiveRaw === 'true' || includeInactiveRaw === '1';
 
     const where: any = { role: 'dealer' };
     
@@ -996,7 +1022,7 @@ export const getAllDealers = async (req: Request, res: Response): Promise<void> 
           page,
           limit,
           total: dealers.count,
-          totalPages: Math.ceil(dealers.count / limit)
+          totalPages: Math.max(1, Math.ceil(dealers.count / limit))
         }
       }
     });
