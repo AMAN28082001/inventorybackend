@@ -1,6 +1,12 @@
 import express, { Router } from 'express';
 import multer, { MulterError } from 'multer';
 import {
+  isAllowedStandardImageOrPdfUpload,
+  isAllowedStandardImageUpload,
+  standardImageOrPdfValidationMessage,
+  standardImageValidationMessage
+} from '../utils/uploadMimeTypes';
+import {
   createQuotation,
   getQuotations,
   getQuotationById,
@@ -78,23 +84,21 @@ const documentsUpload = multer({
     ]);
     const pdfOnlyFields = new Set(['propertyDocumentPdf']);
 
-    const imageMimes = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp']);
-
     if (imageOnlyFields.has(file.fieldname)) {
-      if (imageMimes.has(file.mimetype)) {
+      if (isAllowedStandardImageUpload(file)) {
         cb(null, true);
         return;
       }
-      cb(new Error(`${file.fieldname} must be jpeg/jpg/png/webp`));
+      cb(new Error(standardImageValidationMessage(file.fieldname)));
       return;
     }
 
     if (imageOrPdfFields.has(file.fieldname)) {
-      if (imageMimes.has(file.mimetype) || file.mimetype === 'application/pdf') {
+      if (isAllowedStandardImageOrPdfUpload(file)) {
         cb(null, true);
         return;
       }
-      cb(new Error(`${file.fieldname} must be jpeg/jpg/png/webp/pdf`));
+      cb(new Error(standardImageOrPdfValidationMessage(file.fieldname)));
       return;
     }
 

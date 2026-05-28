@@ -4,11 +4,22 @@ import { authenticate, authorizeMetering } from '../middleware/authQuotation';
 import { validate } from '../middleware/validate';
 import { getMeteringQueue, meteringStatusUpdate, saveMeteringDetails, saveMeteringMcoDocuments } from '../controllers/workflowController';
 import { meteringDetailsSchema, meteringMcoDocumentsSchema, meteringStatusSchema } from '../validations/workflowValidations';
+import {
+  isAllowedStandardImageOrPdfUpload,
+  standardImageOrPdfValidationMessage
+} from '../utils/uploadMimeTypes';
 
 const router: Router = express.Router();
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 15 * 1024 * 1024, files: 5 }
+  limits: { fileSize: 15 * 1024 * 1024, files: 5 },
+  fileFilter: (_req, file, cb) => {
+    if (isAllowedStandardImageOrPdfUpload(file)) {
+      cb(null, true);
+      return;
+    }
+    cb(new Error(standardImageOrPdfValidationMessage(file.fieldname)));
+  }
 });
 
 router.use(authenticate);

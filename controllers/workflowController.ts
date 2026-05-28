@@ -22,6 +22,7 @@ import {
   resolveMeterStoredRef
 } from '../utils/meteringMediaApi';
 import { meteringWorkflowApiFields } from '../utils/meteringWorkflowApi';
+import { resolveImageContentTypeForUpload } from '../utils/uploadMimeTypes';
 
 const assertInstallationTeamQuotationScope = (req: Request, quotation: Quotation, res: Response): boolean => {
   const tid = getInstallationTeamIdFromRequest(req);
@@ -92,7 +93,7 @@ const uploadFileToS3 = async (file: Express.Multer.File, quotationId: string, do
     Bucket: bucket,
     Key: key,
     Body: file.buffer,
-    ContentType: file.mimetype
+    ContentType: resolveImageContentTypeForUpload(file)
   }).promise();
   return key;
 };

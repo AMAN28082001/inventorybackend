@@ -30,6 +30,13 @@ import {
   isAllowedInverterBrandForCatalog,
   isAllowedMeterBrandForCatalog
 } from '../utils/quotationProductPdfDisplay';
+import {
+  isAllowedStandardImageOrPdfUpload,
+  isAllowedStandardImageUpload,
+  resolveImageContentTypeForUpload,
+  standardImageOrPdfValidationMessage,
+  standardImageValidationMessage
+} from '../utils/uploadMimeTypes';
 
 // Helper function to normalize catalog data - ensures all arrays are arrays (never null/undefined)
 const normalizeCatalog = (catalog: any): any => {
@@ -1484,7 +1491,6 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         installments: phaseRows,
         paymentPhases: phaseRows,
         payment_phases: phaseRows,
-        approvedAt: (q as any).approvedAt || null,
         installerApprovedAt: (q as any).installerApprovedAt || null,
         ...meteringWorkflowApiFields({
           installationStatus: (q as any).installationStatus || 'pending_installer',
@@ -1937,7 +1943,6 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
         pricing: finalPricing,
         ...quotationAmountApiFields(rowById, finalPricing),
         status: quotation.status,
-        approvedAt: quotationAny.approvedAt || null,
         installerApprovedAt: quotationAny.installerApprovedAt || null,
         ...meteringWorkflowApiFields({
           installationStatus: quotationAny.installationStatus || 'pending_installer',
@@ -2930,7 +2935,7 @@ const uploadFileToS3 = async (file: Express.Multer.File, quotationId: string, fi
       Bucket: bucket,
       Key: key,
       Body: file.buffer,
-      ContentType: file.mimetype
+      ContentType: resolveImageContentTypeForUpload(file)
     })
     .promise();
 
@@ -3104,16 +3109,15 @@ const ensureQuotationDocumentUploadFieldIsValid = (
     return { valid: false, message: 'Invalid document field' };
   }
 
-  const imageMimes = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp']);
   if (QUOTATION_DOCUMENT_IMAGE_ONLY_FIELDS.has(fieldName)) {
-    return imageMimes.has(file.mimetype)
+    return isAllowedStandardImageUpload(file)
       ? { valid: true }
-      : { valid: false, message: `${fieldName} must be jpeg/jpg/png/webp` };
+      : { valid: false, message: standardImageValidationMessage(fieldName) };
   }
   if (QUOTATION_DOCUMENT_IMAGE_OR_PDF_FIELDS.has(fieldName)) {
-    return imageMimes.has(file.mimetype) || file.mimetype === 'application/pdf'
+    return isAllowedStandardImageOrPdfUpload(file)
       ? { valid: true }
-      : { valid: false, message: `${fieldName} must be jpeg/jpg/png/webp/pdf` };
+      : { valid: false, message: standardImageOrPdfValidationMessage(fieldName) };
   }
   if (QUOTATION_DOCUMENT_PDF_ONLY_FIELDS.has(fieldName)) {
     return file.mimetype === 'application/pdf'

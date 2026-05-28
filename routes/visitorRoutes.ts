@@ -6,6 +6,7 @@ import { authenticate, authorizeVisitor } from '../middleware/authQuotation';
 import { validate } from '../middleware/validate';
 import { completeVisitSchema } from '../validations/visitValidations';
 import { uploadToS3FromMemory } from '../middleware/upload';
+import { isAllowedStandardImageUpload, standardImageValidationMessage } from '../utils/uploadMimeTypes';
 
 const router: Router = express.Router();
 const completeVisitUpload = multer({
@@ -15,12 +16,11 @@ const completeVisitUpload = multer({
     files: 25
   },
   fileFilter: (_req, file, cb) => {
-    const allowed = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp']);
-    if (allowed.has(file.mimetype)) {
+    if (isAllowedStandardImageUpload(file)) {
       cb(null, true);
       return;
     }
-    cb(new Error(`${file.fieldname} must be jpeg/jpg/png/webp`));
+    cb(new Error(standardImageValidationMessage(file.fieldname)));
   }
 });
 

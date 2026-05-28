@@ -21,6 +21,10 @@
 | 13 | Medium | `meterBrand` combined label + `validUntil` +7d | **Done** | §2 |
 | 14 | Medium | Dealer dashboard **Total Value** (approved only) | **Done** | §6 |
 | 15 | High | HR Dealer Actions summary buckets (`statusText`) | **Done** | §7 / §J.1 |
+| 16 | High | Dealer Customer Journey fields on `GET /quotations` | **Done** | §9 |
+| 17 | Medium | HEIC/HEIF on multipart uploads | **Done** | §9 |
+| 18 | Medium | Manual approve / file-login timestamps | **Done** | §10 |
+| 19 | Medium | Admin dealers `includeInactive` + pagination | **Done** | §10 |
 
 **Deploy before QA:**
 
@@ -300,7 +304,61 @@ On submit (`called` / `follow_up` / `not_interested` / `rescheduled`), persists 
 
 ---
 
-## 8. Visitor complete visit — S3 multipart (§P–§U)
+## 9. Dealer Customer Journey + HEIC uploads
+
+**Status: implemented**
+
+### Dealer Customer Journey (no new route)
+
+**Frontend:** dealer dashboard journey panel uses existing **`GET /api/quotations`** (dealer-scoped).
+
+Each quotation object includes:
+
+| Field | Aliases | Used for |
+|-------|---------|----------|
+| `status` | — | Admin approval step |
+| `installationStatus` | `installation_status` | Installation pipeline + current holder |
+| `meteringStatus` | `metering_status`, `meteringStage` | Metering sub-step (derived from `installationStatus`) |
+| `statusApprovedAt` | `status_approved_at`, `approvedAt`, `approved_at` | Optional approve date display |
+| `fileLoginAt` | `file_login_at` | Optional file-login date display |
+| `dealer` | nested object | `id`, `firstName`, `lastName`, `email`, `mobile`, `username`, `role` |
+
+**`installationStatus` values:** `pending_installer`, `installer_in_progress`, `installer_approved`, `pending_metering`, `metering_in_progress`, `metering_approved`, `mco`, `pending_baldev`, `baldev_approved`, `completed`, etc.
+
+**Code:** `utils/meteringWorkflowApi.ts` → `meteringWorkflowApiFields`; `utils/quotationApiJson.ts` → `quotationAdminMetadataFields`; `controllers/quotationController.ts` → `getQuotations`, `getQuotationById`.
+
+**Note:** Journey UI should treat **`status`** (e.g. `pending` / `approved`) before **`installationStatus`** — new rows default `installationStatus` to `pending_installer` in DB even before admin approval.
+
+### HEIC / HEIF image uploads
+
+On multipart routes (quotation documents, visitor/dealer visit complete, metering meter doc):
+
+- **MIME:** `image/heic`, `image/heif` (also `application/octet-stream` when filename ends with `.heic` / `.heif`)
+- **Extensions:** `.heic`, `.heif`
+- Unsupported types → **400** with clear message (not generic **500**)
+- S3 `Content-Type` normalized via `resolveImageContentTypeForUpload` in `utils/uploadMimeTypes.ts`
+
+**Browser preview:** HEIC may still not render in all browsers without client-side conversion (optional server JPEG/WebP transcode not implemented).
+
+**Routes updated:** `routes/quotationRoutes.ts`, `routes/visitRoutes.ts`, `routes/visitorRoutes.ts`, `routes/meteringRoutes.ts`, `controllers/quotationController.ts` (document validation + S3), `controllers/workflowController.ts` (workflow S3).
+
+---
+
+## 10. Admin timestamps + dealers list
+
+**Status: implemented**
+
+| Endpoint | Behavior |
+|----------|----------|
+| `PATCH /api/admin/quotations/:id/status` | Optional `statusApprovedAt` / `approvedAt` (+ snake_case); persisted when `status=approved` |
+| `PATCH /api/admin/quotations/:id/file-login` | Optional `fileLoginAt` / `file_login_at`; persisted on file-login save |
+| `GET /api/admin/dealers` | `includeInactive=true` (or `1`) skips active-only filter; `pagination.totalPages` returned |
+
+**Code:** `controllers/adminController.ts`, `validations/adminValidations.ts`.
+
+---
+
+## 11. Visitor complete visit — S3 multipart (§P–§U)
 
 **Status: implemented**
 

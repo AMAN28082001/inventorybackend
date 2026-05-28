@@ -149,6 +149,7 @@ export function quotationAdminMetadataFields(q: Record<string, unknown>) {
   const fileSubsidyChequeDetails = (q.fileSubsidyChequeDetails ?? q.file_subsidy_cheque_details ?? null) as string | null;
   const fileLoginAt = toIsoStringOrNull(q.fileLoginAt ?? q.file_login_at);
   const statusApprovedAt = toIsoStringOrNull(q.statusApprovedAt ?? q.status_approved_at);
+  const approvedAt = toIsoStringOrNull(q.approvedAt ?? q.approved_at ?? statusApprovedAt);
   const installationReadyForInstaller = Boolean(
     q.installationReadyForInstaller ?? q.installation_ready_for_installer ?? false
   );
@@ -180,6 +181,8 @@ export function quotationAdminMetadataFields(q: Record<string, unknown>) {
     file_login_at: fileLoginAt,
     statusApprovedAt,
     status_approved_at: statusApprovedAt,
+    approvedAt,
+    approved_at: approvedAt,
     installationReadyForInstaller,
     installation_ready_for_installer: installationReadyForInstaller,
     installationReleasedAt,
