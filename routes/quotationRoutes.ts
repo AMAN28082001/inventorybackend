@@ -61,6 +61,7 @@ import { handleInstallerMultipart, handleSingleInstallerUploadMultipart } from '
 import { rescheduleVisitSchema } from '../validations/visitValidations';
 
 const router: Router = express.Router();
+const MAX_PDF_UPLOAD_BYTES = 30 * 1024 * 1024; // 30 MB
 
 const documentsUpload = multer({
   storage: multer.memoryStorage(),
@@ -119,7 +120,7 @@ const documentsUpload = multer({
     cb(new Error('Only image or PDF uploads are allowed'));
   },
   limits: {
-    fileSize: 10 * 1024 * 1024,
+    fileSize: MAX_PDF_UPLOAD_BYTES,
     files: 25
   }
 });
@@ -153,7 +154,10 @@ const handleQuotationDocumentsMultipart = (req: express.Request, res: express.Re
     if (e.code === 'LIMIT_FILE_SIZE') {
       res.status(413).json({
         success: false,
-        error: { code: 'VALIDATION_ERROR', message: 'One or more files exceed the maximum upload size' }
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'One or more files exceed the 30 MB maximum upload size'
+        }
       });
       return;
     }
@@ -194,7 +198,10 @@ const handleSingleQuotationDocumentUpload = (
     if (e.code === 'LIMIT_FILE_SIZE') {
       res.status(413).json({
         success: false,
-        error: { code: 'VALIDATION_ERROR', message: 'Uploaded file exceeds the maximum upload size' }
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Uploaded file exceeds the 30 MB maximum upload size'
+        }
       });
       return;
     }
@@ -234,7 +241,10 @@ const handleQuotationMeteringDetailsMultipart = (
     if (e.code === 'LIMIT_FILE_SIZE') {
       res.status(413).json({
         success: false,
-        error: { code: 'VALIDATION_ERROR', message: 'meterDocumentImage exceeds max file size' }
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'meterDocumentImage exceeds the 30 MB maximum upload size'
+        }
       });
       return;
     }
@@ -263,7 +273,10 @@ const handleQuotationMeteringMcoMultipart = (
     if (e.code === 'LIMIT_FILE_SIZE') {
       res.status(413).json({
         success: false,
-        error: { code: 'VALIDATION_ERROR', message: 'One or more MCO documents exceed max file size' }
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'One or more MCO documents exceed the 30 MB maximum upload size'
+        }
       });
       return;
     }
