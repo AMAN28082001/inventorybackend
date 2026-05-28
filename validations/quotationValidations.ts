@@ -458,19 +458,13 @@ export const quotationDocumentsSchema = z.object({
 }).refine((data) => {
   const isCompliant = data.isCompliantSenior === true;
   if (!isCompliant) return true;
-  return !!data.compliantAadharNumber &&
-    !!data.compliantContactPhone &&
+  return !!data.compliantContactPhone &&
     !!data.compliantAadharFront &&
     !!data.compliantAadharBack &&
-    !!data.compliantPanNumber &&
     !!data.compliantPanImage &&
-    !!data.compliantBankAccountNumber &&
-    !!data.compliantBankIfsc &&
-    !!data.compliantBankName &&
-    !!data.compliantBankBranch &&
     !!data.compliantBankPassbookImage;
 }, {
-  message: 'Compliant documents are required when isCompliantSenior is true'
+  message: 'Compliant documents are required when isCompliantSenior is true (contact + compliant images)'
 });
 
 

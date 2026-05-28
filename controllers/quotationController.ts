@@ -3580,27 +3580,51 @@ export const saveQuotationDocuments = async (req: Request, res: Response): Promi
     }
 
     if (payload.isCompliantSenior) {
-      if (
-        !payload.compliantAadharNumber ||
+      const compliantRequiredMissing =
         !payload.compliantContactPhone ||
         !payload.compliantAadharFront ||
         !payload.compliantAadharBack ||
-        !payload.compliantPanNumber ||
         !payload.compliantPanImage ||
-        !payload.compliantBankAccountNumber ||
-        !payload.compliantBankIfsc ||
-        !payload.compliantBankName ||
-        !payload.compliantBankBranch ||
-        !payload.compliantBankPassbookImage
-      ) {
+        !payload.compliantBankPassbookImage;
+      if (compliantRequiredMissing) {
         res.status(400).json({
           success: false,
           error: {
             code: 'VALIDATION_ERROR',
             message: 'Compliant documents are required when isCompliantSenior is true',
             details: [
-              { field: 'isCompliantSenior', message: 'Set to true requires all compliant fields and files' }
+              {
+                field: 'isCompliantSenior',
+                message:
+                  'Set to true requires compliantContactPhone, compliantAadharFront, compliantAadharBack, compliantPanImage, and compliantBankPassbookImage'
+              }
             ]
+          }
+        });
+        return;
+      }
+
+      const compliantDetails: Array<{ field: string; message: string }> = [];
+      const phoneRegex = /^\d{10}$/;
+      const aadharRegex = /^\d{12}$/;
+      const panRegex = /^[A-Z]{5}\d{4}[A-Z]$/;
+
+      if (payload.compliantContactPhone && !phoneRegex.test(String(payload.compliantContactPhone).trim())) {
+        compliantDetails.push({ field: 'compliantContactPhone', message: 'Compliant phone number must be 10 digits' });
+      }
+      if (payload.compliantAadharNumber && !aadharRegex.test(String(payload.compliantAadharNumber).trim())) {
+        compliantDetails.push({ field: 'compliantAadharNumber', message: 'Compliant Aadhar number must be 12 digits' });
+      }
+      if (payload.compliantPanNumber && !panRegex.test(String(payload.compliantPanNumber).trim().toUpperCase())) {
+        compliantDetails.push({ field: 'compliantPanNumber', message: 'PAN must be in format ABCDE1234F' });
+      }
+      if (compliantDetails.length > 0) {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'Invalid compliant document payload',
+            details: compliantDetails
           }
         });
         return;
