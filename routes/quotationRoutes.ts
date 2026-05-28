@@ -3,6 +3,8 @@ import multer, { MulterError } from 'multer';
 import {
   isAllowedStandardImageOrPdfUpload,
   isAllowedStandardImageUpload,
+  isAllowedPdfUpload,
+  pdfOnlyValidationMessage,
   standardImageOrPdfValidationMessage,
   standardImageValidationMessage
 } from '../utils/uploadMimeTypes';
@@ -67,7 +69,6 @@ const documentsUpload = multer({
       'aadharFront',
       'aadharBack',
       'panImage',
-      'electricityBillImage',
       'bankPassbookImage',
       'compliantAadharFront',
       'compliantAadharBack',
@@ -82,7 +83,7 @@ const documentsUpload = multer({
       'inverterWarrantyFile',
       'workCompletionWarrantyFile'
     ]);
-    const pdfOnlyFields = new Set(['propertyDocumentPdf']);
+    const pdfOnlyFields = new Set(['propertyDocumentPdf', 'electricityBillImage']);
 
     if (imageOnlyFields.has(file.fieldname)) {
       if (isAllowedStandardImageUpload(file)) {
@@ -103,11 +104,11 @@ const documentsUpload = multer({
     }
 
     if (pdfOnlyFields.has(file.fieldname)) {
-      if (file.mimetype === 'application/pdf') {
+      if (isAllowedPdfUpload(file)) {
         cb(null, true);
         return;
       }
-      cb(new Error(`${file.fieldname} must be a PDF`));
+      cb(new Error(pdfOnlyValidationMessage(file.fieldname)));
       return;
     }
 

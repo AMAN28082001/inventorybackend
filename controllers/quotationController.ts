@@ -33,6 +33,8 @@ import {
 import {
   isAllowedStandardImageOrPdfUpload,
   isAllowedStandardImageUpload,
+  isAllowedPdfUpload,
+  pdfOnlyValidationMessage,
   resolveImageContentTypeForUpload,
   standardImageOrPdfValidationMessage,
   standardImageValidationMessage
@@ -3082,7 +3084,6 @@ const QUOTATION_DOCUMENT_IMAGE_ONLY_FIELDS = new Set([
   'aadharFront',
   'aadharBack',
   'panImage',
-  'electricityBillImage',
   'bankPassbookImage',
   'geotagRoofPhoto',
   'customerWithHousePhoto',
@@ -3099,7 +3100,7 @@ const QUOTATION_DOCUMENT_IMAGE_OR_PDF_FIELDS = new Set([
   'workCompletionWarrantyFile'
 ]);
 
-const QUOTATION_DOCUMENT_PDF_ONLY_FIELDS = new Set(['propertyDocumentPdf']);
+const QUOTATION_DOCUMENT_PDF_ONLY_FIELDS = new Set(['propertyDocumentPdf', 'electricityBillImage']);
 
 const ensureQuotationDocumentUploadFieldIsValid = (
   fieldName: string,
@@ -3120,9 +3121,9 @@ const ensureQuotationDocumentUploadFieldIsValid = (
       : { valid: false, message: standardImageOrPdfValidationMessage(fieldName) };
   }
   if (QUOTATION_DOCUMENT_PDF_ONLY_FIELDS.has(fieldName)) {
-    return file.mimetype === 'application/pdf'
+    return isAllowedPdfUpload(file)
       ? { valid: true }
-      : { valid: false, message: `${fieldName} must be a PDF` };
+      : { valid: false, message: pdfOnlyValidationMessage(fieldName) };
   }
   return file.mimetype.startsWith('image/') || file.mimetype === 'application/pdf'
     ? { valid: true }

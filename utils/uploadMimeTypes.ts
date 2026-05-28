@@ -39,6 +39,14 @@ export const isAllowedStandardImageOrPdfUpload = (file: {
 }): boolean =>
   isAllowedStandardImageUpload(file) || file.mimetype === 'application/pdf';
 
+export const isAllowedPdfUpload = (file: {
+  mimetype: string;
+  originalname?: string;
+}): boolean => {
+  const name = String(file.originalname || '').toLowerCase().trim();
+  return file.mimetype === 'application/pdf' && name.endsWith('.pdf');
+};
+
 /** Persist correct Content-Type on S3 for HEIC when the client sends a generic MIME. */
 export const resolveImageContentTypeForUpload = (file: {
   mimetype: string;
@@ -62,3 +70,6 @@ export const standardImageValidationMessage = (fieldName: string): string =>
 
 export const standardImageOrPdfValidationMessage = (fieldName: string): string =>
   `${fieldName} must be jpeg/jpg/png/webp/heic/heif/pdf`;
+
+export const pdfOnlyValidationMessage = (fieldName: string): string =>
+  `${fieldName} must be a PDF (.pdf)`;
