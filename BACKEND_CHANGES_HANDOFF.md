@@ -40,7 +40,7 @@ yarn migrate
 
 Optional: `TZ=Asia/Kolkata` if weekly HR reports must match SPA Mon–Sun in IST.
 
-**Not required on backend:** logout console noise (frontend); dealer analytics date filter (client-side on queue `recentActions`).
+**Not required on backend:** logout console noise (frontend); dealer analytics date filter (client-side on queue `recentActions`); **Payment Management installment-count filter** (client-side on loaded `phases` — see §12).
 
 ---
 
@@ -393,6 +393,10 @@ On multipart routes (quotation documents, visitor/dealer visit complete, meterin
 
 **Text fields:** `isCompliantSenior`, `aadharNumber`, `phoneNumber`, `emailId`, `panNumber`, `electricityKno`, bank block, compliant block, etc.
 
+**Electricity bill:** `electricityBillImage` — **PDF only** (`application/pdf`, `.pdf`), max **30 MB** per file (multer limit).
+
+**Compliant senior (`isCompliantSenior === true`):** required — `compliantContactPhone`, `compliantAadharFront`, `compliantAadharBack`, `compliantPanImage`, `compliantBankPassbookImage`. Optional text — `compliantAadharNumber`, `compliantPanNumber`, compliant bank fields (format-validated only when provided). When `false`, compliant required checks are skipped.
+
 ### `GET /api/quotations/{quotationId}/documents/zip`
 
 - **Auth:** dealer (own rows) / admin; account-management/hr on approved quotations.
@@ -403,6 +407,41 @@ On multipart routes (quotation documents, visitor/dealer visit complete, meterin
 
 - `GET /api/quotations/{quotationId}/documents/view-url?url=…`
 - `GET /api/quotations/{quotationId}/documents/presign-url?url=…`
+
+---
+
+## 12. Payment Management — installment filter & related UI (May 2026)
+
+### Installment count filter — **no new backend endpoint**
+
+**Frontend-only:** Account Management **Payment Management** filters by `payment.phases.length` (or `installments` / `paymentPhases` / `payment_phases`) in the browser after loading approved quotations. The API does **not** need `?installmentCount=` for this behavior.
+
+**Backend contract (already implemented):**
+
+| Requirement | Detail |
+|-------------|--------|
+| List source | `GET /api/quotations?status=approved` (account-management role) |
+| Per quotation | Return real phase array on **`installments`**, **`paymentPhases`**, and **`payment_phases`** (same data, three keys) |
+| After save | `PATCH` / `PUT` `/api/quotations/{id}/installments` (and aliases `payment-details`, `payment-mode`) persists phases; subsequent **GET** must echo updated array |
+
+**Phase object shape (typical):** `phaseNumber`, `phaseName`, `amount`, `paidAmount`, `status`, `dueDate`, `paymentDate`, `paymentMode`, …
+
+If the UI shows the wrong installment count, debug **stale or empty `installments[]` on GET**, not the filter logic.
+
+### Optional backend enhancements (not required for filter)
+
+| Area | Enhancement |
+|------|-------------|
+| Large approved lists | `GET /api/quotations?status=approved&installmentCount=2` server-side filter |
+| Dealers by Revenue | `statusApprovedAt` / `approved_at` on approve (**done** — §10) |
+| Active dealer dropdowns | `GET /api/dealers?isActive=true` (dealer routes; admin list uses `includeInactive`) |
+| Duplicate customer UX | Include `dealer` / `dealerName` on quotation list/detail for search rows |
+
+### Other Payment Management UI (frontend-only on existing data)
+
+- **Dealers by Revenue**, date/dealer filters, table scroll — computed in SPA from quotations/dealers already returned by GET APIs.
+
+**Code:** `controllers/quotationController.ts` → `getQuotations`, `updateQuotationPaymentDetails`; `QuotationPaymentPhase` table.
 
 ---
 

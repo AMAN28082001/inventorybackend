@@ -137,3 +137,34 @@ Allowed keys: `waaree_540_560_bifacial`, `waaree_580_700_bifacial_topcon`, `adan
 | KYC documents | `PATCH /api/quotations/{id}/documents` | Partial multipart, allowlisted fields |
 | Documents ZIP | `GET /api/quotations/{id}/documents/zip` | Server-side S3 fetch |
 | Presign | `GET /api/quotations/{id}/documents/view-url` | Private bucket browse |
+
+---
+
+## Payment Management — installment count filter (client-side)
+
+**No new API work** is required for the Account Management **installment count** dropdown. The SPA filters loaded rows by `phases.length` (aliases: `installments`, `paymentPhases`, `payment_phases`).
+
+### What the backend must already return
+
+- **`GET /api/quotations?status=approved`** (account-management JWT): each quotation includes the current installment/phase array under all three keys above.
+- After **`PATCH` / `PUT` `/api/quotations/{quotationId}/installments`** (or `payment-details` / `payment-mode` aliases), the next **GET** must reflect saved phases (read-after-write).
+
+### Troubleshooting wrong counts in UI
+
+- Usually **missing or stale `installments[]`** on list/detail GET, not frontend filter logic.
+- Verify `quotation_payment_phases` (or equivalent) rows exist for that `quotationId`.
+
+### Optional (performance only)
+
+- `GET /api/quotations?status=approved&installmentCount=2` — server-side filter if approved list grows very large.
+
+### Related (optional, separate features)
+
+| Area | Note |
+|------|------|
+| Dealers by Revenue | `statusApprovedAt` / `approved_at` when admin approves |
+| Active dealers | `GET /api/dealers?isActive=true` |
+| Duplicate customer search | Return `dealer` / `dealerName` on quotation rows |
+| Compliant senior | When `isCompliantSenior=true`, require contact + 4 compliant images only (text bank/PAN fields optional) — **implemented** |
+
+**Handoff:** `BACKEND_CHANGES_HANDOFF.md` §12.
