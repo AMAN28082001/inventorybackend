@@ -9,6 +9,8 @@ interface QuotationAttributes {
   status: 'pending' | 'approved' | 'rejected' | 'completed';
   discount: number;
   subtotal: number;        // Set price (complete package price)
+  /** Persisted system size (kW) from panel config — used by admin overview */
+  systemKw?: number | null;
   totalAmount: number;     // Amount after discount (Subtotal - Subsidy - Discount)
   finalAmount: number;     // Final amount (Subtotal - Subsidy, discount NOT applied)
   centralSubsidy: number;  // Central government subsidy
@@ -100,7 +102,7 @@ interface QuotationAttributes {
 
 interface QuotationCreationAttributes extends Optional<
   QuotationAttributes,
-  'id' | 'status' | 'discount' | 'createdAt' | 'updatedAt' | 'centralSubsidy' | 'stateSubsidy' | 'totalSubsidy' | 'amountAfterSubsidy' | 'discountAmount' |   'paymentMode' | 'paymentType' | 'bankName' | 'bankIfsc' | 'subsidyChequeDetails' | 'fileLoginStatus' | 'filePaymentType' | 'fileBankName' | 'fileBankIfsc' | 'fileSubsidyChequeDetails' | 'fileLoginAt' | 'statusApprovedAt'   | 'statusHistory' | 'subsidyCheques' | 'remainingAmount' | 'paidAmount' | 'paymentDate' | 'paymentStatus' | 'paymentPhases' | 'paymentPlanUpdatedBy' | 'paymentPlanUpdatedAt' | 'approvedAt' | 'installationStatus' | 'installerId' | 'installerActionAt' | 'installerInProgressAt' |   'installerApprovedAt' | 'installerRemarks' | 'installationReadyForInstaller' | 'installationReleasedAt' | 'installationScheduledAt' | 'installationTeamId' |   'baldevId' | 'baldevActionAt' | 'baldevRemarks' | 'meteringId' | 'meteringActionAt' | 'meteringApprovedAt' | 'meteringRemarks' | 'discomName' | 'meterType' | 'meterNo' | 'solarMeterNo' | 'netMeterNo' | 'meterDocumentImageUrl' | 'mcoAt' | 'completionAt' | 'siteLengthCm' | 'siteWidthCm' | 'siteHeightCm' | 'backLegFt' | 'midLegFt' | 'frontLegFt' | 'extraExpensesTotal' | 'extraExpensesJson'
+  'id' | 'status' | 'discount' | 'createdAt' | 'updatedAt' | 'centralSubsidy' | 'stateSubsidy' | 'totalSubsidy' | 'amountAfterSubsidy' | 'discountAmount' | 'systemKw' |   'paymentMode' | 'paymentType' | 'bankName' | 'bankIfsc' | 'subsidyChequeDetails' | 'fileLoginStatus' | 'filePaymentType' | 'fileBankName' | 'fileBankIfsc' | 'fileSubsidyChequeDetails' | 'fileLoginAt' | 'statusApprovedAt'   | 'statusHistory' | 'subsidyCheques' | 'remainingAmount' | 'paidAmount' | 'paymentDate' | 'paymentStatus' | 'paymentPhases' | 'paymentPlanUpdatedBy' | 'paymentPlanUpdatedAt' | 'approvedAt' | 'installationStatus' | 'installerId' | 'installerActionAt' | 'installerInProgressAt' |   'installerApprovedAt' | 'installerRemarks' | 'installationReadyForInstaller' | 'installationReleasedAt' | 'installationScheduledAt' | 'installationTeamId' |   'baldevId' | 'baldevActionAt' | 'baldevRemarks' | 'meteringId' | 'meteringActionAt' | 'meteringApprovedAt' | 'meteringRemarks' | 'discomName' | 'meterType' | 'meterNo' | 'solarMeterNo' | 'netMeterNo' | 'meterDocumentImageUrl' | 'mcoAt' | 'completionAt' | 'siteLengthCm' | 'siteWidthCm' | 'siteHeightCm' | 'backLegFt' | 'midLegFt' | 'frontLegFt' | 'extraExpensesTotal' | 'extraExpensesJson'
 > {}
 
 class Quotation extends Model<QuotationAttributes, QuotationCreationAttributes> implements QuotationAttributes {
@@ -111,6 +113,7 @@ class Quotation extends Model<QuotationAttributes, QuotationCreationAttributes> 
   public status!: 'pending' | 'approved' | 'rejected' | 'completed';
   public discount!: number;
   public subtotal!: number;        // Set price (complete package price)
+  public systemKw!: number | null;
   public totalAmount!: number;     // Amount after discount (Subtotal - Subsidy - Discount)
   public finalAmount!: number;     // Final amount (Subtotal - Subsidy, discount NOT applied)
   public centralSubsidy!: number;  // Central government subsidy
@@ -226,6 +229,11 @@ Quotation.init(
       type: DataTypes.DECIMAL(12, 2),
       allowNull: false,
       defaultValue: 0
+    },
+    systemKw: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: true,
+      field: 'system_kw'
     },
     totalAmount: {
       type: DataTypes.DECIMAL(12, 2),

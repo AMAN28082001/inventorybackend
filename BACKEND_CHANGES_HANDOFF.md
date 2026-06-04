@@ -1,6 +1,6 @@
 # Backend changes handoff (May 2026)
 
-**Single handoff doc for the API team.** Full specs: `BACKEND_CHANGES_REQUIRED.md` (§7.8–§7.9, dealer queue §E–§H, §J, §X, §Y). Reference contracts: `BACKEND_ADMIN_QUOTATION_STATUS.ts`. Implementation: `controllers/callingLeadController.ts`, `controllers/quotationController.ts`, `controllers/visitController.ts`, `controllers/customerController.ts`, `utils/quotationProductPdfDisplay.ts`, `utils/s3Service.ts`.
+**Single handoff doc for the API team.** Full specs: `BACKEND_CHANGES_REQUIRED.md` (§7.8–§7.9, dealer queue §E–§H, §J, §X, §Y). Reference contracts: `BACKEND_ADMIN_QUOTATION_STATUS.ts`. Implementation: `controllers/callingLeadController.ts`, `controllers/quotationController.ts`, `controllers/visitController.ts`, `controllers/customerController.ts`, `utils/quotationProductPdfDisplay.ts`, `utils/quotationTataDcrValidation.ts`, `utils/s3Service.ts`.
 
 ## Sprint checklist (copy for tracking)
 
@@ -25,6 +25,10 @@
 | 17 | Medium | HEIC/HEIF on multipart uploads | **Done** | §9 |
 | 18 | Medium | Manual approve / file-login timestamps | **Done** | §10 |
 | 19 | Medium | Admin dealers `includeInactive` + pagination | **Done** | §10 |
+| 20 | Medium | Payment Management list fields (dealer, phases, dates) | **Done** | §12 |
+| 21 | Medium | Admin Overview kW — `products` + `systemKw` on list | **Done** | §13 |
+| 22 | Medium | `GET /api/quotations/pricing-tables` (June 2026 defaults) | **Done** | §2.5 |
+| 23 | **High** | Tata DCR `tata_530_570` + `VAL_003` relax + GET echo PDF keys | **Done** | §2.6 |
 
 **Deploy before QA:**
 
@@ -37,10 +41,26 @@ yarn migrate
 | `20260519120000-add-pdf-display-flags-to-quotation-products.js` | Legacy booleans (old quotations) |
 | `20260521120000-add-pdf-panel-range-keys-to-quotation-products.js` | `pdfPanelRangeKey`, `pdfDcrPanelRangeKey`, `pdfNonDcrPanelRangeKey` |
 | `20260520120000-add-notes-to-customers.js` | `customers.notes` for calling → quotation prefill |
+| `database/migrations/add_system_kw_to_quotations.sql` (or bootstrap) | `quotations.system_kw` for admin kW + list `systemKw` |
+
+After migrate, optional backfill: `npx ts-node scripts/backfill-system-kw.ts`
 
 Optional: `TZ=Asia/Kolkata` if weekly HR reports must match SPA Mon–Sun in IST.
 
-**Not required on backend:** logout console noise (frontend); dealer analytics date filter (client-side on queue `recentActions`); **Payment Management installment-count filter** (client-side on loaded `phases` — see §12).
+**Not required on backend:** logout console noise (frontend); dealer analytics date filter (client-side on queue `recentActions`); **Payment Management installment-count filter** (client-side on loaded `phases` — see §12); account-management hooks / infinite scroll (see §14).
+
+### Backend ticket checklist (Account Management + Admin Overview)
+
+| Item | Status |
+|------|--------|
+| Approved list: `dealerId`, `dealer_id`, `dealer`, payment fields, full `installments` / `paymentPhases` | ✅ `getQuotations` |
+| `statusApprovedAt`, `fileLoginAt` on approved rows | ✅ `quotationAdminMetadataFields` |
+| `statusApprovedAt` set on approve transition | ✅ `PATCH /api/admin/quotations/:id/status` |
+| Admin list: `products` / `quotationProduct` + `systemKw` | ✅ `quotationProductListApiFields` |
+| PATCH payment phases → next GET shows updated phase array | ✅ `updateQuotationPaymentDetails` + `fetchPaymentPhasesByQuotationIds` |
+| `?dealerId=` / `?installmentCount=` on approved list | ❌ Optional |
+| `GET /admin/overview/dealer-stats` | ❌ Optional |
+| Persist `system_kw` column on create/update | ✅ `persistQuotationSystemKw` + migration |
 
 ---
 
@@ -81,7 +101,26 @@ Optional: `TZ=Asia/Kolkata` if weekly HR reports must match SPA Mon–Sun in IST
 | `pdfDcrPanelRangeKey` | BOTH — DCR line |
 | `pdfNonDcrPanelRangeKey` | BOTH — Non-DCR line |
 
-**Allowed values:** `waaree_540_560_bifacial`, `waaree_580_700_bifacial_topcon`, `adani_540_580_bifacial`, `adani_610_625_bifacial_topcon` (unknown keys stored as `null`).
+**Allowed values (`pdf_panel_range_key`):**
+
+| Key | PDF / overview panel spec text |
+|-----|--------------------------------|
+| `waaree_540_560_bifacial` | 540-560W Bifacial |
+| `waaree_580_700_bifacial_topcon` | 580-700W Bifacial Topcon |
+| `adani_540_580_bifacial` | 540-580W Bifacial |
+| `adani_610_625_bifacial_topcon` | 610-625W Bifacial Topcon |
+| `premier_600_625_bifacial_topcon` | 600-625W Bifacial Topcon |
+| **`tata_530_570`** | **530W - 570W** (Tata DCR package sets only) |
+
+Unknown keys normalize to `null` on persist. Labels: `utils/quotationProductPdfDisplay.ts` → `PDF_PANEL_RANGE_LABELS`.
+
+**PDF / overview display rules (client-generated PDF; keys must round-trip on GET):**
+
+- When a range key is set, the **panel** line uses the **range label** above — not generic “As per the set” for panel wattage.
+- **Tata DCR** (`panelBrand` = `Tata`, `systemType` = `dcr`) with **`tata_530_570`**: inverter line on PDF is always **“As per the set”** (package BOM), even if `products` stores catalog values (`Vsole/Xwatt`, `5kW`, etc.).
+- TOPCon technology note on PDF only when the active range key contains `topcon` (see `pdfPanelRangeShowsTopconNote()`).
+
+**Clear on uncheck (critical):** `PATCH …/products` uses `buildQuotationProductPdfPersistFieldsForUpdate` — only overwrites PDF columns **present in the body**. Explicit `""`, `null`, or `false` clears DB values; omitted keys are left unchanged (no accidental wipe on partial PATCH).
 
 **Snake_case aliases:** `pdf_panel_range_key`, `pdf_dcr_panel_range_key`, `pdf_non_dcr_panel_range_key`.
 
@@ -109,9 +148,99 @@ Optional: `TZ=Asia/Kolkata` if weekly HR reports must match SPA Mon–Sun in IST
 - Range keys are **not** passed into `validateProductSelection` or `calculatePricing`.
 - **`validUntil`** on create defaults to **`createdAt + 7 days`** (was 5).
 
-**Server PDFs:** use `utils/quotationProductPdfDisplay.ts` (`PDF_PANEL_RANGE_KEYS`, `extractPdfPanelRangeKeysFromProducts`).
+**Server PDFs:** use `utils/quotationProductPdfDisplay.ts` (`PDF_PANEL_RANGE_KEYS`, `PDF_PANEL_RANGE_LABELS`, `extractPdfPanelRangeKeysFromProducts`, `pdfInverterUsesAsPerTheSet`).
 
-**Frontend flow:** create may omit PDF keys on POST; follow-up `PATCH …/products` with range keys — backend must accept that PATCH (this implementation).
+**Frontend flow:** create may omit PDF keys on POST; follow-up `PATCH …/products` with range keys — backend must accept that PATCH. **GET is source of truth** for overview/PDF after save (not browser `localStorage`). New quotations are **DCR-only** on the SPA; legacy rows may remain `non-dcr` / `both`.
+
+**Pricing tables (§2.5):** `GET /api/quotations/pricing-tables` (alias of `GET /api/config/pricing`). When DB `dcr` is empty, API returns June 2026 defaults: Adani 555W, Adani Topcon 620W, Waaree 540W, Premier Energies, **Tata DCR** (`utils/defaultPricingTables.ts`).
+
+### §2.5 — Pricing tables API (optional but recommended)
+
+| Tata DCR row (example) | `systemSize` | Phase | Price (INR) |
+|------------------------|--------------|-------|---------------|
+| 5.1 kW 1-Phase package | `5.1kW` | 1-Phase | 310000 |
+
+Also: `3.1kW`, `6kW`, `8kW`, `10kW` Tata DCR rows in defaults when DB `dcr` is empty.
+
+### §2.6 — Tata DCR package sets (`VAL_003` fix)
+
+**Status: implemented** — `utils/quotationTataDcrValidation.ts`, `validateProductSelection` early path in `controllers/quotationController.ts`.
+
+**Do not return `VAL_003` / “Invalid product selection”** when `systemType === 'dcr'` and `panelBrand === 'Tata'` and the payload matches a fixed package set:
+
+| Rule | Allowed |
+|------|---------|
+| `panelSize` | `As per the set`, `530W`, or other catalog placeholder |
+| `panelQuantity` | `0` or omitted when `pdf_panel_range_key` = `tata_530_570` |
+| `inverterBrand` / `inverterSize` | `As per the set`, `Vsole/Xwatt`, `3kW`–`30kW` |
+| `structureSize` | `3.1kW`, `5.1kW`, `3kW`, `5kW`, `6kW`, `8kW`, `10kW` |
+| `acCableSize` / `dcCableSize` | `As per Set` / `As per the set` |
+| PDF key | `pdfPanelRangeKey` / `pdf_panel_range_key` = **`tata_530_570`** |
+
+**PATCH shapes (both accepted):**
+
+1. **Display + PDF keys** (after create):
+
+```json
+{
+  "products": {
+    "systemType": "dcr",
+    "panelBrand": "Tata",
+    "panelSize": "530W",
+    "panelQuantity": 10,
+    "inverterBrand": "Vsole/Xwatt",
+    "inverterSize": "5kW",
+    "structureSize": "5kW",
+    "pdfPanelRangeKey": "tata_530_570",
+    "pdf_panel_range_key": "tata_530_570"
+  }
+}
+```
+
+2. **Catalog-normalized** (POST may use this; PATCH can add PDF keys only):
+
+```json
+{
+  "products": {
+    "systemType": "dcr",
+    "panelBrand": "Tata",
+    "panelSize": "530W",
+    "panelQuantity": 0,
+    "inverterBrand": "Vsole/Xwatt",
+    "inverterSize": "5kW",
+    "structureSize": "5.1kW",
+    "centralSubsidy": 78000,
+    "systemPrice": 310000,
+    "pdfPanelRangeKey": "tata_530_570"
+  }
+}
+```
+
+**Required GET shape after save** (`GET /api/quotations/{id}` — `products` must include):
+
+```json
+{
+  "panelBrand": "Tata",
+  "panelSize": "530W",
+  "pdfPanelRangeKey": "tata_530_570",
+  "pdf_panel_range_key": "tata_530_570"
+}
+```
+
+If `pdf_panel_range_key` is missing on GET, the overview stays wrong after reload even when PATCH succeeded.
+
+### §2 — Backend checklist
+
+- [x] `tata_530_570` in `PDF_PANEL_RANGE_KEYS` + Zod enum
+- [x] Persist PDF keys on `PATCH /api/quotations/{id}/products` (JSONB + `quotation_products` columns)
+- [x] **Return** `pdf_panel_range_key` on GET list/detail (`quotationProductPdfDisplayApiFields`)
+- [x] PATCH clears keys on `""` / `null`
+- [x] `panelQuantity` 0 when range key set (Zod `hasPdfPanelRangeKey`)
+- [x] Tata DCR: no `VAL_003` for valid package payloads (`validateTataDcrProductSelection`)
+- [x] `As per the set` / `As per Set`; structure `3.1kW` / `5.1kW`
+- [x] Combined `inverterBrand` / `meterBrand` strings
+- [x] Tata DCR rows in default pricing tables
+- [ ] Frontend can drop client-side PDF inference once GET always echoes keys (verify in staging)
 
 ---
 
@@ -410,42 +539,183 @@ On multipart routes (quotation documents, visitor/dealer visit complete, meterin
 
 ---
 
-## 12. Payment Management — installment filter & related UI (May 2026)
+## 12. Account Management — Payment Management (May 2026)
 
 ### Installment count filter — **no new backend endpoint**
 
-**Frontend-only:** Account Management **Payment Management** filters by `payment.phases.length` (or `installments` / `paymentPhases` / `payment_phases`) in the browser after loading approved quotations. The API does **not** need `?installmentCount=` for this behavior.
+**Frontend-only:** filters by `payment.phases.length` (aliases: `installments`, `paymentPhases`, `payment_phases`) after loading approved quotations. No `?installmentCount=` required unless the approved list grows very large.
 
-**Backend contract (already implemented):**
+### Required on `GET /api/quotations?status=approved` (account-management)
 
-| Requirement | Detail |
-|-------------|--------|
-| List source | `GET /api/quotations?status=approved` (account-management role) |
-| Per quotation | Return real phase array on **`installments`**, **`paymentPhases`**, and **`payment_phases`** (same data, three keys) |
-| After save | `PATCH` / `PUT` `/api/quotations/{id}/installments` (and aliases `payment-details`, `payment-mode`) persists phases; subsequent **GET** must echo updated array |
+**Status: implemented** — each row includes:
 
-**Phase object shape (typical):** `phaseNumber`, `phaseName`, `amount`, `paidAmount`, `status`, `dueDate`, `paymentDate`, `paymentMode`, …
+| Field | Purpose |
+|-------|---------|
+| `dealerId` / `dealer_id` | Dealer filter dropdown (both keys on list rows) |
+| `dealer` | `{ id, firstName, lastName, mobile, email, username, role }` |
+| `statusApprovedAt` / `approved_at` | Approve-date range filter |
+| `fileLoginAt` / `file_login_at` | File-login date filter |
+| `paymentType`, `paymentStatus`, `paymentMode`, `bankName`, `bankIfsc` | Payment filters |
+| `installments` / `paymentPhases` / `payment_phases` | Installment **count** filter (array length) |
+| `subtotal`, `remaining`, `remainingAmount` | Payment amounts |
 
-If the UI shows the wrong installment count, debug **stale or empty `installments[]` on GET**, not the filter logic.
+After **`PATCH` / `PUT` `/api/quotations/{id}/installments`** (or `payment-details` / `payment-mode`), the next **GET** must echo updated phases (read-after-write).
 
-### Optional backend enhancements (not required for filter)
+If the UI shows the wrong installment count, debug **stale or empty `installments[]`**, not the filter.
 
-| Area | Enhancement |
-|------|-------------|
-| Large approved lists | `GET /api/quotations?status=approved&installmentCount=2` server-side filter |
-| Dealers by Revenue | `statusApprovedAt` / `approved_at` on approve (**done** — §10) |
-| Active dealer dropdowns | `GET /api/dealers?isActive=true` (dealer routes; admin list uses `includeInactive`) |
-| Duplicate customer UX | Include `dealer` / `dealerName` on quotation list/detail for search rows |
+### Dealer filter — **client-side today**
 
-### Other Payment Management UI (frontend-only on existing data)
+Dropdown filters (`All Dealers` / specific dealer / `Unassigned`) run in the browser on loaded rows. No new endpoint required if `dealerId` + nested `dealer` are present.
 
-- **Dealers by Revenue**, date/dealer filters, table scroll — computed in SPA from quotations/dealers already returned by GET APIs.
+### Optional (performance only)
 
-**Code:** `controllers/quotationController.ts` → `getQuotations`, `updateQuotationPaymentDetails`; `QuotationPaymentPhase` table.
+| Param | Behavior |
+|-------|----------|
+| `?dealerId={uuid}` | Server-side dealer filter on approved list |
+| `?dealerId=unassigned` | Rows with null/empty `dealer_id` |
+| `?installmentCount=2` | Exact phase-row count match |
+
+**Code:** `controllers/quotationController.ts` → `getQuotations`, `updateQuotationPaymentDetails`.
 
 ---
 
-## 9. Frontend (reference only)
+## 13. Admin Overview — total kW (capacity) by dealer (May 2026)
+
+### 13.1 — 0 kW bug — backend ticket (JAGDISH / revenue-only rows)
+
+**Symptom:** Dealers by Revenue shows correct **₹ revenue** (from `subtotal`) but **0 kW** — e.g. JAGDISH ₹2.7L, Nikhil ₹1.9L, capacity 0.
+
+**Cause:** Frontend sums kW only when the API returns **panel config** or **`systemKw`**. Revenue works from `subtotal` alone.
+
+**Fix (implemented in this repo):**
+
+| Endpoint | Change |
+|----------|--------|
+| `GET /api/admin/quotations` | `products` + `quotationProduct` + **`systemKw`** + root `panelSize` / `panel_quantity` |
+| `GET /api/quotations?status=approved` | Same enrichment |
+| `GET /api/quotations/{id}` | Same as list (was missing `systemKw` on detail) |
+| `GET /api/admin/quotations/{id}` | **Added `quotation_products` join** (was missing entirely) |
+| Approve + product save | Persist `quotations.system_kw` |
+
+**Migration:** `database/migrations/add_system_kw_to_quotations.sql`  
+**Backfill:** `npx ts-node scripts/backfill-system-kw.ts`
+
+**Example row:**
+
+```json
+{
+  "status": "approved",
+  "statusApprovedAt": "2026-05-15T10:00:00.000Z",
+  "dealerId": "dealer-uuid",
+  "subtotal": 270000,
+  "systemKw": 5,
+  "products": { "systemType": "dcr", "panelSize": "555W", "panelQuantity": 9 }
+}
+```
+
+**QA:** Network tab → JAGDISH approved row must show `systemKw > 0` or `products.panelSize` + `panelQuantity`. Filter “this month” uses **`statusApprovedAt`**, not `createdAt`.
+
+---
+
+**No new endpoint required.** Admin **Overview → Dealers by Revenue** sums **system kW** from each dealer’s **approved** quotations (same approval-date + dealer filters as revenue). Example: 12 approved quotes this month → **total kW = sum of all 12 system sizes**.
+
+**Frontend:** `lib/merge-quotation-products.ts`, `lib/quotation-system-kw.ts`, `app/dashboard/admin/page.tsx`.
+
+**Endpoint used today:** `GET /api/admin/quotations` (full list; client-side sum).
+
+### Required — list row fields
+
+| Field | Why |
+|-------|-----|
+| `status` = `approved` | Only approved rows count |
+| `statusApprovedAt` / `status_approved_at` / `approvedAt` | Date filter (this month, etc.) |
+| `dealerId` / `dealer_id` + nested `dealer` | Per-dealer grouping |
+| Product / size data | Compute kW |
+| `subtotal` | Revenue (unchanged) |
+
+### Product data — at least one source (frontend merges all)
+
+| Source | Backend status |
+|--------|----------------|
+| **`products`** (preferred) | ✅ `quotationProductsApiFields()` |
+| **`quotationProduct`** (joined-row alias) | ✅ Same merged object as `products` |
+| **`quotationProducts[]`** | ✅ `[merged]` when product row exists |
+| Flat root `panelSize` / `panel_quantity` | ❌ Not on `quotations` table |
+| Precomputed **`systemKw` / `system_kw`** | ✅ Computed on list (`utils/quotationSystemKw.ts`) |
+
+**Anti-pattern (0 kW in production):** `{ "products": {}, "subtotal": 297000, "status": "approved" }` — revenue works, kW does not.
+
+### Fields by system type (camelCase or snake_case)
+
+| System type | Fields |
+|-------------|--------|
+| DCR / Non-DCR | `systemType`, `panelSize`, `panelQuantity` |
+| BOTH | `dcrPanelSize`, `dcrPanelQuantity`, `nonDcrPanelSize`, `nonDcrPanelQuantity` |
+| CUSTOMIZE | `customPanels[]` `{ size, quantity }` |
+| Fallback | `inverterSize`, then `structureSize` |
+
+### kW formula (match if precomputing `system_kw`)
+
+```
+kW = (panelSizeW × panelQuantity) / 1000
+```
+
+BOTH: DCR kW + Non-DCR kW. CUSTOMIZE: sum all custom panel rows.
+
+### Backend verification checklist
+
+| Check | Status |
+|-------|--------|
+| List includes `products` **or** `quotationProduct` with panel fields | ✅ |
+| Not empty `products: {}` without panel data elsewhere | ⚠️ Data issue if `quotation_products` row missing |
+| `statusApprovedAt` set on approve | ✅ |
+| `dealerId` on every row | ✅ |
+| Return `systemKw` / `system_kw` on list | ✅ Precomputed per row |
+| Persist `system_kw` DB column | ✅ Migration + save on product update / approve |
+
+**If revenue correct but kW still 0:** (1) Deploy API with `systemKw` on list rows; (2) confirm frontend hits updated API; (3) inspect Network — missing `products` **and** `systemKw` usually means stale production or empty `quotation_products` row.
+
+### Optional (performance / accuracy)
+
+| Change | Benefit |
+|--------|---------|
+| `system_kw` column on create/update | Fast kW; frontend prefers when present |
+| `GET /api/admin/overview/dealer-stats?range=this_month` | Server aggregates for large volumes |
+
+**Code:** `utils/quotationSystemKw.ts` → `computeSystemKwFromProducts`; `utils/quotationApiJson.ts` → `quotationProductListApiFields` (adds `systemKw`); `controllers/adminController.ts` → `getAllQuotations`; `controllers/quotationController.ts` → `getQuotations`.
+
+**Reference:** `BACKEND_CHANGES_REQUIRED.md` §6.5.1.
+
+### QA
+
+1. Dealer with known approved count → Overview kW **> 0** when rows have panel config.
+2. Manual sum `(panelSize × panelQuantity) / 1000` per approved row ≈ dealer total.
+3. Revenue correct, kW 0 → API row lacks product/size fields.
+
+---
+
+## 14. Account Management hooks / scroll — no API change (May 2026)
+
+| Item | Backend |
+|------|---------|
+| React hooks fix on account-management page | **No change** — frontend only |
+| Payment list infinite scroll (batch 15) | **No change** — client slices already-fetched `GET /api/quotations?status=approved` list |
+| Admin installation/metering infinite scroll | **No change** — same client-side pattern |
+
+**Backend still responsible:** full approved list payload (§12) and fresh `installments` / `paymentPhases` after payment PATCH.
+
+---
+
+## 15. Mobile app — API URL (HTTPS)
+
+**No API code change** if production serves HTTPS on `https://api.inventory.chairbordsolar.com/api`.
+
+- HTTP → HTTPS redirect breaks Android WebView POST login; frontend uses HTTPS directly.
+- Ensure CORS allows `https://quotation.chairbordsolar.com` (and dev origins if needed).
+
+---
+
+## Appendix — Frontend reference (implemented)
 
 | File | Role |
 |------|------|
@@ -465,7 +735,7 @@ If the UI shows the wrong installment count, debug **stale or empty `installment
 |----------|--------|--------|
 | **1** | Calling queue `LEAD_004` | **Done** — A + B (claim/assign/patch) + C |
 | **2** | HR upload live counts | **Done** |
-| **3** | PDF panel range keys on products | **Done** (+ migrate) |
+| **3** | PDF panel range keys + **Tata `tata_530_570`** + `VAL_003` | **Done** (+ migrate) |
 | **4** | Remarks, tabs, start vs submit, customer note | **Done** (+ customer `notes` migrate) |
 | **5** | HR/Admin `GET` calling-actions (`dealerId`, dates, `custom`, aliases) | **Done** — §4.8 |
 | **6** | Quotation create stability | **Done** — §5 |
@@ -479,6 +749,28 @@ GET /api/hr/calling-actions?limit=2000&dealerId={uuid}&range=weekly&startDate=20
 When both `startDate` and `endDate` are sent, filtering uses that window on `action_at` (legacy rows may fall back to `created_at`). `range=weekly` without dates uses **Mon–Sun** in server local TZ.
 
 **Assignee rule:** `assignedDealerId` = who is calling; `dealerId` on lead = uploader/CRM only.
+
+---
+
+## 16. Troubleshooting — Admin API errors & 0 kW after deploy
+
+### `[API] ===== API ERROR DETECTED =====` on admin `loadData`
+
+| Check | Action |
+|-------|--------|
+| API process | `yarn dev` — default **PORT=3050** (see `.env`) |
+| Frontend base URL | `NEXT_PUBLIC_API_URL=http://localhost:3050/api` — **not** `localhost:3000` (Next.js does not proxy this backend) |
+| Auth | Valid admin JWT; `GET /api/admin/quotations` without token → **401** |
+| Migrations | `yarn migrate` + `system_kw` column (bootstrap also runs `ensureSystemKwColumn`) |
+
+**Typical causes:** connection refused (wrong port), **401** (expired token), **500** (missing column before migrate).
+
+### Revenue correct, kW still 0
+
+1. Network tab: approved row must include **`systemKw` > 0** and/or **`products.panelSize` + `panelQuantity`**.
+2. Confirm response is from **deployed** API (not cached old build).
+3. If `products: {}` and no `systemKw`: missing `quotation_products` row — run product save or backfill script.
+4. Date filter on Overview uses **`statusApprovedAt`**, not `createdAt`.
 
 ---
 

@@ -11,7 +11,8 @@ import { logError, logInfo } from '../utils/loggerHelper';
 import { deleteFileFromS3IfExists } from '../middleware/upload';
 import { decodeS3UrlPathToKey, generatePublicUrl, isPresignedS3GetUrl } from '../utils/s3Service';
 import { normalizePaymentModeInput } from '../utils/paymentMode';
-import { quotationAmountApiFields, quotationPaymentApiFields, quotationAdminMetadataFields } from '../utils/quotationApiJson';
+import { quotationAmountApiFields, quotationPaymentApiFields, quotationAdminMetadataFields, quotationProductEnrichmentFields } from '../utils/quotationApiJson';
+import { persistQuotationSystemKw } from '../utils/persistQuotationSystemKw';
 import {
   mapInstallationDocumentsForApi,
   quotationIdFromInstallationMediaRef,
@@ -25,11 +26,16 @@ import {
 import { meteringWorkflowApiFields } from '../utils/meteringWorkflowApi';
 import { extractS3KeyOrStoredPath } from '../utils/s3Service';
 import {
-  quotationProductPdfDisplayApiFields,
   buildQuotationProductPdfPersistFields,
+  buildQuotationProductPdfPersistFieldsForUpdate,
+  pickQuotationProductPersistPayload,
   isAllowedInverterBrandForCatalog,
   isAllowedMeterBrandForCatalog
 } from '../utils/quotationProductPdfDisplay';
+import {
+  isTataDcrPackageSet,
+  validateTataDcrProductSelection
+} from '../utils/quotationTataDcrValidation';
 import {
   isAllowedStandardImageOrPdfUpload,
   isAllowedStandardImageUpload,
@@ -154,6 +160,11 @@ const validateProductSelection = (products: any, catalog: any): { isValid: boole
   if (!catalog) {
     // If no catalog exists, skip validation (allow any products)
     return { isValid: true, errors: [] };
+  }
+
+  if (isTataDcrPackageSet(products)) {
+    const tataErrors = validateTataDcrProductSelection(products, catalog);
+    return { isValid: tataErrors.length === 0, errors: tataErrors };
   }
 
   // Validate panel selection
@@ -996,7 +1007,7 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
       quotationId = generateQuotationId();
     }
 
-    // Calculate valid until date (5 days from now)
+    // Calculate valid until date (7 days from now)
     const validUntil = new Date();
     validUntil.setDate(validUntil.getDate() + 7);
 
@@ -1097,6 +1108,12 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
           price: panel.price
         });
       }
+    }
+
+    try {
+      await persistQuotationSystemKw(quotation.id, quotation.systemType);
+    } catch (persistErr) {
+      logError('Persist system_kw on create failed (non-fatal)', persistErr, { quotationId: quotation.id });
     }
 
     logInfo('Quotation created', { quotationId: quotation.id, dealerId: req.dealer.id });
@@ -1340,6 +1357,11 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
             required: false
           },
           {
+            model: CustomPanel,
+            as: 'customPanels',
+            required: false
+          },
+          {
             model: QuotationDocument,
             as: 'documents',
             required: false
@@ -1372,6 +1394,11 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
           {
             model: QuotationProduct,
             as: 'products',
+            required: false
+          },
+          {
+            model: CustomPanel,
+            as: 'customPanels',
             required: false
           },
           {
@@ -1455,9 +1482,17 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         latestMeterDoc.name
       );
 
+      const productListFields = quotationProductEnrichmentFields(
+        products,
+        (q as any).customPanels,
+        q.systemType,
+        (q as any).systemKw
+      );
+
       return {
         id: q.id,
         dealerId: q.dealerId,
+        dealer_id: q.dealerId,
         customerType: customerTypeValue,
         customer_type: customerTypeValue,
         dealer: dealer ? {
@@ -1474,13 +1509,7 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
           lastName: customer.lastName ?? '',
           mobile: customer.mobile
         } : null,
-        products: products
-          ? {
-              systemType: products.systemType,
-              phase: products.phase,
-              ...quotationProductPdfDisplayApiFields(products as any)
-            }
-          : null,
+        ...productListFields,
         systemType: q.systemType,
         ...quotationPaymentApiFields(row),
         ...quotationAdminMetadataFields(row),
@@ -1884,6 +1913,7 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
       data: {
         id: quotation.id,
         dealerId: quotation.dealerId,
+        dealer_id: quotation.dealerId,
         customerType: customerTypeValue,
         customer_type: customerTypeValue,
         dealer: dealer ? {
@@ -1908,40 +1938,13 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
             pincode: customer.pincode
           }
         } : null,
-        products: products ? {
-          systemType: products.systemType,
-          phase: products.phase,
-          panelBrand: products.panelBrand,
-          panelSize: products.panelSize,
-          panelQuantity: products.panelQuantity,
-          dcrPanelBrand: products.dcrPanelBrand,
-          dcrPanelSize: products.dcrPanelSize,
-          dcrPanelQuantity: products.dcrPanelQuantity,
-          nonDcrPanelBrand: products.nonDcrPanelBrand,
-          nonDcrPanelSize: products.nonDcrPanelSize,
-          nonDcrPanelQuantity: products.nonDcrPanelQuantity,
-          inverterType: products.inverterType,
-          inverterBrand: products.inverterBrand,
-          inverterSize: products.inverterSize,
-          structureType: products.structureType,
-          structureSize: products.structureSize,
-          meterBrand: products.meterBrand,
-          acCableBrand: products.acCableBrand,
-          acCableSize: products.acCableSize,
-          dcCableBrand: products.dcCableBrand,
-          dcCableSize: products.dcCableSize,
-          acdb: products.acdb,
-          dcdb: products.dcdb,
-          hybridInverter: products.hybridInverter,
-          batteryCapacity: products.batteryCapacity,
-          batteryPrice:
-            products.batteryPrice !== undefined && products.batteryPrice !== null
-              ? Number(products.batteryPrice)
-              : null,
-          centralSubsidy: Number(products.centralSubsidy || 0),
-          stateSubsidy: Number(products.stateSubsidy || 0),
-          ...quotationProductPdfDisplayApiFields(products as any)
-        } : null,
+        systemType: quotation.systemType,
+        ...quotationProductEnrichmentFields(
+          products,
+          quotationAny.customPanels,
+          quotation.systemType,
+          quotationAny.systemKw
+        ),
         pricing: finalPricing,
         ...quotationAmountApiFields(rowById, finalPricing),
         status: quotation.status,
@@ -2198,7 +2201,8 @@ export const updateQuotationProducts = async (req: Request, res: Response): Prom
       return;
     }
 
-    const pdfPersistFields = buildQuotationProductPdfPersistFields(products);
+    const productPayload = pickQuotationProductPersistPayload(products);
+    const pdfPersistFields = buildQuotationProductPdfPersistFieldsForUpdate(products);
 
     // Update quotation system type if provided
     if (products.systemType) {
@@ -2224,8 +2228,8 @@ export const updateQuotationProducts = async (req: Request, res: Response): Prom
         systemType: products.systemType || quotation.systemType,
         subtotal: Number(quotation.subtotal || 0),
         totalAmount: Number(quotation.totalAmount || 0),
-        ...products,
-        ...pdfPersistFields,
+        ...productPayload,
+        ...buildQuotationProductPdfPersistFields(products),
         phase: phaseToSave
       });
     } else {
@@ -2234,7 +2238,7 @@ export const updateQuotationProducts = async (req: Request, res: Response): Prom
         phase: products.phase || quotationProduct.phase || '1-Phase'
       });
       await quotationProduct.update({
-        ...products,
+        ...productPayload,
         ...pdfPersistFields,
         phase: products.phase || quotationProduct.phase || '1-Phase'
       });
@@ -2279,22 +2283,38 @@ export const updateQuotationProducts = async (req: Request, res: Response): Prom
       ]
     });
 
+    try {
+      await persistQuotationSystemKw(quotation.id, effectiveSystemType);
+    } catch (persistErr) {
+      logError('Persist system_kw on product update failed (non-fatal)', persistErr, {
+        quotationId: quotation.id
+      });
+    }
+
     const updatedQuotationAny = updatedQuotation as any;
-    const productsData = updatedQuotationAny?.products?.toJSON();
+    const productsRow = updatedQuotationAny?.products;
     const customPanelsData = updatedQuotationAny?.customPanels?.map((cp: any) => cp.toJSON()) || [];
+    const productEnrichment = quotationProductEnrichmentFields(
+      productsRow,
+      customPanelsData,
+      updatedQuotation?.systemType,
+      updatedQuotationAny.systemKw
+    );
+    const mergedProducts = productEnrichment.products
+      ? {
+          ...productEnrichment.products,
+          customPanels: customPanelsData.length > 0 ? customPanelsData : undefined
+        }
+      : null;
 
     res.json({
       success: true,
       data: {
         id: updatedQuotation?.id,
         systemType: updatedQuotation?.systemType,
-        products: productsData
-          ? {
-              ...productsData,
-              ...quotationProductPdfDisplayApiFields(productsData),
-              customPanels: customPanelsData.length > 0 ? customPanelsData : undefined
-            }
-          : null,
+        ...productEnrichment,
+        products: mergedProducts,
+        quotationProduct: mergedProducts,
         updatedAt: updatedQuotation?.updatedAt
       }
     });

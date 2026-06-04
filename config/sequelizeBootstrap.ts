@@ -13,6 +13,17 @@ const ensureInstallationScheduledAtColumn = async (): Promise<void> => {
   }
 };
 
+const ensureSystemKwColumn = async (): Promise<void> => {
+  try {
+    await sequelize.query(
+      'ALTER TABLE quotations ADD COLUMN IF NOT EXISTS system_kw NUMERIC(10, 2) NULL;'
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.warn('Could not ensure quotations.system_kw column', { message });
+  }
+};
+
 const ensureInstallationTeamsSchema = async (): Promise<void> => {
   try {
     await sequelize.query(`
@@ -44,6 +55,7 @@ export const sequelizeBootstrap = (async (): Promise<void> => {
   try {
     await sequelize.authenticate();
     await ensureInstallationScheduledAtColumn();
+    await ensureSystemKwColumn();
     await ensureInstallationTeamsSchema();
     logger.info('PostgreSQL database connected successfully');
   } catch (error) {

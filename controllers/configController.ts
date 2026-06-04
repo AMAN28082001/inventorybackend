@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { SystemConfig } from '../models/index-quotation';
 import { logError, logInfo } from '../utils/loggerHelper';
 import { pricingTablesSchema } from '../validations/pricingValidations';
+import { mergeDefaultDcrPricing } from '../utils/defaultPricingTables';
 
 // Helper function to normalize catalog data - ensures all arrays are arrays (never null/undefined)
 const normalizeCatalog = (catalog: any): any => {
@@ -263,7 +264,7 @@ const normalizePricingTables = (pricing: any): any => {
     cables: Array.isArray(pricing?.cables) ? pricing.cables : [],
     acdb: Array.isArray(pricing?.acdb) ? pricing.acdb : [],
     dcdb: Array.isArray(pricing?.dcdb) ? pricing.dcdb : [],
-    dcr: Array.isArray(pricing?.dcr) ? pricing.dcr : [],
+    dcr: mergeDefaultDcrPricing(pricing?.dcr),
     nonDcr: Array.isArray(pricing?.nonDcr) ? pricing.nonDcr : [],
     both: Array.isArray(pricing?.both) ? pricing.both : [],
     systemConfigs: Array.isArray(pricing?.systemConfigs) ? pricing.systemConfigs : []

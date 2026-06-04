@@ -1,4 +1,6 @@
 import { readSubsidyChequesFromRow } from './subsidyChequesNormalize';
+import { quotationProductPdfDisplayApiFields } from './quotationProductPdfDisplay';
+import { computeSystemKwFromProducts, formatSystemSizeKw } from './quotationSystemKw';
 
 export type QuotationStatusHistoryEntry = { status: string; at: string };
 
@@ -111,6 +113,170 @@ export function approvedQuotationValueFromRow(row: {
     pick(row.finalAmount ?? row.final_amount) ??
     0;
   return Math.abs(amount);
+}
+
+function toPlainProductRow(value: unknown): Record<string, unknown> | null {
+  if (value == null) return null;
+  if (typeof (value as { toJSON?: () => unknown }).toJSON === 'function') {
+    return (value as { toJSON: () => unknown }).toJSON() as Record<string, unknown>;
+  }
+  if (typeof (value as { get?: (opts: { plain: true }) => unknown }).get === 'function') {
+    return (value as { get: (opts: { plain: true }) => unknown }).get({ plain: true }) as Record<
+      string,
+      unknown
+    >;
+  }
+  if (typeof value === 'object') return value as Record<string, unknown>;
+  return null;
+}
+
+/** Full products blob for list/detail (admin kW, payment UI, PDF). */
+export function quotationProductsApiFields(
+  products: Record<string, unknown> | null | undefined,
+  customPanels?: unknown[] | null
+) {
+  const plainProducts = toPlainProductRow(products);
+  if (!plainProducts) return null;
+  const panels = (customPanels || []).map((cp: unknown) => {
+    const row =
+      cp && typeof (cp as { toJSON?: () => unknown }).toJSON === 'function'
+        ? ((cp as { toJSON: () => unknown }).toJSON() as Record<string, unknown>)
+        : (cp as Record<string, unknown>);
+    return {
+      brand: row.brand,
+      size: row.size,
+      quantity: row.quantity,
+      type: row.type,
+      price: row.price !== undefined && row.price !== null ? Number(row.price) : undefined
+    };
+  });
+  return {
+    systemType: plainProducts.systemType ?? plainProducts.system_type,
+    phase: plainProducts.phase,
+    panelBrand: plainProducts.panelBrand ?? plainProducts.panel_brand,
+    panelSize: plainProducts.panelSize ?? plainProducts.panel_size,
+    panelQuantity: plainProducts.panelQuantity ?? plainProducts.panel_quantity,
+    dcrPanelBrand: plainProducts.dcrPanelBrand ?? plainProducts.dcr_panel_brand,
+    dcrPanelSize: plainProducts.dcrPanelSize ?? plainProducts.dcr_panel_size,
+    dcrPanelQuantity: plainProducts.dcrPanelQuantity ?? plainProducts.dcr_panel_quantity,
+    nonDcrPanelBrand: plainProducts.nonDcrPanelBrand ?? plainProducts.non_dcr_panel_brand,
+    nonDcrPanelSize: plainProducts.nonDcrPanelSize ?? plainProducts.non_dcr_panel_size,
+    nonDcrPanelQuantity: plainProducts.nonDcrPanelQuantity ?? plainProducts.non_dcr_panel_quantity,
+    inverterType: plainProducts.inverterType ?? plainProducts.inverter_type,
+    inverterBrand: plainProducts.inverterBrand ?? plainProducts.inverter_brand,
+    inverterSize: plainProducts.inverterSize ?? plainProducts.inverter_size,
+    structureType: plainProducts.structureType ?? plainProducts.structure_type,
+    structureSize: plainProducts.structureSize ?? plainProducts.structure_size,
+    meterBrand: plainProducts.meterBrand ?? plainProducts.meter_brand,
+    acCableBrand: plainProducts.acCableBrand ?? plainProducts.ac_cable_brand,
+    acCableSize: plainProducts.acCableSize ?? plainProducts.ac_cable_size,
+    dcCableBrand: plainProducts.dcCableBrand ?? plainProducts.dc_cable_brand,
+    dcCableSize: plainProducts.dcCableSize ?? plainProducts.dc_cable_size,
+    acdb: plainProducts.acdb,
+    dcdb: plainProducts.dcdb,
+    hybridInverter: plainProducts.hybridInverter ?? plainProducts.hybrid_inverter,
+    batteryCapacity: plainProducts.batteryCapacity ?? plainProducts.battery_capacity,
+    batteryPrice:
+      plainProducts.batteryPrice !== undefined && plainProducts.batteryPrice !== null
+        ? Number(plainProducts.batteryPrice)
+        : plainProducts.battery_price !== undefined && plainProducts.battery_price !== null
+          ? Number(plainProducts.battery_price)
+          : null,
+    centralSubsidy: Number((plainProducts.centralSubsidy ?? plainProducts.central_subsidy) || 0),
+    stateSubsidy: Number((plainProducts.stateSubsidy ?? plainProducts.state_subsidy) || 0),
+    ...(panels.length > 0 ? { customPanels: panels } : {}),
+    ...quotationProductPdfDisplayApiFields(plainProducts as any)
+  };
+}
+
+function resolveSystemKwForApi(
+  merged: ReturnType<typeof quotationProductsApiFields> | null,
+  customPanels: unknown[] | null | undefined,
+  quotationSystemType: string | null | undefined,
+  storedSystemKw?: unknown
+): number {
+  const computed = computeSystemKwFromProducts(merged, customPanels, quotationSystemType);
+  if (storedSystemKw !== undefined && storedSystemKw !== null && storedSystemKw !== '') {
+    const stored = Number(storedSystemKw);
+    if (Number.isFinite(stored) && stored > 0) {
+      return Math.round(stored * 100) / 100;
+    }
+  }
+  return computed;
+}
+
+/** Flatten panel fields to quotation root for clients that do not read nested `products`. */
+export function quotationPanelRootApiFields(
+  merged: ReturnType<typeof quotationProductsApiFields> | null
+) {
+  if (!merged) return {};
+  const pick = (camel: keyof typeof merged, snake: string) => {
+    const v = merged[camel];
+    if (v === undefined || v === null) return {};
+    return { [camel]: v, [snake]: v };
+  };
+  return {
+    ...pick('systemType', 'system_type'),
+    ...pick('panelSize', 'panel_size'),
+    ...pick('panelQuantity', 'panel_quantity'),
+    ...pick('dcrPanelSize', 'dcr_panel_size'),
+    ...pick('dcrPanelQuantity', 'dcr_panel_quantity'),
+    ...pick('nonDcrPanelSize', 'non_dcr_panel_size'),
+    ...pick('nonDcrPanelQuantity', 'non_dcr_panel_quantity'),
+    ...pick('inverterSize', 'inverter_size'),
+    ...pick('structureSize', 'structure_size')
+  };
+}
+
+/** List/detail: products + aliases + systemKw + optional root panel flatten. */
+export function quotationProductEnrichmentFields(
+  products: Record<string, unknown> | null | undefined,
+  customPanels?: unknown[] | null,
+  quotationSystemType?: string | null,
+  storedSystemKw?: unknown
+) {
+  const listFields = quotationProductListApiFields(
+    products,
+    customPanels,
+    quotationSystemType,
+    storedSystemKw
+  );
+  return {
+    ...listFields,
+    ...quotationPanelRootApiFields(listFields.products)
+  };
+}
+
+/** List/detail aliases for frontend `lib/merge-quotation-products.ts`. */
+export function quotationProductListApiFields(
+  products: Record<string, unknown> | null | undefined,
+  customPanels?: unknown[] | null,
+  quotationSystemType?: string | null,
+  storedSystemKw?: unknown
+) {
+  const merged = quotationProductsApiFields(products, customPanels);
+  const systemKw = resolveSystemKwForApi(merged, customPanels, quotationSystemType, storedSystemKw);
+  const systemSize = formatSystemSizeKw(systemKw);
+  if (!merged) {
+    return {
+      products: null,
+      quotationProduct: null,
+      quotationProducts: [] as ReturnType<typeof quotationProductsApiFields>[],
+      systemKw,
+      system_kw: systemKw,
+      systemSize,
+      system_size: systemSize
+    };
+  }
+  return {
+    products: merged,
+    quotationProduct: merged,
+    quotationProducts: [merged],
+    systemKw,
+    system_kw: systemKw,
+    systemSize,
+    system_size: systemSize
+  };
 }
 
 export function quotationPaymentApiFields(q: Record<string, unknown>) {

@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { Quotation, QuotationPaymentPhase, QuotationInstallationDoc, Dealer, Customer, Visitor } from '../models/index-quotation';
+import { Quotation, QuotationPaymentPhase, QuotationInstallationDoc, QuotationProduct, CustomPanel, Dealer, Customer, Visitor } from '../models/index-quotation';
 import { Op } from 'sequelize';
 import { logError, logInfo } from '../utils/loggerHelper';
 import { normalizePaymentModeInput } from '../utils/paymentMode';
@@ -7,6 +7,7 @@ import {
   quotationAmountApiFields,
   quotationPaymentApiFields,
   quotationAdminMetadataFields,
+  quotationProductEnrichmentFields,
   readStatusHistoryFromRow
 } from '../utils/quotationApiJson';
 import { emitRealtime, realtimeEvents } from '../utils/realtime';
@@ -21,6 +22,7 @@ import {
   resolveMeterStoredRef
 } from '../utils/meteringMediaApi';
 import { meteringWorkflowApiFields } from '../utils/meteringWorkflowApi';
+import { persistQuotationSystemKw } from '../utils/persistQuotationSystemKw';
 
 const sumPhasePaidAmounts = (phases: { paidAmount?: number }[]): number =>
   phases.reduce((sum, p) => sum + Number((p as any).paidAmount || 0), 0);
@@ -226,6 +228,16 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
           model: Customer,
           as: 'customer',
           attributes: ['firstName', 'lastName', 'mobile']
+        },
+        {
+          model: QuotationProduct,
+          as: 'products',
+          required: false
+        },
+        {
+          model: CustomPanel,
+          as: 'customPanels',
+          required: false
         }
       ],
       limit,
@@ -279,8 +291,16 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
             resolveMeterStoredRef((q as any).meterDocumentImageUrl, rawInstallationDocs),
             latestMeterDoc.name
           );
+          const productListFields = quotationProductEnrichmentFields(
+            qAny.products,
+            qAny.customPanels,
+            q.systemType,
+            (q as any).systemKw ?? row.system_kw
+          );
           return {
             id: q.id,
+            dealerId: q.dealerId,
+            dealer_id: q.dealerId,
             dealer: qAny.dealer ? {
               id: qAny.dealer.id,
               firstName: qAny.dealer.firstName,
@@ -295,6 +315,7 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
               lastName: qAny.customer.lastName,
               mobile: qAny.customer.mobile
             } : null,
+            ...productListFields,
             systemType: q.systemType,
             ...quotationPaymentApiFields(row),
             ...quotationAdminMetadataFields(row),
@@ -492,6 +513,13 @@ export const updateQuotationStatus = async (req: Request, res: Response): Promis
     }
 
     await quotation.update(updateData);
+    if (statusRaw === 'approved') {
+      try {
+        await persistQuotationSystemKw(quotationId, quotation.systemType);
+      } catch (persistErr) {
+        logError('Persist system_kw on approve failed (non-fatal)', persistErr, { quotationId });
+      }
+    }
     await quotation.reload();
 
     const rowAfter = quotation.get({ plain: true }) as unknown as Record<string, unknown>;
@@ -824,6 +852,16 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
           model: Customer,
           as: 'customer',
           attributes: ['id', 'firstName', 'lastName', 'mobile', 'email']
+        },
+        {
+          model: QuotationProduct,
+          as: 'products',
+          required: false
+        },
+        {
+          model: CustomPanel,
+          as: 'customPanels',
+          required: false
         }
       ]
     });
@@ -876,11 +914,22 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
       resolveMeterStoredRef(quotationAny.meterDocumentImageUrl, rawInstallationDocs),
       latestMeterDoc.name
     );
+    const productFields = quotationProductEnrichmentFields(
+      quotationAny.products,
+      quotationAny.customPanels,
+      quotation.systemType,
+      quotationAny.systemKw ?? row.system_kw
+    );
+
     res.json({
       success: true,
       data: {
         id: quotation.id,
+        dealerId: quotation.dealerId,
+        dealer_id: quotation.dealerId,
         status: quotation.status,
+        systemType: quotation.systemType,
+        ...productFields,
         ...quotationPaymentApiFields(row),
         ...quotationAdminMetadataFields(row),
         ...quotationAmountApiFields(row),

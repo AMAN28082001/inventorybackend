@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ALLOWED_PAYMENT_MODES, normalizePaymentModeInput } from '../utils/paymentMode';
 import { normalizeSubsidyChequesFromRequestBody } from '../utils/subsidyChequesNormalize';
+import { hasPdfPanelRangeKey, PDF_PANEL_RANGE_KEYS } from '../utils/quotationProductPdfDisplay';
 
 const addressSchema = z.object({
   street: z.string().min(1),
@@ -69,12 +70,24 @@ const productsSchema = z.object({
   pdf_use_panel_size_range: booleanOrString.optional(),
   pdfUseInverterBrandOptions: booleanOrString.optional(),
   pdf_use_inverter_brand_options: booleanOrString.optional(),
-  pdfPanelRangeKey: z.string().max(80).nullish(),
-  pdf_panel_range_key: z.string().max(80).nullish(),
-  pdfDcrPanelRangeKey: z.string().max(80).nullish(),
-  pdf_dcr_panel_range_key: z.string().max(80).nullish(),
-  pdfNonDcrPanelRangeKey: z.string().max(80).nullish(),
-  pdf_non_dcr_panel_range_key: z.string().max(80).nullish(),
+  pdfPanelRangeKey: z
+    .union([z.enum(PDF_PANEL_RANGE_KEYS), z.literal(''), z.null()])
+    .nullish(),
+  pdf_panel_range_key: z
+    .union([z.enum(PDF_PANEL_RANGE_KEYS), z.literal(''), z.null()])
+    .nullish(),
+  pdfDcrPanelRangeKey: z
+    .union([z.enum(PDF_PANEL_RANGE_KEYS), z.literal(''), z.null()])
+    .nullish(),
+  pdf_dcr_panel_range_key: z
+    .union([z.enum(PDF_PANEL_RANGE_KEYS), z.literal(''), z.null()])
+    .nullish(),
+  pdfNonDcrPanelRangeKey: z
+    .union([z.enum(PDF_PANEL_RANGE_KEYS), z.literal(''), z.null()])
+    .nullish(),
+  pdf_non_dcr_panel_range_key: z
+    .union([z.enum(PDF_PANEL_RANGE_KEYS), z.literal(''), z.null()])
+    .nullish(),
   customPanels: z.array(z.object({
     brand: z.string().min(1),
     size: z.string().min(1),
@@ -82,6 +95,38 @@ const productsSchema = z.object({
     type: z.enum(['dcr', 'non-dcr']),
     price: z.number().nonnegative()
   })).nullish()
+}).superRefine((val, ctx) => {
+  if (hasPdfPanelRangeKey(val)) return;
+  const missingQty = (size: unknown, qty: unknown) => {
+    const hasSize = size !== undefined && size !== null && String(size).trim() !== '';
+    if (!hasSize) return false;
+    return qty === undefined || qty === null || Number(qty) <= 0;
+  };
+  if (val.systemType === 'both') {
+    if (missingQty(val.dcrPanelSize, val.dcrPanelQuantity)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'dcrPanelQuantity required when PDF range is not set',
+        path: ['dcrPanelQuantity']
+      });
+    }
+    if (missingQty(val.nonDcrPanelSize, val.nonDcrPanelQuantity)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'nonDcrPanelQuantity required when PDF range is not set',
+        path: ['nonDcrPanelQuantity']
+      });
+    }
+    return;
+  }
+  if (val.systemType === 'customize') return;
+  if (missingQty(val.panelSize, val.panelQuantity)) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'panelQuantity required when PDF range is not set',
+      path: ['panelQuantity']
+    });
+  }
 });
 
 const paymentModeEnum = z.enum(

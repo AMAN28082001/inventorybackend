@@ -7,10 +7,48 @@ export const PDF_PANEL_RANGE_KEYS = [
   'waaree_540_560_bifacial',
   'waaree_580_700_bifacial_topcon',
   'adani_540_580_bifacial',
-  'adani_610_625_bifacial_topcon'
+  'adani_610_625_bifacial_topcon',
+  'premier_600_625_bifacial_topcon',
+  'tata_530_570'
 ] as const;
 
 export type PdfPanelRangeKey = (typeof PDF_PANEL_RANGE_KEYS)[number];
+
+/** Human-readable panel spec for proposal PDF / overview (matches frontend `lib/quotation-pdf-display.ts`). */
+export const PDF_PANEL_RANGE_LABELS: Record<PdfPanelRangeKey, string> = {
+  waaree_540_560_bifacial: '540-560W Bifacial',
+  waaree_580_700_bifacial_topcon: '580-700W Bifacial Topcon',
+  adani_540_580_bifacial: '540-580W Bifacial',
+  adani_610_625_bifacial_topcon: '610-625W Bifacial Topcon',
+  premier_600_625_bifacial_topcon: '600-625W Bifacial Topcon',
+  tata_530_570: '530W - 570W'
+};
+
+export const pdfPanelRangeLabel = (key: string | null | undefined): string | null => {
+  if (!key) return null;
+  const k = String(key).trim() as PdfPanelRangeKey;
+  return (PDF_PANEL_RANGE_LABELS as Record<string, string>)[k] ?? null;
+};
+
+/** TOPCon technology note on PDF when range key contains `topcon` (client rule; for server-rendered PDFs). */
+export const pdfPanelRangeShowsTopconNote = (key: string | null | undefined): boolean =>
+  Boolean(key && String(key).toLowerCase().includes('topcon'));
+
+/** Tata DCR + `tata_530_570`: inverter line on PDF is always “As per the set” (package BOM). */
+export const pdfInverterUsesAsPerTheSet = (
+  products: Record<string, unknown> | null | undefined
+): boolean => {
+  if (!products) return false;
+  const brand = String(products.panelBrand ?? products.panel_brand ?? '')
+    .trim()
+    .toLowerCase();
+  const systemType = String(products.systemType ?? products.system_type ?? '')
+    .trim()
+    .toLowerCase();
+  if (systemType !== 'dcr' || brand !== 'tata') return false;
+  const keys = extractPdfPanelRangeKeysFromProducts(products);
+  return keys.pdfPanelRangeKey === 'tata_530_570';
+};
 
 /** Combined inverter labels shown in the UI / PDF (not a separate PDF flag). */
 export const EXTRA_INVERTER_BRAND_LABELS = [
@@ -77,7 +115,13 @@ export const extractPdfDisplayFlagsFromProducts = (
   return out;
 };
 
-/** Persisted PDF-only columns + legacy booleans for create/update. */
+const pdfFieldWasSent = (
+  products: Record<string, unknown>,
+  camel: string,
+  snake: string
+): boolean => Object.prototype.hasOwnProperty.call(products, camel) || Object.prototype.hasOwnProperty.call(products, snake);
+
+/** Persisted PDF-only columns for create (defaults booleans to false when omitted). */
 export const buildQuotationProductPdfPersistFields = (
   products: Record<string, unknown> | null | undefined
 ): Partial<PdfDisplayFlags & PdfPanelRangeKeys> => {
@@ -90,6 +134,149 @@ export const buildQuotationProductPdfPersistFields = (
     pdfDcrPanelRangeKey: rangeKeys.pdfDcrPanelRangeKey,
     pdfNonDcrPanelRangeKey: rangeKeys.pdfNonDcrPanelRangeKey
   };
+};
+
+/**
+ * PATCH /products — only overwrite PDF columns the client sent.
+ * Explicit null / "" / false clears stored values (checkbox uncheck fix).
+ */
+export const buildQuotationProductPdfPersistFieldsForUpdate = (
+  products: Record<string, unknown> | null | undefined
+): Partial<PdfDisplayFlags & PdfPanelRangeKeys> => {
+  if (!products) return {};
+  const out: Partial<PdfDisplayFlags & PdfPanelRangeKeys> = {};
+
+  if (pdfFieldWasSent(products, 'pdfUsePanelSizeRange', 'pdf_use_panel_size_range')) {
+    out.pdfUsePanelSizeRange =
+      parsePdfDisplayFlag(products.pdfUsePanelSizeRange) ??
+      parsePdfDisplayFlag(products.pdf_use_panel_size_range) ??
+      false;
+  }
+  if (pdfFieldWasSent(products, 'pdfUseInverterBrandOptions', 'pdf_use_inverter_brand_options')) {
+    out.pdfUseInverterBrandOptions =
+      parsePdfDisplayFlag(products.pdfUseInverterBrandOptions) ??
+      parsePdfDisplayFlag(products.pdf_use_inverter_brand_options) ??
+      false;
+  }
+  if (pdfFieldWasSent(products, 'pdfPanelRangeKey', 'pdf_panel_range_key')) {
+    out.pdfPanelRangeKey =
+      normalizePanelRangeKey(products.pdfPanelRangeKey) ??
+      normalizePanelRangeKey(products.pdf_panel_range_key);
+  }
+  if (pdfFieldWasSent(products, 'pdfDcrPanelRangeKey', 'pdf_dcr_panel_range_key')) {
+    out.pdfDcrPanelRangeKey =
+      normalizePanelRangeKey(products.pdfDcrPanelRangeKey) ??
+      normalizePanelRangeKey(products.pdf_dcr_panel_range_key);
+  }
+  if (pdfFieldWasSent(products, 'pdfNonDcrPanelRangeKey', 'pdf_non_dcr_panel_range_key')) {
+    out.pdfNonDcrPanelRangeKey =
+      normalizePanelRangeKey(products.pdfNonDcrPanelRangeKey) ??
+      normalizePanelRangeKey(products.pdf_non_dcr_panel_range_key);
+  }
+
+  return out;
+};
+
+/** Keys allowed on quotation_products — excludes PDF (separate) and customPanels. */
+const QUOTATION_PRODUCT_COLUMN_KEYS = [
+  'systemType',
+  'phase',
+  'panelBrand',
+  'panelSize',
+  'panelQuantity',
+  'panelPrice',
+  'dcrPanelBrand',
+  'dcrPanelSize',
+  'dcrPanelQuantity',
+  'nonDcrPanelBrand',
+  'nonDcrPanelSize',
+  'nonDcrPanelQuantity',
+  'inverterType',
+  'inverterBrand',
+  'inverterSize',
+  'inverterPrice',
+  'structureType',
+  'structureSize',
+  'structurePrice',
+  'meterBrand',
+  'meterPrice',
+  'acCableBrand',
+  'acCableSize',
+  'acCablePrice',
+  'dcCableBrand',
+  'dcCableSize',
+  'dcCablePrice',
+  'acdb',
+  'acdbPrice',
+  'dcdb',
+  'dcdbPrice',
+  'hybridInverter',
+  'batteryCapacity',
+  'batteryPrice',
+  'centralSubsidy',
+  'stateSubsidy',
+  'subtotal',
+  'totalAmount',
+  'finalAmount'
+] as const;
+
+const PRODUCT_SNAKE_TO_CAMEL: Record<string, (typeof QUOTATION_PRODUCT_COLUMN_KEYS)[number]> = {
+  system_type: 'systemType',
+  panel_brand: 'panelBrand',
+  panel_size: 'panelSize',
+  panel_quantity: 'panelQuantity',
+  panel_price: 'panelPrice',
+  dcr_panel_brand: 'dcrPanelBrand',
+  dcr_panel_size: 'dcrPanelSize',
+  dcr_panel_quantity: 'dcrPanelQuantity',
+  non_dcr_panel_brand: 'nonDcrPanelBrand',
+  non_dcr_panel_size: 'nonDcrPanelSize',
+  non_dcr_panel_quantity: 'nonDcrPanelQuantity',
+  inverter_type: 'inverterType',
+  inverter_brand: 'inverterBrand',
+  inverter_size: 'inverterSize',
+  inverter_price: 'inverterPrice',
+  structure_type: 'structureType',
+  structure_size: 'structureSize',
+  structure_price: 'structurePrice',
+  meter_brand: 'meterBrand',
+  meter_price: 'meterPrice',
+  ac_cable_brand: 'acCableBrand',
+  ac_cable_size: 'acCableSize',
+  ac_cable_price: 'acCablePrice',
+  dc_cable_brand: 'dcCableBrand',
+  dc_cable_size: 'dcCableSize',
+  dc_cable_price: 'dcCablePrice',
+  acdb_price: 'acdbPrice',
+  dcdb_price: 'dcdbPrice',
+  hybrid_inverter: 'hybridInverter',
+  battery_capacity: 'batteryCapacity',
+  battery_price: 'batteryPrice',
+  central_subsidy: 'centralSubsidy',
+  state_subsidy: 'stateSubsidy',
+  total_amount: 'totalAmount',
+  final_amount: 'finalAmount'
+};
+
+/** Strip PDF flags and nested customPanels before Sequelize product update/create. */
+export const pickQuotationProductPersistPayload = (
+  products: Record<string, unknown> | null | undefined
+): Record<string, unknown> => {
+  if (!products) return {};
+  const out: Record<string, unknown> = {};
+
+  for (const key of QUOTATION_PRODUCT_COLUMN_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(products, key) && products[key] !== undefined) {
+      out[key] = products[key];
+    }
+  }
+  for (const [snake, camel] of Object.entries(PRODUCT_SNAKE_TO_CAMEL)) {
+    if (Object.prototype.hasOwnProperty.call(products, snake) && products[snake] !== undefined) {
+      out[camel] = products[snake];
+    }
+  }
+
+  return out;
 };
 
 export const isAllowedInverterBrandForCatalog = (

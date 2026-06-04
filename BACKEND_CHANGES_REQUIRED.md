@@ -87,9 +87,11 @@ Single-file slot uploads also accept `POST /api/quotations/{quotationId}/install
 
 ## §X — Quotation PDF display (panel range keys, May 2026)
 
-**Handoff summary:** `BACKEND_CHANGES_HANDOFF.md` §2.
+**Handoff summary:** `BACKEND_CHANGES_HANDOFF.md` §2, §2.6.
 
-### Persist on `quotation_products`
+**Implementation:** `utils/quotationProductPdfDisplay.ts`, `utils/quotationTataDcrValidation.ts`, `controllers/quotationController.ts` → `validateProductSelection`, `validations/quotationValidations.ts`.
+
+### X.1 — Persist on `quotation_products`
 
 | Field | Scope |
 |-------|--------|
@@ -97,25 +99,126 @@ Single-file slot uploads also accept `POST /api/quotations/{quotationId}/install
 | `pdfDcrPanelRangeKey` | BOTH — DCR |
 | `pdfNonDcrPanelRangeKey` | BOTH — Non-DCR |
 
-Allowed keys: `waaree_540_560_bifacial`, `waaree_580_700_bifacial_topcon`, `adani_540_580_bifacial`, `adani_610_625_bifacial_topcon`.
+**Allowed `pdf_panel_range_key` values:**
 
-**Endpoints:** `POST /api/quotations`, `PATCH /api/quotations/{id}/products`, `GET` quotations — echo camelCase + snake_case.
+| Key | Display label (PDF / overview) |
+|-----|------------------------------|
+| `waaree_540_560_bifacial` | 540-560W Bifacial |
+| `waaree_580_700_bifacial_topcon` | 580-700W Bifacial Topcon |
+| `adani_540_580_bifacial` | 540-580W Bifacial |
+| `adani_610_625_bifacial_topcon` | 610-625W Bifacial Topcon |
+| `premier_600_625_bifacial_topcon` | 600-625W Bifacial Topcon |
+| **`tata_530_570`** | **530W - 570W** |
 
-**Legacy:** `pdfUsePanelSizeRange`, `pdfUseInverterBrandOptions` — keep for old rows; new UI does not set inverter PDF flag.
+Snake_case: `pdf_panel_range_key`, `pdf_dcr_panel_range_key`, `pdf_non_dcr_panel_range_key`.
 
-**Not used in:** `validateProductSelection`, `calculatePricing`, pricing/catalog validation.
+### X.2 — PDF display rules (client PDF; keys must round-trip on GET)
 
-**Inverter:** `inverterBrand` remains a string; allow `Vsole/Xwatt/Saatvik` and `Vsole/Xwatt` when catalog whitelist is enforced.
+- Panel line: use **range label** when a key is set — not “As per the set” for panel wattage.
+- **Tata DCR** + `tata_530_570`: inverter line = **“As per the set”** on PDF regardless of stored `inverterBrand` / `inverterSize`.
+- TOPCon note: only when key contains `topcon` (`pdfPanelRangeShowsTopconNote`).
 
-**Meter:** `meterBrand` may be `L&T/HPL/Genus/Secure` when catalog whitelist is enforced.
+### X.3 — PATCH clear / partial update
 
-**Quantities:** `panelQuantity` may be `0` when range keys are used (PDF-only form).
+Send `pdfPanelRangeKey: ""` or `null` (and snake_case) to clear. `buildQuotationProductPdfPersistFieldsForUpdate` only touches PDF columns **present in the body**.
 
-**validUntil:** `POST /api/quotations` sets **`validUntil = createdAt + 7 days`**.
+### X.4 — Endpoints
 
-**Migration:** `20260521120000-add-pdf-panel-range-keys-to-quotation-products.js`.
+| Method | Path |
+|--------|------|
+| `POST` | `/api/quotations` |
+| `PATCH` | `/api/quotations/{id}/products` |
+| `GET` | `/api/quotations`, `/api/quotations/{id}` |
 
-**Code:** `utils/quotationProductPdfDisplay.ts`.
+**GET contract:** Always echo `pdfPanelRangeKey` and `pdf_panel_range_key` from DB via `quotationProductPdfDisplayApiFields` merged into `products`. **GET is source of truth** after save.
+
+### X.5 — Not used in pricing / catalog SKU validation
+
+PDF keys are **not** passed into `calculatePricing` or strict catalog wattage checks (except Tata package path below).
+
+**Legacy:** `pdfUsePanelSizeRange` (read old rows). **`pdfUseInverterBrandOptions`** — deprecated on new quotes.
+
+**Also allow:** `inverterBrand` = `Vsole/Xwatt/Saatvik`, `Vsole/Xwatt`; `meterBrand` = `L&T/HPL/Genus/Secure`.
+
+**Quantities:** `panelQuantity` may be **0** when `hasPdfPanelRangeKey(products)` (Zod superRefine).
+
+**validUntil:** `createdAt + 7 days` on create.
+
+### X.6 — Tata DCR package sets (`VAL_003` exceptions)
+
+When `systemType === 'dcr'` and `panelBrand === 'Tata'`, use `validateTataDcrProductSelection()` instead of strict catalog validation.
+
+**Do not return `VAL_003`** when:
+
+| Field | Allowed |
+|-------|---------|
+| `panelSize` | `As per the set`, `530W`, placeholders |
+| `panelQuantity` | `0` if `pdf_panel_range_key === 'tata_530_570'` |
+| `inverterBrand` / `inverterSize` | `As per the set`, `Vsole/Xwatt`, `3kW`–`30kW` |
+| `structureSize` | `3.1kW`, `5.1kW`, `3kW`, `5kW`, `6kW`, `8kW`, `10kW` |
+| `acCableSize` / `dcCableSize` | `As per Set`, `As per the set` |
+| PDF | `tata_530_570` |
+
+**Pseudocode:**
+
+```typescript
+function isTataDcrPackageSet(products) {
+  return products.systemType === 'dcr'
+    && String(products.panelBrand || '').trim().toLowerCase() === 'tata';
+}
+// if (isTataDcrPackageSet(products)) return validateTataDcrProductSelection(products, catalog);
+```
+
+**PATCH example (catalog-normalized + PDF key):**
+
+```json
+{
+  "products": {
+    "systemType": "dcr",
+    "panelBrand": "Tata",
+    "panelSize": "530W",
+    "panelQuantity": 0,
+    "inverterBrand": "Vsole/Xwatt",
+    "inverterSize": "5kW",
+    "structureSize": "5.1kW",
+    "systemPrice": 310000,
+    "pdfPanelRangeKey": "tata_530_570",
+    "pdf_panel_range_key": "tata_530_570"
+  }
+}
+```
+
+### X.7 — Pricing tables (optional)
+
+`GET /api/quotations/pricing-tables` — include Tata DCR rows in `data.dcr` when DB empty (`utils/defaultPricingTables.ts`).
+
+### §X — Checklist
+
+| Item | Status |
+|------|--------|
+| Enum includes `tata_530_570` | ✅ |
+| Persist on PATCH products | ✅ |
+| Return `pdf_panel_range_key` on GET | ✅ |
+| Tata `VAL_003` relaxed | ✅ |
+| Default Tata DCR pricing rows | ✅ |
+| Migration `20260521120000-add-pdf-panel-range-keys-to-quotation-products.js` | Required on deploy |
+
+**Error `VAL_003`:** “Invalid product selection” — see **§X.6** for Tata DCR exceptions; all other invalid catalog combinations unchanged.
+
+---
+
+## §Y — Quick handoff (May 2026)
+
+| Priority | Topic | Handoff | Code |
+|----------|--------|---------|------|
+| **High** | Tata `tata_530_570` + GET echo + `VAL_003` | §2.6 | `quotationTataDcrValidation.ts` |
+| **High** | HR upload live counts | §1 | `callingLeadController.ts` |
+| **High** | Calling `LEAD_004` + remarks + tabs | §3–4 | `callingLeadController.ts` |
+| **High** | HR calling-actions GET filters | §J | `callingLeadController.ts` |
+| **Medium** | PDF range keys (non-Tata) | §2 | `quotationProductPdfDisplay.ts` |
+| **Medium** | Dealer approved Total Value | §7.9 | `quotationController.ts` |
+
+Until Tata GET echo ships in production, frontend keeps catalog-normalized PATCH + client inference.
 
 ---
 
@@ -168,3 +271,116 @@ Allowed keys: `waaree_540_560_bifacial`, `waaree_580_700_bifacial_topcon`, `adan
 | Compliant senior | When `isCompliantSenior=true`, require contact + 4 compliant images only (text bank/PAN fields optional) — **implemented** |
 
 **Handoff:** `BACKEND_CHANGES_HANDOFF.md` §12.
+
+---
+
+## §6.5 — Account Management list fields (Payment Management + Overview)
+
+**Handoff:** `BACKEND_CHANGES_HANDOFF.md` §12, §13.
+
+### Payment Management (`GET /api/quotations?status=approved`, account-management JWT)
+
+Each row must include:
+
+| Field | Notes |
+|-------|--------|
+| `dealerId`, `dealer_id`, `dealer` | Client-side dealer filter |
+| `statusApprovedAt`, `fileLoginAt` | Date-range filters |
+| `paymentType`, `paymentStatus`, `paymentMode`, `bankName`, `bankIfsc` | Payment filters |
+| `installments`, `paymentPhases`, `payment_phases` | Installment count = array length |
+| `subtotal`, `remaining`, `remainingAmount` | Amounts |
+
+**Installment count filter:** frontend-only — no `?installmentCount=` unless list performance requires it.
+
+### Admin Overview kW — verify list payload (no new endpoint)
+
+**Frontend computes kW client-side** from the admin quotation list (`GET /api/admin/quotations`). No mandatory new API unless you add optional server aggregates or a stored `system_kw` column.
+
+**Confirm each approved row includes one of:**
+
+- **`products`** with `systemType`, panel size/qty (DCR, BOTH, or `customPanels[]`), optional `inverterSize` — **preferred; implemented** via `quotationProductsApiFields()`
+- Flat root fields (`panel_size`, …) — not on `quotations` table; rely on `products`
+- Precomputed `systemKw` / `system_kw` — **implemented** on list + detail; persisted in `quotations.system_kw` on product save / approve
+
+**Also on list rows (revenue + filters):** `status`, `statusApprovedAt` / `approved_at`, `dealerId`, `dealer`, `subtotal`.
+
+| Verification | Status |
+|--------------|--------|
+| Full `products` on admin list | ✅ |
+| `statusApprovedAt` on approve | ✅ |
+| Root `dealerId` + nested `dealer` | ✅ |
+| `system_kw` column + backfill | ✅ `database/migrations/add_system_kw_to_quotations.sql` |
+
+**kW still 0 after frontend fix?** Check API row: `products.panelSize` / `panelQuantity` (or BOTH/customize fields) — usually missing product data, not a missing endpoint.
+
+**Handoff:** `BACKEND_CHANGES_HANDOFF.md` §13.
+
+---
+
+## §6.5.1 — Admin Overview dealer capacity (kW sum)
+
+**Handoff:** `BACKEND_CHANGES_HANDOFF.md` §13.
+
+**Feature:** Admin **Overview → Dealers by Revenue** shows per-dealer **total kW** = sum of system size from **approved** quotations in the selected date range. **No new endpoint** if `GET /api/admin/quotations` rows include product/size data.
+
+**Frontend:** `lib/merge-quotation-products.ts`, `lib/quotation-system-kw.ts`, `app/dashboard/admin/page.tsx`.
+
+### Required on `GET /api/admin/quotations` (each row)
+
+| Field | Purpose |
+|-------|---------|
+| `status` | Must be `approved` for kW to count |
+| `statusApprovedAt` / `status_approved_at` / `approvedAt` | Approval-date filter |
+| `dealerId` / `dealer_id` | Group by dealer |
+| Product / size data | See sources below |
+| `subtotal` | Revenue |
+
+### Product data — at least one source populated
+
+Frontend merges (priority order handled in `lib/merge-quotation-products.ts`):
+
+| Source | Example | Backend |
+|--------|---------|---------|
+| `products` | `{ "systemType": "non-dcr", "panelSize": "550W", "panelQuantity": 12 }` | ✅ |
+| `quotationProduct` | Same as joined row | ✅ alias of `products` |
+| `quotationProducts[]` | First row used | ✅ `[merged]` |
+| Flat root fields | `panel_size`, `panel_quantity`, … | ❌ not on quotations table |
+| Precomputed | `systemKw: 6.6` or `systemSize: "6.6kW"` | ✅ computed on list |
+
+**Anti-pattern:** `products: {}` with no panel fields anywhere → **0 kW** while revenue works.
+
+### Fields by system type
+
+| `systemType` | Fields for kW |
+|--------------|---------------|
+| `dcr` / `non-dcr` | `panelSize`, `panelQuantity` |
+| `both` | `dcrPanelSize`, `dcrPanelQuantity`, `nonDcrPanelSize`, `nonDcrPanelQuantity` |
+| `customize` | `customPanels[]` `{ size, quantity }` |
+| Fallback | `inverterSize`, `structureSize` |
+
+### kW calculation
+
+```
+kW = (parseW(panelSize) × panelQuantity) / 1000
+```
+
+BOTH: sum DCR + Non-DCR. CUSTOMIZE: sum all custom panel rows.
+
+### Backend checklist
+
+| Item | Status |
+|------|--------|
+| List includes product data (`products` / `quotationProduct`) | ✅ |
+| Empty `products: {}` only when no `quotation_products` row | Verify data |
+| `statusApprovedAt` on approve | ✅ |
+| Return `systemKw` / `system_kw` on list | ✅ |
+| Persist `system_kw` DB column | Optional |
+| `GET /admin/overview/dealer-stats` | Optional |
+
+### Optional SQL
+
+```sql
+ALTER TABLE quotations ADD COLUMN IF NOT EXISTS system_kw NUMERIC(10,2) NULL;
+```
+
+Set on create/update from products; return as `systemKw` / `system_kw` on list (frontend uses first when present).

@@ -240,6 +240,22 @@ const swaggerDefinition = {
           batteryPrice: { type: 'number' },
           centralSubsidy: { type: 'number', default: 0 },
           stateSubsidy: { type: 'number', default: 0 },
+          pdfPanelRangeKey: {
+            type: 'string',
+            nullable: true,
+            description:
+              'PDF-only panel spec key (not used in pricing). Includes tata_530_570 (530W - 570W) for Tata DCR packages.',
+            enum: [
+              'waaree_540_560_bifacial',
+              'waaree_580_700_bifacial_topcon',
+              'adani_540_580_bifacial',
+              'adani_610_625_bifacial_topcon',
+              'premier_600_625_bifacial_topcon',
+              'tata_530_570'
+            ]
+          },
+          pdfDcrPanelRangeKey: { type: 'string', nullable: true },
+          pdfNonDcrPanelRangeKey: { type: 'string', nullable: true },
           customPanels: {
             type: 'array',
             items: {

@@ -36,6 +36,7 @@ import {
   uploadInstallerDocument
 } from '../controllers/workflowController';
 import { getVisitsForQuotation, rescheduleVisit } from '../controllers/visitController';
+import { getPricingTables } from '../controllers/configController';
 import {
   authenticate,
   authorizeDealer,
@@ -433,6 +434,9 @@ router.post('/',
  *                 message: "Internal server error"
  */
 router.get('/product-catalog', rejectAccountManager, authorizeDealerAdminOrVisitor, getProductCatalog);
+
+/** Alias for GET /api/config/pricing — used by quotation proposal UI */
+router.get('/pricing-tables', rejectAccountManager, authorizeDealerAdminOrVisitor, getPricingTables);
 
 /**
  * @swagger
