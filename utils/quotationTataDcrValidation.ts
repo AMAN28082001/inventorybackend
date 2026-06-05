@@ -7,6 +7,7 @@ import {
   isAllowedInverterBrandForCatalog,
   isAllowedMeterBrandForCatalog
 } from './quotationProductPdfDisplay';
+import { isAsPerTheSet, isAllowedDisplayCableSize } from './productDisplayValues';
 
 export const TATA_DCR_ALLOWED_STRUCTURE_SIZES = [
   '3.1kW',
@@ -18,13 +19,7 @@ export const TATA_DCR_ALLOWED_STRUCTURE_SIZES = [
   '10kW'
 ] as const;
 
-export const isAsPerTheSet = (value: unknown): boolean => {
-  const s = String(value || '')
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, ' ');
-  return s === 'as per the set' || s === 'as per set';
-};
+export { isAsPerTheSet } from './productDisplayValues';
 
 export const isTataDcrPackageSet = (products: Record<string, unknown> | null | undefined): boolean => {
   if (!products) return false;
@@ -75,14 +70,6 @@ export const isAllowedTataPanelSize = (size: unknown, _catalogSizes?: unknown): 
   const s = String(size || '').trim();
   if (!s) return true;
   return true;
-};
-
-export const isAllowedPackageCableSize = (size: unknown, catalogSizes?: string[]): boolean => {
-  if (isAsPerTheSet(size)) return true;
-  const s = String(size || '').trim();
-  if (!s) return true;
-  if (!catalogSizes?.length) return true;
-  return catalogSizes.includes(s);
 };
 
 /**
@@ -166,14 +153,14 @@ export const validateTataDcrProductSelection = (
   if (
     products.acCableSize &&
     cableSizes?.length &&
-    !isAllowedPackageCableSize(products.acCableSize, cableSizes)
+    !isAllowedDisplayCableSize(products.acCableSize, cableSizes)
   ) {
     errors.push(`Invalid AC cable size: ${products.acCableSize}`);
   }
   if (
     products.dcCableSize &&
     cableSizes?.length &&
-    !isAllowedPackageCableSize(products.dcCableSize, cableSizes)
+    !isAllowedDisplayCableSize(products.dcCableSize, cableSizes)
   ) {
     errors.push(`Invalid DC cable size: ${products.dcCableSize}`);
   }

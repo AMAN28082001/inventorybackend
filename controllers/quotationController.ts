@@ -29,9 +29,12 @@ import {
   buildQuotationProductPdfPersistFields,
   buildQuotationProductPdfPersistFieldsForUpdate,
   pickQuotationProductPersistPayload,
+  hasPdfPanelRangeKey,
   isAllowedInverterBrandForCatalog,
   isAllowedMeterBrandForCatalog
 } from '../utils/quotationProductPdfDisplay';
+import { isPanelSizeAllowed, normalizeProductCatalog } from '../utils/productCatalogNormalize';
+import { isAllowedDisplayCableSize, isAsPerTheSet } from '../utils/productDisplayValues';
 import {
   isTataDcrPackageSet,
   validateTataDcrProductSelection
@@ -46,68 +49,6 @@ import {
   standardImageValidationMessage
 } from '../utils/uploadMimeTypes';
 
-// Helper function to normalize catalog data - ensures all arrays are arrays (never null/undefined)
-const normalizeCatalog = (catalog: any): any => {
-  const rawPanelSizes = Array.isArray(catalog?.panels?.sizes) ? catalog.panels.sizes : [];
-  const normalizedPanelSizes = Array.from(
-    new Set(
-      rawPanelSizes.map((size: unknown) => String(size || '').trim()).filter(Boolean).map((size: string) => {
-        if (size === '545W') return '550W';
-        return size;
-      })
-    )
-  );
-  if (!normalizedPanelSizes.includes('550W')) normalizedPanelSizes.push('550W');
-  return {
-    panels: {
-      brands: Array.isArray(catalog?.panels?.brands) ? catalog.panels.brands : [],
-      sizes: normalizedPanelSizes
-    },
-    inverters: {
-      types: Array.isArray(catalog?.inverters?.types) ? catalog.inverters.types : [],
-      brands: Array.isArray(catalog?.inverters?.brands) ? catalog.inverters.brands : [],
-      sizes: Array.isArray(catalog?.inverters?.sizes) ? catalog.inverters.sizes : []
-    },
-    structures: {
-      types: Array.isArray(catalog?.structures?.types) ? catalog.structures.types : [],
-      // Allow any structure size on the frontend by returning an empty list
-      sizes: []
-    },
-    meters: {
-      brands: Array.isArray(catalog?.meters?.brands) ? catalog.meters.brands : []
-    },
-    cables: {
-      brands: Array.isArray(catalog?.cables?.brands) ? catalog.cables.brands : [],
-      sizes: Array.isArray(catalog?.cables?.sizes) ? catalog.cables.sizes : []
-    },
-    acdb: {
-      options: Array.isArray(catalog?.acdb?.options) ? catalog.acdb.options : []
-    },
-    dcdb: {
-      options: Array.isArray(catalog?.dcdb?.options) ? catalog.dcdb.options : []
-    }
-  };
-};
-
-const panelSizeVariants = (value: unknown): string[] => {
-  const size = String(value || '').trim();
-  if (!size) return [];
-  if (size === '545W') return ['545W', '550W'];
-  if (size === '550W') return ['550W', '545W'];
-  return [size];
-};
-
-const isPanelSizeAllowed = (selectedSize: unknown, catalogSizes: unknown): boolean => {
-  const selected = panelSizeVariants(selectedSize);
-  if (selected.length === 0) return true;
-  const allowed = new Set(
-    (Array.isArray(catalogSizes) ? catalogSizes : [])
-      .map((v) => String(v || '').trim())
-      .filter(Boolean)
-  );
-  return selected.some((candidate) => allowed.has(candidate));
-};
-
 // Helper function to get product catalog
 const getProductCatalogData = async (): Promise<any> => {
   try {
@@ -118,7 +59,7 @@ const getProductCatalogData = async (): Promise<any> => {
     const catalog = typeof config.configValue === 'string' 
       ? JSON.parse(config.configValue) 
       : config.configValue;
-    return normalizeCatalog(catalog);
+    return normalizeProductCatalog(catalog);
   } catch (error) {
     logError('Failed to get product catalog', error);
     return null;
@@ -132,7 +73,7 @@ export const getProductCatalog = async (_req: Request, res: Response): Promise<v
 
     if (!catalog) {
       // Return default empty structure if no catalog exists
-      const defaultCatalog = normalizeCatalog(null);
+      const defaultCatalog = normalizeProductCatalog(null);
       res.json({
         success: true,
         data: defaultCatalog
@@ -167,11 +108,19 @@ const validateProductSelection = (products: any, catalog: any): { isValid: boole
     return { isValid: tataErrors.length === 0, errors: tataErrors };
   }
 
+  const pdfRangeActive = hasPdfPanelRangeKey(products);
+
   // Validate panel selection
   if (products.panelBrand && catalog.panels?.brands && !catalog.panels.brands.includes(products.panelBrand)) {
     errors.push(`Invalid panel brand: ${products.panelBrand}`);
   }
-  if (products.panelSize && catalog.panels?.sizes && !isPanelSizeAllowed(products.panelSize, catalog.panels.sizes)) {
+  if (
+    !pdfRangeActive &&
+    products.panelSize &&
+    !isAsPerTheSet(products.panelSize) &&
+    catalog.panels?.sizes &&
+    !isPanelSizeAllowed(products.panelSize, catalog.panels.sizes)
+  ) {
     errors.push(`Invalid panel size: ${products.panelSize}`);
   }
 
@@ -179,7 +128,13 @@ const validateProductSelection = (products: any, catalog: any): { isValid: boole
   if (products.dcrPanelBrand && catalog.panels?.brands && !catalog.panels.brands.includes(products.dcrPanelBrand)) {
     errors.push(`Invalid DCR panel brand: ${products.dcrPanelBrand}`);
   }
-  if (products.dcrPanelSize && catalog.panels?.sizes && !isPanelSizeAllowed(products.dcrPanelSize, catalog.panels.sizes)) {
+  if (
+    !pdfRangeActive &&
+    products.dcrPanelSize &&
+    !isAsPerTheSet(products.dcrPanelSize) &&
+    catalog.panels?.sizes &&
+    !isPanelSizeAllowed(products.dcrPanelSize, catalog.panels.sizes)
+  ) {
     errors.push(`Invalid DCR panel size: ${products.dcrPanelSize}`);
   }
 
@@ -187,7 +142,13 @@ const validateProductSelection = (products: any, catalog: any): { isValid: boole
   if (products.nonDcrPanelBrand && catalog.panels?.brands && !catalog.panels.brands.includes(products.nonDcrPanelBrand)) {
     errors.push(`Invalid non-DCR panel brand: ${products.nonDcrPanelBrand}`);
   }
-  if (products.nonDcrPanelSize && catalog.panels?.sizes && !isPanelSizeAllowed(products.nonDcrPanelSize, catalog.panels.sizes)) {
+  if (
+    !pdfRangeActive &&
+    products.nonDcrPanelSize &&
+    !isAsPerTheSet(products.nonDcrPanelSize) &&
+    catalog.panels?.sizes &&
+    !isPanelSizeAllowed(products.nonDcrPanelSize, catalog.panels.sizes)
+  ) {
     errors.push(`Invalid non-DCR panel size: ${products.nonDcrPanelSize}`);
   }
 
@@ -233,7 +194,11 @@ const validateProductSelection = (products: any, catalog: any): { isValid: boole
   if (products.acCableBrand && catalog.cables?.brands && !catalog.cables.brands.includes(products.acCableBrand)) {
     errors.push(`Invalid AC cable brand: ${products.acCableBrand}`);
   }
-  if (products.acCableSize && catalog.cables?.sizes && !catalog.cables.sizes.includes(products.acCableSize)) {
+  if (
+    products.acCableSize &&
+    catalog.cables?.sizes &&
+    !isAllowedDisplayCableSize(products.acCableSize, catalog.cables.sizes)
+  ) {
     errors.push(`Invalid AC cable size: ${products.acCableSize}`);
   }
 
@@ -241,7 +206,11 @@ const validateProductSelection = (products: any, catalog: any): { isValid: boole
   if (products.dcCableBrand && catalog.cables?.brands && !catalog.cables.brands.includes(products.dcCableBrand)) {
     errors.push(`Invalid DC cable brand: ${products.dcCableBrand}`);
   }
-  if (products.dcCableSize && catalog.cables?.sizes && !catalog.cables.sizes.includes(products.dcCableSize)) {
+  if (
+    products.dcCableSize &&
+    catalog.cables?.sizes &&
+    !isAllowedDisplayCableSize(products.dcCableSize, catalog.cables.sizes)
+  ) {
     errors.push(`Invalid DC cable size: ${products.dcCableSize}`);
   }
 

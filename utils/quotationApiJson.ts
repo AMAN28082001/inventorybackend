@@ -150,12 +150,32 @@ export function quotationProductsApiFields(
       price: row.price !== undefined && row.price !== null ? Number(row.price) : undefined
     };
   });
+  const systemType = String(plainProducts.systemType ?? plainProducts.system_type ?? '')
+    .trim()
+    .toLowerCase();
+  const panelSizeRaw = plainProducts.panelSize ?? plainProducts.panel_size;
+  const dcrPanelSizeRaw = plainProducts.dcrPanelSize ?? plainProducts.dcr_panel_size;
+  const resolvedPanelSize =
+    systemType === 'dcr' ? (panelSizeRaw ?? dcrPanelSizeRaw) : (panelSizeRaw ?? dcrPanelSizeRaw);
+  const subtotalOnProduct =
+    plainProducts.subtotal !== undefined && plainProducts.subtotal !== null
+      ? Number(plainProducts.subtotal)
+      : plainProducts.systemPrice !== undefined && plainProducts.systemPrice !== null
+        ? Number(plainProducts.systemPrice)
+        : plainProducts.system_price !== undefined && plainProducts.system_price !== null
+          ? Number(plainProducts.system_price)
+          : null;
+
   return {
     systemType: plainProducts.systemType ?? plainProducts.system_type,
     phase: plainProducts.phase,
     panelBrand: plainProducts.panelBrand ?? plainProducts.panel_brand,
-    panelSize: plainProducts.panelSize ?? plainProducts.panel_size,
+    panelSize: resolvedPanelSize,
+    panel_size: resolvedPanelSize,
     panelQuantity: plainProducts.panelQuantity ?? plainProducts.panel_quantity,
+    ...(subtotalOnProduct !== null && !Number.isNaN(subtotalOnProduct)
+      ? { systemPrice: subtotalOnProduct, system_price: subtotalOnProduct }
+      : {}),
     dcrPanelBrand: plainProducts.dcrPanelBrand ?? plainProducts.dcr_panel_brand,
     dcrPanelSize: plainProducts.dcrPanelSize ?? plainProducts.dcr_panel_size,
     dcrPanelQuantity: plainProducts.dcrPanelQuantity ?? plainProducts.dcr_panel_quantity,

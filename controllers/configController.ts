@@ -2,40 +2,12 @@ import { Request, Response } from 'express';
 import { SystemConfig } from '../models/index-quotation';
 import { logError, logInfo } from '../utils/loggerHelper';
 import { pricingTablesSchema } from '../validations/pricingValidations';
-import { mergeDefaultDcrPricing } from '../utils/defaultPricingTables';
-
-// Helper function to normalize catalog data - ensures all arrays are arrays (never null/undefined)
-const normalizeCatalog = (catalog: any): any => {
-  return {
-    panels: {
-      brands: Array.isArray(catalog?.panels?.brands) ? catalog.panels.brands : [],
-      sizes: Array.isArray(catalog?.panels?.sizes) ? catalog.panels.sizes : []
-    },
-    inverters: {
-      types: Array.isArray(catalog?.inverters?.types) ? catalog.inverters.types : [],
-      brands: Array.isArray(catalog?.inverters?.brands) ? catalog.inverters.brands : [],
-      sizes: Array.isArray(catalog?.inverters?.sizes) ? catalog.inverters.sizes : []
-    },
-    structures: {
-      types: Array.isArray(catalog?.structures?.types) ? catalog.structures.types : [],
-      // Return empty sizes so UI doesn't enforce a fixed list
-      sizes: []
-    },
-    meters: {
-      brands: Array.isArray(catalog?.meters?.brands) ? catalog.meters.brands : []
-    },
-    cables: {
-      brands: Array.isArray(catalog?.cables?.brands) ? catalog.cables.brands : [],
-      sizes: Array.isArray(catalog?.cables?.sizes) ? catalog.cables.sizes : []
-    },
-    acdb: {
-      options: Array.isArray(catalog?.acdb?.options) ? catalog.acdb.options : []
-    },
-    dcdb: {
-      options: Array.isArray(catalog?.dcdb?.options) ? catalog.dcdb.options : []
-    }
-  };
-};
+import {
+  JUNE_2026_PRICING_META,
+  mergeDefaultDcrPricing,
+  mergeDefaultSystemConfigs
+} from '../utils/defaultPricingTables';
+import { normalizeProductCatalog } from '../utils/productCatalogNormalize';
 
 // Get product catalog
 export const getProductCatalog = async (_req: Request, res: Response): Promise<void> => {
@@ -44,7 +16,7 @@ export const getProductCatalog = async (_req: Request, res: Response): Promise<v
 
     if (!config) {
       // Return default empty structure if no config exists
-      const defaultCatalog = normalizeCatalog(null);
+      const defaultCatalog = normalizeProductCatalog(null);
 
       res.json({
         success: true,
@@ -69,7 +41,7 @@ export const getProductCatalog = async (_req: Request, res: Response): Promise<v
     }
 
     // Normalize catalog to ensure all arrays are arrays (never null/undefined)
-    const normalizedCatalog = normalizeCatalog(catalog);
+    const normalizedCatalog = normalizeProductCatalog(catalog);
 
     res.json({
       success: true,
@@ -267,7 +239,11 @@ const normalizePricingTables = (pricing: any): any => {
     dcr: mergeDefaultDcrPricing(pricing?.dcr),
     nonDcr: Array.isArray(pricing?.nonDcr) ? pricing.nonDcr : [],
     both: Array.isArray(pricing?.both) ? pricing.both : [],
-    systemConfigs: Array.isArray(pricing?.systemConfigs) ? pricing.systemConfigs : []
+    systemConfigs: mergeDefaultSystemConfigs(pricing?.systemConfigs),
+    effectiveFrom: pricing?.effectiveFrom ?? JUNE_2026_PRICING_META.effectiveFrom,
+    effectiveTo: pricing?.effectiveTo ?? JUNE_2026_PRICING_META.effectiveTo,
+    effective_from: pricing?.effective_from ?? JUNE_2026_PRICING_META.effectiveFrom,
+    effective_to: pricing?.effective_to ?? JUNE_2026_PRICING_META.effectiveTo
   };
 };
 
