@@ -6,7 +6,7 @@ interface UserAttributes {
   username: string;
   password: string;
   name: string;
-  role: 'super-admin' | 'admin' | 'agent' | 'account';
+  role: 'super-admin' | 'super-admin-manager' | 'admin' | 'agent' | 'account' | 'installer' | 'baldev' | 'confirmation' | 'hr' | 'metering' | 'meter' | 'metering-team' | 'mco';
   is_active: boolean;
   created_by_id?: string | null;
   created_by_name?: string | null;
@@ -18,7 +18,24 @@ interface UserAttributes {
 interface QuotationUserAttributes {
   id: string;
   username: string;
-  role: 'dealer' | 'admin' | 'visitor';
+  role:
+    | 'dealer'
+    | 'admin'
+    | 'visitor'
+    | 'account-management'
+    | 'installer'
+    | 'installation-team'
+    | 'baldev'
+    | 'confirmation'
+    | 'hr'
+    | 'metering'
+    | 'meter'
+    | 'metering-team'
+    | 'mco';
+  installationTeamId?: string;
+  teamName?: string;
+  firstName?: string;
+  lastName?: string;
 }
 
 declare global {
@@ -35,6 +52,12 @@ declare global {
       visitor?: {
         id: string;
         username: string;
+      };
+      // Account manager (can be part of QuotationUserAttributes but keeping for clarity)
+      accountManager?: {
+        id: string;
+        username: string;
+        role: 'account-management' | 'hr' | 'metering' | 'meter' | 'metering-team' | 'mco';
       };
     }
   }

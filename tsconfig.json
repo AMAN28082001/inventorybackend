@@ -27,11 +27,21 @@
     "files": true
   },
   "include": [
-    "**/*.ts",
-    "types/**/*.d.ts"
+    "server.ts",
+    "config/**/*.ts",
+    "controllers/**/*.ts",
+    "middleware/**/*.ts",
+    "models/**/*.ts",
+    "routes/**/*.ts",
+    "scripts/**/*.ts",
+    "types/**/*.d.ts",
+    "utils/**/*.ts",
+    "validations/**/*.ts"
   ],
   "exclude": [
     "node_modules",
+    "node_modules*",
+    "**/node_modules*",
     "dist",
     "**/*.js"
   ]

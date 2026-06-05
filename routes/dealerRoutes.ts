@@ -1,8 +1,30 @@
 import express, { Router } from 'express';
-import { registerDealer, getDealerProfile, updateDealerProfile, getDealerStatistics, getVisitors } from '../controllers/dealerController';
+import {
+  registerDealer,
+  getDealerProfile,
+  updateDealerProfile,
+  getDealerStatistics,
+  getDealerDashboardStats,
+  getVisitors
+} from '../controllers/dealerController';
+import { rescheduleVisit } from '../controllers/visitController';
+import {
+  getDealerCallingQueueCurrent,
+  getDealerCallingQueueNext,
+  claimDealerCallingLead,
+  assignDealerCallingLead,
+  patchDealerCallingLead,
+  updateDealerCallingQueueAction,
+  getDealerScheduledQueue,
+  getDealerDialledActions,
+  getDealerConnectedActions,
+  getDealerNotConnectedActions
+} from '../controllers/callingLeadController';
 import { authenticate, authorizeDealer } from '../middleware/authQuotation';
 import { validate } from '../middleware/validate';
 import { registerDealerSchema, updateDealerSchema } from '../validations/dealerValidations';
+import { dealerLeadActionSchema } from '../validations/callingLeadValidations';
+import { rescheduleVisitSchema } from '../validations/visitValidations';
 
 const router: Router = express.Router();
 
@@ -214,6 +236,7 @@ router.put('/me', validate(updateDealerSchema), updateDealerProfile);
  *         description: Unauthorized
  */
 router.get('/me/statistics', getDealerStatistics);
+router.get('/me/dashboard-stats', getDealerDashboardStats);
 
 /**
  * @swagger
@@ -279,6 +302,21 @@ router.get('/me/statistics', getDealerStatistics);
  *         description: Unauthorized
  */
 router.get('/visitors', getVisitors);
+
+router.get('/me/calling-queue/next', getDealerCallingQueueNext);
+router.get('/me/calling-queue/current', getDealerCallingQueueCurrent);
+router.get('/me/calling-queue/scheduled', getDealerScheduledQueue);
+router.get('/me/calling-actions/dialled', getDealerDialledActions);
+router.get('/me/calling-actions/connected', getDealerConnectedActions);
+router.get('/me/calling-actions/not-connected', getDealerNotConnectedActions);
+router.post('/me/calling-queue/:leadId/claim', claimDealerCallingLead);
+router.post('/me/calling-queue/:leadId/assign', assignDealerCallingLead);
+router.patch('/me/calling-queue/:leadId', patchDealerCallingLead);
+router.patch('/me/calling-queue/:leadId/action', validate(dealerLeadActionSchema), updateDealerCallingQueueAction);
+
+/** Dealer dashboard: same behavior as `PATCH /api/visits/:visitId/reschedule` (frontend fallbacks). */
+router.patch('/visits/:visitId/reschedule', validate(rescheduleVisitSchema), rescheduleVisit);
+router.patch('/me/visits/:visitId/reschedule', validate(rescheduleVisitSchema), rescheduleVisit);
 
 export default router;
 

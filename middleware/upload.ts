@@ -1,6 +1,46 @@
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
+import { Request, Response, NextFunction } from 'express';
+import {
+  uploadFileToS3,
+  uploadFileToS3FromBuffer,
+  generatePublicUrl,
+  buildS3ObjectUrl,
+  deleteFileFromS3,
+  extractS3Key
+} from '../utils/s3Service';
+import { toStorageUnavailableError } from '../utils/mapAwsStorageError';
+import { logInfo, logError } from '../utils/loggerHelper';
+
+const collectMulterDiskFiles = (req: Request): Express.Multer.File[] => {
+  const out: Express.Multer.File[] = [];
+  if (req.file) {
+    out.push(req.file);
+  }
+  const raw = (req as Request & { files?: Record<string, Express.Multer.File[]> }).files;
+  if (!raw || typeof raw !== 'object') {
+    return out;
+  }
+  if (Array.isArray(raw)) {
+    out.push(...(raw as Express.Multer.File[]));
+    return out;
+  }
+  for (const arr of Object.values(raw)) {
+    if (Array.isArray(arr)) {
+      out.push(...arr);
+    }
+  }
+  return out;
+};
+
+/** Disk-backed multer files that should be uploaded (excludes serial CSV etc.). */
+const hasProductStyleFilesToUpload = (req: Request, skipFields: Set<string>): boolean =>
+  collectMulterDiskFiles(req).some((f) => {
+    if (!f?.path || typeof f.path !== 'string' || skipFields.has(f.fieldname)) return false;
+    const bytes = Number(f.size);
+    return !Number.isFinite(bytes) || bytes > 0;
+  });
 
 // Create uploads directory if it doesn't exist
 const uploadDir = process.env.UPLOAD_DIR || './uploads';
@@ -21,14 +61,14 @@ const storage = multer.diskStorage({
 
 // File filter
 const fileFilter = (_req: Express.Request, file: Express.Multer.File, cb: multer.FileFilterCallback): void => {
-  const allowedTypes = /jpeg|jpg|png|gif|pdf/;
+  const allowedTypes = /jpeg|jpg|png|gif|pdf|xlsx|xls|csv/;
   const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
   const mimetype = allowedTypes.test(file.mimetype);
 
   if (mimetype && extname) {
     return cb(null, true);
   } else {
-    cb(new Error('Only image files (jpeg, jpg, png, gif) and PDF files are allowed'));
+    cb(new Error('Only image files (jpeg, jpg, png, gif), PDF, and Excel/CSV files are allowed'));
   }
 };
 
@@ -39,6 +79,162 @@ const upload = multer({
   },
   fileFilter: fileFilter
 });
+
+// Middleware to upload file to S3 after multer processes it
+export const uploadToS3 = (folder: string = 'photos') => {
+  return async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const skipFields = new Set(['serial_number_excel']);
+      if (!hasProductStyleFilesToUpload(req, skipFields)) {
+        next();
+        return;
+      }
+      const uploadFile = async (file: Express.Multer.File) => {
+        if (skipFields.has(file.fieldname)) {
+          return;
+        }
+        const localFilePath = file.path;
+
+        try {
+          const s3FileInfo = await uploadFileToS3(localFilePath, folder);
+          (file as any).s3Location = s3FileInfo.filePath;
+          (file as any).s3Key = s3FileInfo.key;
+
+          if (process.env.DELETE_LOCAL_AFTER_S3_UPLOAD === 'true') {
+            fs.unlinkSync(localFilePath);
+            logInfo('🗑️ Deleted local file after S3 upload', { localFilePath });
+          }
+
+          logInfo('✅ File uploaded to S3', {
+            originalName: file.originalname,
+            s3Key: s3FileInfo.key,
+            s3Url: s3FileInfo.filePath
+          });
+        } catch (s3Error) {
+          logError('❌ Failed to upload to S3', s3Error, {
+            localFilePath,
+            originalName: file.originalname
+          });
+          throw s3Error;
+        }
+      };
+
+      if (req.file) {
+        await uploadFile(req.file);
+      }
+
+      const files = (req as any).files;
+      if (files && typeof files === 'object') {
+        const fileArrays = Array.isArray(files) ? files : Object.values(files).flat();
+        for (const file of fileArrays) {
+          await uploadFile(file as Express.Multer.File);
+        }
+      }
+
+      next();
+    } catch (error) {
+      logError('Upload to S3 middleware error', error);
+      next(toStorageUnavailableError(error));
+    }
+  };
+};
+
+// Middleware to upload memory-backed multer files to S3 without local disk writes.
+export const uploadToS3FromMemory = (folder: string = 'photos') => {
+  return async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const files = (req as any).files;
+      const fileArrays = files && typeof files === 'object' ? Object.values(files).flat() : [];
+      const memoryFiles = fileArrays as Express.Multer.File[];
+      if (!memoryFiles.some((f) => f?.buffer && f.buffer.length > 0)) {
+        next();
+        return;
+      }
+
+      for (const file of memoryFiles) {
+        if (!file?.buffer) continue;
+
+        const key = await uploadFileToS3FromBuffer(file.buffer, file.originalname, folder);
+        let url: string;
+        try {
+          const ttl = Number(process.env.AWS_S3_SIGNED_URL_TTL_SECONDS || 604800);
+          url = await generatePublicUrl(key, ttl);
+        } catch (urlError) {
+          logError('Failed generating signed URL for memory upload, falling back to object URL', urlError, { key });
+          url = buildS3ObjectUrl(key);
+        }
+
+        (file as any).s3Key = key;
+        (file as any).s3Location = url;
+      }
+
+      next();
+    } catch (error) {
+      logError('Upload to S3 (memory) middleware error', error);
+      next(toStorageUnavailableError(error));
+    }
+  };
+};
+
+// Middleware to handle file deletion from S3 when updating/deleting records
+const isMultipartProductRequest = (req: Request): boolean =>
+  String(req.headers['content-type'] || '').toLowerCase().includes('multipart/form-data');
+
+/**
+ * For POST/PUT products: run disk multer + S3 only when Content-Type is multipart/form-data.
+ * Use application/json for creates/updates without a binary image so AWS is never touched.
+ */
+export const conditionalProductMultipartUpload = (mode: 'create' | 'update') => {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    if (!isMultipartProductRequest(req)) {
+      next();
+      return;
+    }
+    if (mode === 'create') {
+      upload.single('image')(req, res, (err: unknown) => {
+        if (err) {
+          next(err as Error);
+          return;
+        }
+        uploadToS3('products')(req, res, next);
+      });
+      return;
+    }
+    upload.fields([
+      { name: 'image', maxCount: 1 },
+      { name: 'serial_number_excel', maxCount: 1 }
+    ])(req, res, (err: unknown) => {
+      if (err) {
+        next(err as Error);
+        return;
+      }
+      uploadToS3('products')(req, res, next);
+    });
+  };
+};
+
+export const deleteFileFromS3IfExists = async (filePathOrUrl: string | null | undefined): Promise<void> => {
+  if (!filePathOrUrl) return;
+  
+  try {
+    // Check if it's an S3 URL
+    const s3Key = extractS3Key(filePathOrUrl);
+    if (s3Key) {
+      await deleteFileFromS3(s3Key);
+      logInfo('🗑️ Deleted file from S3', { s3Key });
+    } else {
+      // It's a local file, check if we should delete it
+      const localPath = path.join(process.cwd(), filePathOrUrl);
+      if (fs.existsSync(localPath) && process.env.DELETE_LOCAL_AFTER_S3_UPLOAD === 'true') {
+        fs.unlinkSync(localPath);
+        logInfo('🗑️ Deleted local file', { localPath });
+      }
+    }
+  } catch (error) {
+    logError('Failed to delete file', error, { filePathOrUrl });
+    // Don't throw - file deletion failure shouldn't break the main operation
+  }
+};
 
 export default upload;
 

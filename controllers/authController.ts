@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt, { SignOptions } from 'jsonwebtoken';
 import { User } from '../models';
+import { Dealer } from '../models/index-quotation';
 import { logError } from '../utils/loggerHelper';
 
 // Login
@@ -53,7 +54,10 @@ export const login = async (req: Request, res: Response): Promise<void> => {
         id: user.id,
         username: user.username,
         name: user.name,
-        role: user.role
+        role: user.role,
+        is_active: user.is_active,
+        created_by_id: user.created_by_id,
+        created_by_name: user.created_by_name
       }
     });
   } catch (error) {
@@ -71,7 +75,16 @@ export const getCurrentUser = async (req: Request, res: Response): Promise<void>
     }
 
     const user = await User.findByPk(req.user.id, {
-      attributes: ['id', 'username', 'name', 'role', 'created_at', 'is_active']
+      attributes: [
+        'id',
+        'username',
+        'name',
+        'role',
+        'is_active',
+        'created_by_id',
+        'created_by_name',
+        'created_at'
+      ]
     });
 
     if (!user) {
@@ -248,3 +261,56 @@ export const changePassword = async (req: Request, res: Response): Promise<void>
   }
 };
 
+// Get mapped dealer for inventory agent (for quotation access)
+export const getAgentDealerMapping = async (req: Request, res: Response): Promise<void> => {
+  try {
+    if (!req.user) {
+      res.status(401).json({ error: 'User not authenticated' });
+      return;
+    }
+
+    if (req.user.role !== 'agent') {
+      res.status(403).json({ error: 'Only agents can access dealer mapping' });
+      return;
+    }    let dealer: Dealer | null = null;
+    const dealerById = await Dealer.findByPk(req.user.id);
+    if (dealerById) {
+      dealer = dealerById;
+    } else if (req.user.username) {
+      const dealerByUsername = await Dealer.findOne({ where: { username: req.user.username } });
+      if (dealerByUsername) {
+        dealer = dealerByUsername;
+      } else if (req.user.username.includes('@')) {
+        dealer = await Dealer.findOne({ where: { email: req.user.username } });
+      } else if (/^\d{8,}$/.test(req.user.username)) {
+        dealer = await Dealer.findOne({ where: { mobile: req.user.username } });
+      }
+    }
+
+    if (!dealer) {
+      res.status(404).json({
+        success: false,
+        error: { code: 'AUTH_004', message: 'No dealer mapping found for agent' }
+      });
+      return;
+    }
+
+    res.json({
+      success: true,
+      data: {
+        dealerId: dealer.id,
+        dealer: {
+          id: dealer.id,
+          firstName: dealer.firstName,
+          lastName: dealer.lastName,
+          email: dealer.email,
+          mobile: dealer.mobile,
+          username: dealer.username
+        }
+      }
+    });
+  } catch (error) {
+    logError('Get agent dealer mapping error', error, { userId: req.user?.id });
+    res.status(500).json({ error: 'Server error' });
+  }
+};

@@ -42,7 +42,11 @@ router.use(authenticate);
  *       403:
  *         description: Forbidden
  */
-router.get('/', authorize('super-admin', 'admin', 'account'), getAllUsers);
+router.get('/', authorize('super-admin', 'super-admin-manager', 'admin', 'account'), getAllUsers);
+router.get('/agents', authorize('super-admin', 'super-admin-manager', 'admin', 'account'), (req, _res, next) => {
+  req.query.role = 'agent';
+  next();
+}, getAllUsers);
 
 /**
  * @swagger
@@ -68,7 +72,7 @@ router.get('/', authorize('super-admin', 'admin', 'account'), getAllUsers);
  *       404:
  *         description: User not found
  */
-router.get('/:id', authorize('super-admin', 'admin', 'account'), getUserById);
+router.get('/:id', authorize('super-admin', 'super-admin-manager', 'admin', 'account'), getUserById);
 
 /**
  * @swagger
@@ -99,7 +103,7 @@ router.get('/:id', authorize('super-admin', 'admin', 'account'), getUserById);
  *                 type: string
  *               role:
  *                 type: string
- *                 enum: [super-admin, admin, agent, account]
+ *                 enum: [super-admin, super-admin-manager, admin, agent, account]
  *     responses:
  *       201:
  *         description: User created successfully
@@ -140,7 +144,7 @@ router.post('/', authorize('super-admin', 'admin'), validate(createUserSchema), 
  *                 type: string
  *               role:
  *                 type: string
- *                 enum: [super-admin, admin, agent, account]
+ *                 enum: [super-admin, super-admin-manager, admin, agent, account]
  *               is_active:
  *                 type: boolean
  *     responses:
@@ -151,7 +155,7 @@ router.post('/', authorize('super-admin', 'admin'), validate(createUserSchema), 
  *       404:
  *         description: User not found
  */
-router.put('/:id', authorize('super-admin'), validate(updateUserSchema), updateUser);
+router.put('/:id', authorize('super-admin', 'super-admin-manager', 'account'), validate(updateUserSchema), updateUser);
 
 /**
  * @swagger

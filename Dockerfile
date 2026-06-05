@@ -29,6 +29,7 @@ FROM node:18-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
+ENV PORT=3000
 
 # Copy necessary files from builder
 COPY --from=builder /app/package*.json ./

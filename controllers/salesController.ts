@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { deleteFileFromS3IfExists } from '../middleware/upload';
 import {
   Sale,
   SaleItem,
@@ -6,7 +7,8 @@ import {
   Product,
   User,
   AdminInventory,
-  InventoryTransaction
+  InventoryTransaction,
+  ProductSerialNumber
 } from '../models';
 import { v4 as uuidv4 } from 'uuid';
 import { Op } from 'sequelize';
@@ -41,6 +43,20 @@ const buildSaleIncludes = () => ([
   }
 ]);
 
+const serializeSale = (sale: any) => {
+  const creator = sale.creator || sale.created_by;
+  const createdByName = creator?.name || creator?.created_by_name || null;
+  const saleDate = sale.sale_date || sale.created_at || null;
+
+  return {
+    ...sale.toJSON?.() || sale,
+    created_by_name: createdByName,
+    agent_name: createdByName,
+    created_at: saleDate,
+    sale_date: saleDate
+  };
+};
+
 interface NormalizedSaleItem {
   product_id: string | null;
   product_name: string;
@@ -49,6 +65,7 @@ interface NormalizedSaleItem {
   unit_price: number;
   line_total: number;
   gst_rate: number;
+  serial_numbers?: string[] | null;
 }
 
 const normalizeSaleItems = async (rawItems: any, transaction: Transaction): Promise<NormalizedSaleItem[]> => {
@@ -86,8 +103,12 @@ const normalizeSaleItems = async (rawItems: any, transaction: Transaction): Prom
     let unitPrice: number;
     if (item.unit_price !== undefined) {
       unitPrice = Number(item.unit_price);
+    } else if (productRecord && productRecord.selling_price !== null && productRecord.selling_price !== undefined) {
+      unitPrice = Number(productRecord.selling_price);
     } else if (productRecord && productRecord.unit_price !== null && productRecord.unit_price !== undefined) {
       unitPrice = Number(productRecord.unit_price);
+    } else if (productRecord && (productRecord as any).price !== null && (productRecord as any).price !== undefined) {
+      unitPrice = Number((productRecord as any).price);
     } else {
       unitPrice = NaN;
     }
@@ -115,7 +136,12 @@ const normalizeSaleItems = async (rawItems: any, transaction: Transaction): Prom
       quantity,
       unit_price: unitPrice,
       line_total: lineTotal,
-      gst_rate: gstRate
+      gst_rate: gstRate,
+      serial_numbers: Array.isArray(item.serial_numbers)
+        ? item.serial_numbers.map(String)
+        : typeof item.serial_numbers === 'string'
+          ? item.serial_numbers.split(/[\n,]+/).map((v: string) => v.trim()).filter(Boolean)
+          : null
     });
   }
 
@@ -127,7 +153,7 @@ const normalizeSaleItems = async (rawItems: any, transaction: Transaction): Prom
  *
  * - Agent: only their own sales
  * - Admin: their own sales + sales from agents they created
- * - Account / Super-Admin: all sales
+ * - Account, Super-Admin, Super-Admin-Manager: no filter (all sales)
  */
 const buildSalesRoleConditions = async (req: Request): Promise<any[]> => {
   const conditions: any[] = [];
@@ -305,7 +331,7 @@ export const getAllSales = async (req: Request, res: Response): Promise<void> =>
     });
 
     logInfo('Get all sales', { count: sales.length, type: type as string || 'all', paymentStatus: payment_status as string || 'all' });
-    res.json(sales);
+    res.json(sales.map((sale) => serializeSale(sale)));
   } catch (error) {
     logError('Get all sales error', error);
     res.status(500).json({ error: 'Server error' });
@@ -327,7 +353,7 @@ export const getSaleById = async (req: Request, res: Response): Promise<void> =>
     }
 
     logInfo('Get sale by ID', { saleId: id });
-    res.json(sale);
+    res.json(serializeSale(sale));
   } catch (error) {
     logError('Get sale by ID error', error, { saleId: req.params.id });
     res.status(500).json({ error: 'Server error' });
@@ -465,7 +491,12 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
       deliveryAddressId = billingAddressId;
     }
 
-    const imagePath = req.file ? `/uploads/${req.file.filename}` : null;
+    // S3-only upload path for sale image
+    const uploadedS3Image = req.file ? (req.file as any).s3Location : null;
+    if (req.file && !uploadedS3Image) {
+      throw new Error('Image upload failed. Could not store file in S3.');
+    }
+    const imagePath = uploadedS3Image;
 
     const saleRecord = await Sale.create({
       id: uuidv4(),
@@ -478,6 +509,7 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
       discount_amount: discountAmountValue,
       total_amount: totalAmountValue,
       payment_status: payment_status || 'pending',
+      approval_status: 'pending',
       sale_date: sale_date ? new Date(sale_date) : new Date(),
       image: imagePath,
       created_by: req.user.id,
@@ -493,8 +525,9 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
       notes: notes || null
     }, { transaction });
 
+    const createdSaleItems: SaleItem[] = [];
     for (const item of normalizedItems) {
-      await SaleItem.create({
+      const createdItem = await SaleItem.create({
         id: uuidv4(),
         sale_id: saleRecord.id,
         product_id: item.product_id,
@@ -503,8 +536,101 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
         quantity: item.quantity,
         unit_price: item.unit_price,
         line_total: item.line_total,
-        gst_rate: item.gst_rate
+        gst_rate: item.gst_rate,
+        serial_numbers: item.serial_numbers && item.serial_numbers.length > 0 ? item.serial_numbers : null
       }, { transaction });
+      createdSaleItems.push(createdItem);
+    }
+
+    const serialNumbersRaw = (req.body as any).serial_numbers;
+    const serialNumbersMapFromItems: Record<string, string[]> = {};
+    for (const item of normalizedItems) {
+      if (item.product_id && item.serial_numbers && item.serial_numbers.length > 0) {
+        serialNumbersMapFromItems[item.product_id] = item.serial_numbers;
+      }
+    }
+    const serialNumbersMap: Record<string, string[]> = serialNumbersRaw
+      ? (typeof serialNumbersRaw === 'string' ? JSON.parse(serialNumbersRaw) : serialNumbersRaw)
+      : serialNumbersMapFromItems;
+
+    const serialsToUpdate: string[] = Object.values(serialNumbersMap || {}).flatMap((list) =>
+      Array.isArray(list) ? list.map(String) : []
+    );
+    if (serialsToUpdate.length > 0) {
+      const serialRows = await ProductSerialNumber.findAll({
+        where: {
+          serial_number: { [Op.in]: serialsToUpdate }
+        },
+        transaction,
+        lock: transaction.LOCK.UPDATE
+      });
+
+      if (serialRows.length !== serialsToUpdate.length) {
+        await transaction.rollback();
+        res.status(400).json({ error: 'Some serial numbers are invalid' });
+        return;
+      }
+
+      const saleItemByProduct = new Map<string, string>();
+      for (const item of createdSaleItems) {
+        if (item.product_id) {
+          saleItemByProduct.set(item.product_id, item.id);
+        }
+      }
+
+      let adminInventoryOwnerId: string | null = null;
+      if (req.user.role === 'agent') {
+        const agentRecord = await User.findByPk(req.user.id, {
+          attributes: ['id', 'created_by_id']
+        });
+        adminInventoryOwnerId = agentRecord?.created_by_id || null;
+        if (!adminInventoryOwnerId) {
+          await transaction.rollback();
+          res.status(400).json({ error: 'Admin mapping not found for agent' });
+          return;
+        }
+      }
+
+      for (const serialRow of serialRows) {
+        if (req.user.role === 'agent') {
+          if (!['acknowledged', 'dispatched'].includes(serialRow.status || '') || serialRow.dispatched_to_admin_id !== adminInventoryOwnerId) {
+            await transaction.rollback();
+            res.status(400).json({ error: 'Serial number is not available for sale' });
+            return;
+          }
+        } else if (req.user.role === 'admin') {
+          if (!['acknowledged', 'dispatched', 'available'].includes(serialRow.status || '')) {
+            await transaction.rollback();
+            res.status(400).json({ error: 'Serial number is not available for sale' });
+            return;
+          }
+        }
+
+        await ProductSerialNumber.update(
+          {
+            status: 'sold',
+            sale_id: saleRecord.id,
+            sale_item_id: saleItemByProduct.get(serialRow.product_id) || null
+          },
+          {
+            where: { id: serialRow.id },
+            transaction
+          }
+        );
+      }
+    }
+
+    let adminInventoryOwnerId: string | null = null;
+    if (req.user.role === 'agent') {
+      const agentRecord = await User.findByPk(req.user.id, {
+        attributes: ['id', 'created_by_id']
+      });
+      adminInventoryOwnerId = agentRecord?.created_by_id || null;
+      if (!adminInventoryOwnerId) {
+        throw new Error('Admin mapping not found for agent');
+      }
+    } else if (req.user.role === 'admin') {
+      adminInventoryOwnerId = req.user.id;
     }
 
     for (const item of normalizedItems) {
@@ -512,14 +638,19 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
         continue;
       }
 
-      let reduced = false;
-
-      if (req.user.role === 'admin') {
-        reduced = await tryReduceAdminInventory(req.user.id, item.product_id, item.quantity, transaction);
-      }
-
-      if (!reduced) {
+      if (adminInventoryOwnerId) {
+        const reduced = await tryReduceAdminInventory(adminInventoryOwnerId, item.product_id, item.quantity, transaction);
+        if (!reduced) {
+          throw new Error(`Insufficient admin inventory for product ${item.product_id}`);
+        }
+      } else if (
+        req.user.role === 'super-admin' ||
+        req.user.role === 'super-admin-manager' ||
+        req.user.role === 'account'
+      ) {
         await reduceCentralInventory(item.product_id, item.quantity, transaction);
+      } else {
+        throw new Error('Insufficient permissions to deduct inventory');
       }
 
       await logSaleTransaction({
@@ -539,7 +670,7 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
     });
 
     logInfo('Sale created', { saleId: saleRecord.id, type, customerName: customer_name, totalAmount: totalAmountValue, createdBy: req.user.id });
-    res.status(201).json(created);
+    res.status(201).json(serializeSale(created));
   } catch (error: any) {
     await transaction.rollback();
     logError('Create sale error', error, { 
@@ -568,16 +699,20 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
 
 // Update sale
 export const updateSale = async (req: Request, res: Response): Promise<void> => {
+  const transaction = await sequelize.transaction();
   try {
     if (!req.user) {
+      await transaction.rollback();
       res.status(401).json({ error: 'User not authenticated' });
       return;
     }
 
     const { id } = req.params;
     const {
+      items: rawItems,
       customer_name,
       payment_status,
+      approval_status,
       subtotal,
       tax_amount,
       discount_amount,
@@ -586,6 +721,10 @@ export const updateSale = async (req: Request, res: Response): Promise<void> => 
       company_name,
       gst_number,
       contact_person,
+      billing_address_id,
+      billing_address,
+      delivery_address_id,
+      delivery_address,
       delivery_matches_billing,
       customer_email,
       customer_phone,
@@ -593,8 +732,9 @@ export const updateSale = async (req: Request, res: Response): Promise<void> => 
       notes
     } = req.body;
 
-    const sale = await Sale.findByPk(id);
+    const sale = await Sale.findByPk(id, { transaction });
     if (!sale) {
+      await transaction.rollback();
       res.status(404).json({ error: 'Sale not found' });
       return;
     }
@@ -602,9 +742,12 @@ export const updateSale = async (req: Request, res: Response): Promise<void> => 
     const canUpdate =
       sale.created_by === req.user.id ||
       req.user.role === 'super-admin' ||
-      req.user.role === 'admin';
+      req.user.role === 'admin' ||
+      req.user.role === 'account' ||
+      req.user.role === 'super-admin-manager';
 
     if (!canUpdate) {
+      await transaction.rollback();
       res.status(403).json({
         error: 'You do not have permission to update this sale'
       });
@@ -613,21 +756,59 @@ export const updateSale = async (req: Request, res: Response): Promise<void> => 
 
     const updates: any = {};
 
+    let updatedItems: NormalizedSaleItem[] | null = null;
+    if (rawItems !== undefined) {
+      let parsedItems: any = rawItems;
+      if (typeof parsedItems === 'string') {
+        try {
+          parsedItems = JSON.parse(parsedItems);
+        } catch (parseError) {
+          await transaction.rollback();
+          res.status(400).json({ error: 'items must be a valid JSON array' });
+          return;
+        }
+      }
+      updatedItems = await normalizeSaleItems(parsedItems, transaction);
+      const newSubtotal = updatedItems.reduce((sum, item) => sum + item.line_total, 0);
+      updates.subtotal = subtotal !== undefined ? Number(subtotal) : newSubtotal;
+      const taxValue = tax_amount !== undefined ? Number(tax_amount) : 0;
+      const discountValue = discount_amount !== undefined ? Number(discount_amount) : 0;
+      updates.tax_amount = taxValue;
+      updates.discount_amount = discountValue;
+      updates.total_amount = updates.subtotal + taxValue - discountValue;
+    }
+
     if (customer_name) {
       updates.customer_name = customer_name;
     }
 
     if (payment_status) {
       if (!['pending', 'completed'].includes(payment_status)) {
+        await transaction.rollback();
         res.status(400).json({ error: 'Invalid payment status' });
         return;
       }
       updates.payment_status = payment_status;
     }
 
+    if (approval_status !== undefined) {
+      if (!['account', 'super-admin-manager', 'super-admin'].includes(req.user.role)) {
+        await transaction.rollback();
+        res.status(403).json({ error: 'Only account roles can approve sales' });
+        return;
+      }
+      if (!['pending', 'approved'].includes(approval_status)) {
+        await transaction.rollback();
+        res.status(400).json({ error: 'Invalid approval status' });
+        return;
+      }
+      updates.approval_status = approval_status;
+    }
+
     if (subtotal !== undefined) {
       const value = Number(subtotal);
       if (Number.isNaN(value) || value < 0) {
+        await transaction.rollback();
         res.status(400).json({ error: 'Subtotal must be a non-negative number' });
         return;
       }
@@ -637,6 +818,7 @@ export const updateSale = async (req: Request, res: Response): Promise<void> => 
     if (tax_amount !== undefined) {
       const value = Number(tax_amount);
       if (Number.isNaN(value) || value < 0) {
+        await transaction.rollback();
         res.status(400).json({ error: 'Tax amount must be a non-negative number' });
         return;
       }
@@ -646,6 +828,7 @@ export const updateSale = async (req: Request, res: Response): Promise<void> => 
     if (discount_amount !== undefined) {
       const value = Number(discount_amount);
       if (Number.isNaN(value) || value < 0) {
+        await transaction.rollback();
         res.status(400).json({ error: 'Discount amount must be a non-negative number' });
         return;
       }
@@ -655,6 +838,7 @@ export const updateSale = async (req: Request, res: Response): Promise<void> => 
     if (total_amount !== undefined) {
       const value = Number(total_amount);
       if (Number.isNaN(value) || value < 0) {
+        await transaction.rollback();
         res.status(400).json({ error: 'Total amount must be a non-negative number' });
         return;
       }
@@ -663,6 +847,9 @@ export const updateSale = async (req: Request, res: Response): Promise<void> => 
 
     if (product_summary) {
       updates.product_summary = product_summary;
+    }
+    if (updatedItems) {
+      updates.product_summary = product_summary || buildProductSummary(updatedItems);
     }
 
     if (company_name !== undefined) {
@@ -679,6 +866,21 @@ export const updateSale = async (req: Request, res: Response): Promise<void> => 
 
     if (delivery_matches_billing !== undefined) {
       updates.delivery_matches_billing = delivery_matches_billing === true || delivery_matches_billing === 'true';
+    }
+
+    const billingAddressId = await createAddressIfNeeded(billing_address_id, billing_address, transaction);
+    const deliveryAddressId = await createAddressIfNeeded(delivery_address_id, delivery_address, transaction);
+
+    if (billingAddressId) {
+      updates.billing_address_id = billingAddressId;
+    }
+
+    if (deliveryAddressId) {
+      updates.delivery_address_id = deliveryAddressId;
+    }
+
+    if (updates.delivery_matches_billing && updates.billing_address_id && !updates.delivery_address_id) {
+      updates.delivery_address_id = updates.billing_address_id;
     }
 
     if (customer_email !== undefined) {
@@ -698,18 +900,48 @@ export const updateSale = async (req: Request, res: Response): Promise<void> => 
     }
 
     if (req.file) {
-      updates.image = `/uploads/${req.file.filename}`;
+      const uploadedS3Image = (req.file as any).s3Location;
+      if (!uploadedS3Image) {
+        throw new Error('Image upload failed. Could not store file in S3.');
+      }
+      updates.image = uploadedS3Image;
+      
+      // Delete old image from S3 if it exists
+      if (sale.image) {
+        await deleteFileFromS3IfExists(sale.image);
+      }
     }
 
-    await sale.update(updates);
+    await sale.update(updates, { transaction });
+
+    if (updatedItems) {
+      await SaleItem.destroy({ where: { sale_id: sale.id }, transaction });
+      for (const item of updatedItems) {
+        await SaleItem.create({
+          id: uuidv4(),
+          sale_id: sale.id,
+          product_id: item.product_id,
+          product_name: item.product_name,
+          model: item.model,
+          quantity: item.quantity,
+          unit_price: item.unit_price,
+          line_total: item.line_total,
+          gst_rate: item.gst_rate,
+          serial_numbers: item.serial_numbers && item.serial_numbers.length > 0 ? item.serial_numbers : null
+        }, { transaction });
+      }
+    }
+
+    await transaction.commit();
 
     const updated = await Sale.findByPk(id, {
       include: buildSaleIncludes()
     });
 
     logInfo('Sale updated', { saleId: id, updatedBy: req.user.id, updates: Object.keys(updates) });
-    res.json(updated);
+    res.json(serializeSale(updated));
   } catch (error) {
+    await transaction.rollback();
     logError('Update sale error', error, { saleId: req.params.id, updatedBy: req.user?.id });
     res.status(500).json({ error: 'Server error' });
   }
@@ -736,14 +968,24 @@ export const confirmB2BBill = async (req: Request, res: Response): Promise<void>
       return;
     }
 
-    if (req.user.role !== 'account') {
+    if (!['account', 'super-admin-manager', 'super-admin'].includes(req.user.role)) {
       res.status(403).json({
-        error: 'Only account managers can confirm bills'
+        error: 'Only account roles can confirm bills'
       });
       return;
     }
 
-    const billImage = req.file ? `/uploads/${req.file.filename}` : sale.bill_image;
+    const uploadedS3BillImage = req.file ? (req.file as any).s3Location : null;
+    if (req.file && !uploadedS3BillImage) {
+      res.status(500).json({ error: 'Bill upload failed. Could not store file in S3.' });
+      return;
+    }
+    const billImage = uploadedS3BillImage || sale.bill_image;
+    
+    // Delete old bill image from S3 if it exists
+    if (sale.bill_image && req.file) {
+      await deleteFileFromS3IfExists(sale.bill_image);
+    }
 
     if (!billImage) {
       res.status(400).json({ error: 'Bill image is required' });
@@ -754,8 +996,9 @@ export const confirmB2BBill = async (req: Request, res: Response): Promise<void>
       bill_image: billImage,
       bill_confirmed_date: new Date(),
       bill_confirmed_by_id: req.user.id,
-      bill_confirmed_by_name: req.user.name,
-      payment_status: 'completed'
+      bill_confirmed_by_name: (req.user as any).name || req.user.username || null,
+      payment_status: 'completed',
+      approval_status: 'approved'
     });
 
     const updated = await Sale.findByPk(id, {
@@ -763,9 +1006,42 @@ export const confirmB2BBill = async (req: Request, res: Response): Promise<void>
     });
 
     logInfo('B2B bill confirmed', { saleId: id, confirmedBy: req.user.id });
-    res.json(updated);
+    res.json(serializeSale(updated));
   } catch (error) {
     logError('Confirm B2B bill error', error, { saleId: req.params.id, confirmedBy: req.user?.id });
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+// Approve sale (account role)
+export const approveSale = async (req: Request, res: Response): Promise<void> => {
+  try {
+    if (!req.user) {
+      res.status(401).json({ error: 'User not authenticated' });
+      return;
+    }
+
+    if (!['account', 'super-admin-manager', 'super-admin'].includes(req.user.role)) {
+      res.status(403).json({ error: 'Only account roles can approve sales' });
+      return;
+    }
+
+    const { id } = req.params;
+    const sale = await Sale.findByPk(id);
+    if (!sale) {
+      res.status(404).json({ error: 'Sale not found' });
+      return;
+    }
+
+    await sale.update({ approval_status: 'approved' });
+
+    const updated = await Sale.findByPk(id, {
+      include: buildSaleIncludes()
+    });
+
+    res.json(serializeSale(updated));
+  } catch (error) {
+    logError('Approve sale error', error, { saleId: req.params.id, approvedBy: req.user?.id });
     res.status(500).json({ error: 'Server error' });
   }
 };

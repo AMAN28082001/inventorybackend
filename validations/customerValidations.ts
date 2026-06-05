@@ -9,17 +9,19 @@ const addressSchema = z.object({
 
 export const createCustomerSchema = z.object({
   firstName: z.string().min(1, 'First name is required').max(100),
-  lastName: z.string().min(1, 'Last name is required').max(100),
+  lastName: z.string().trim().max(100).optional().nullable().default(''),
   mobile: z.string().regex(/^\d{10}$/, 'Mobile must be 10 digits'),
-  email: z.string().email('Invalid email format'),
-  address: addressSchema
+  email: z.string().trim().email('Invalid email format').optional().or(z.literal('')).nullable().default(''),
+  address: addressSchema,
+  notes: z.string().max(10000).optional().nullable(),
+  remarks: z.string().max(10000).optional().nullable()
 });
 
 export const updateCustomerSchema = z.object({
   firstName: z.string().min(1).max(100).optional(),
-  lastName: z.string().min(1).max(100).optional(),
+  lastName: z.string().trim().max(100).optional().nullable().default(''),
   mobile: z.string().regex(/^\d{10}$/).optional(),
-  email: z.string().email().optional(),
+  email: z.string().trim().email('Invalid email format').optional().or(z.literal('')).nullable().default(''),
   address: addressSchema.optional()
 }).refine((data) => Object.keys(data).length > 0, {
   message: 'At least one field must be provided for update'

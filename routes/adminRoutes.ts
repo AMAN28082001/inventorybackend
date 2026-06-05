@@ -1,12 +1,16 @@
 import express, { Router } from 'express';
 import {
   getAllQuotations,
+  getAdminQuotationById,
   updateQuotationStatus,
+  updateQuotationInstallationStatus,
+  updateQuotationFileLogin,
   getAllDealers,
   updateDealer,
   activateDealer,
   getSystemStatistics
 } from '../controllers/adminController';
+import { updateQuotationInstallationScheduledAt } from '../controllers/quotationController';
 import {
   createVisitor,
   getAllVisitors,
@@ -15,16 +19,40 @@ import {
   updateVisitorPassword,
   deleteVisitor
 } from '../controllers/adminVisitorController';
+import { getAdminCallingActions, getHrLeadUploadBatchRows } from '../controllers/callingLeadController';
+import {
+  listInstallationTeams,
+  createInstallationTeam,
+  patchInstallationTeam,
+  patchInstallationTeamPassword,
+  deleteInstallationTeam,
+  patchQuotationInstallationTeam
+} from '../controllers/installationTeamController';
 import { authenticate, authorizeAdmin } from '../middleware/authQuotation';
 import { validate } from '../middleware/validate';
-import { updateStatusSchema, createVisitorSchema, updateVisitorSchema, updateVisitorPasswordSchema } from '../validations/adminValidations';
+import { handleInstallerMultipart, handleSingleInstallerUploadMultipart } from './installerRoutes';
+import { installerUploadDocuments, meteringStatusUpdate, uploadInstallerDocument } from '../controllers/workflowController';
+import { meteringStatusSchema } from '../validations/workflowValidations';
+import { installerUploadMetaSchema } from '../validations/workflowValidations';
+import {
+  updateStatusSchema,
+  updateInstallationStatusSchema,
+  fileLoginSchema,
+  createVisitorSchema,
+  updateVisitorSchema,
+  updateVisitorPasswordSchema,
+  createInstallationTeamSchema,
+  patchInstallationTeamSchema,
+  patchQuotationInstallationTeamSchema,
+  patchInstallationTeamPasswordSchema
+} from '../validations/adminValidations';
+import { updateInstallationScheduledAtSchema } from '../validations/quotationValidations';
 import { adminUpdateDealerSchema } from '../validations/dealerValidations';
 
 const router: Router = express.Router();
 
-// All routes require admin authentication
+// All routes require authentication
 router.use(authenticate);
-router.use(authorizeAdmin);
 
 /**
  * @swagger
@@ -36,6 +64,10 @@ router.use(authorizeAdmin);
  *       - bearerAuth: []
  */
 router.get('/quotations', getAllQuotations);
+router.get('/quotations/:quotationId', getAdminQuotationById);
+
+// All routes below require admin authorization
+router.use(authorizeAdmin);
 
 /**
  * @swagger
@@ -47,6 +79,105 @@ router.get('/quotations', getAllQuotations);
  *       - bearerAuth: []
  */
 router.patch('/quotations/:quotationId/status', validate(updateStatusSchema), updateQuotationStatus);
+
+/**
+ * Installer completion multipart (same as POST /api/installer/quotations/:id/documents).
+ * Admin UI tries these URLs before POST /api/quotations/:id/documents — that route uses KYC-only Multer
+ * and rejects `installerCompletionImages` with "Unexpected or too many file fields".
+ */
+router.post(
+  '/quotations/:quotationId/documents',
+  handleInstallerMultipart,
+  validate(installerUploadMetaSchema),
+  installerUploadDocuments
+);
+router.post(
+  '/quotations/:quotationId/installer-documents',
+  handleInstallerMultipart,
+  validate(installerUploadMetaSchema),
+  installerUploadDocuments
+);
+router.post(
+  '/installer/quotations/:quotationId/documents',
+  handleInstallerMultipart,
+  validate(installerUploadMetaSchema),
+  installerUploadDocuments
+);
+router.post(
+  '/quotations/:quotationId/installer-documents/upload',
+  handleSingleInstallerUploadMultipart,
+  uploadInstallerDocument
+);
+router.post(
+  '/quotations/:quotationId/documents/upload',
+  handleSingleInstallerUploadMultipart,
+  uploadInstallerDocument
+);
+
+router.patch('/quotations/:quotationId/installation-status', validate(updateInstallationStatusSchema), updateQuotationInstallationStatus);
+router.patch('/quotations/:quotationId/workflow-status', validate(updateInstallationStatusSchema), updateQuotationInstallationStatus);
+router.patch(
+  '/quotations/:quotationId/metering-status',
+  validate(meteringStatusSchema),
+  meteringStatusUpdate
+);
+router.patch('/quotations/:quotationId/installation-scheduled-at', validate(updateInstallationScheduledAtSchema), updateQuotationInstallationScheduledAt);
+router.patch('/quotations/:quotationId/installation-schedule', validate(updateInstallationScheduledAtSchema), updateQuotationInstallationScheduledAt);
+router.patch('/quotations/:quotationId/file-login', validate(fileLoginSchema), updateQuotationFileLogin);
+router.patch(
+  '/quotations/:quotationId/installation-team',
+  validate(patchQuotationInstallationTeamSchema),
+  patchQuotationInstallationTeam
+);
+router.patch(
+  '/quotations/:quotationId/installation_team',
+  validate(patchQuotationInstallationTeamSchema),
+  patchQuotationInstallationTeam
+);
+router.get('/installation-teams', listInstallationTeams);
+router.post('/installation-teams', validate(createInstallationTeamSchema), createInstallationTeam);
+router.patch('/installation-teams/:teamId', validate(patchInstallationTeamSchema), patchInstallationTeam);
+router.patch(
+  '/installation-teams/:teamId/password',
+  validate(patchInstallationTeamPasswordSchema),
+  patchInstallationTeamPassword
+);
+router.patch(
+  '/installation-teams/:teamId/reset-password',
+  validate(patchInstallationTeamPasswordSchema),
+  patchInstallationTeamPassword
+);
+router.delete('/installation-teams/:teamId', deleteInstallationTeam);
+// Compatibility aliases used by some frontend builds.
+router.get('/installation/team-logins', listInstallationTeams);
+router.get('/installation-team-logins', listInstallationTeams);
+router.post('/installation/team-logins', validate(createInstallationTeamSchema), createInstallationTeam);
+router.post('/installation-team-logins', validate(createInstallationTeamSchema), createInstallationTeam);
+router.patch('/installation/team-logins/:teamId', validate(patchInstallationTeamSchema), patchInstallationTeam);
+router.patch('/installation-team-logins/:teamId', validate(patchInstallationTeamSchema), patchInstallationTeam);
+router.patch(
+  '/installation/team-logins/:teamId/password',
+  validate(patchInstallationTeamPasswordSchema),
+  patchInstallationTeamPassword
+);
+router.patch(
+  '/installation-team-logins/:teamId/password',
+  validate(patchInstallationTeamPasswordSchema),
+  patchInstallationTeamPassword
+);
+router.patch(
+  '/installation/team-logins/:teamId/reset-password',
+  validate(patchInstallationTeamPasswordSchema),
+  patchInstallationTeamPassword
+);
+router.patch(
+  '/installation-team-logins/:teamId/reset-password',
+  validate(patchInstallationTeamPasswordSchema),
+  patchInstallationTeamPassword
+);
+router.delete('/installation/team-logins/:teamId', deleteInstallationTeam);
+router.delete('/installation-team-logins/:teamId', deleteInstallationTeam);
+router.get('/leads/uploads/:batchId', getHrLeadUploadBatchRows);
 
 /**
  * @swagger
@@ -195,6 +326,9 @@ router.patch('/dealers/:dealerId/activate', activateDealer);
  *       - bearerAuth: []
  */
 router.get('/statistics', getSystemStatistics);
+router.get('/calling-actions', getAdminCallingActions);
+router.get('/calling-queue/actions', getAdminCallingActions);
+router.get('/leads/actions', getAdminCallingActions);
 
 /**
  * @swagger

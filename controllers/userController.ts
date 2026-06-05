@@ -24,7 +24,7 @@ export const getAllUsers = async (req: Request, res: Response): Promise<void> =>
       // Admins only see their own agents
       where.role = 'agent';
       where.created_by_id = userId;
-    } else if (userRole === 'account') {
+    } else if (userRole === 'account' || userRole === 'super-admin-manager') {
       // Account role sees all agents by default
       if (role) {
         where.role = role;
@@ -113,15 +113,20 @@ export const createUser = async (req: Request, res: Response): Promise<void> => 
       return;
     }
 
-    const validRoles = ['super-admin', 'admin', 'agent', 'account'];
+    const validRoles = ['super-admin', 'super-admin-manager', 'admin', 'agent', 'account', 'installer', 'baldev', 'confirmation', 'hr', 'metering'];
     if (!validRoles.includes(role)) {
       res.status(400).json({ error: 'Invalid role' });
       return;
     }
 
+    if (role === 'super-admin-manager' && req.user.role !== 'super-admin') {
+      res.status(403).json({ error: 'Only super-admin can create super-admin-manager accounts' });
+      return;
+    }
+
     if (req.user.role !== 'super-admin') {
-      if (req.user.role === 'admin' && role !== 'agent') {
-        res.status(403).json({ error: 'Admins can only create agent accounts' });
+      if (req.user.role === 'admin' && !['agent', 'installer', 'baldev', 'confirmation', 'hr', 'metering'].includes(role)) {
+        res.status(403).json({ error: 'Admins can only create agent/installer/baldev/hr/metering accounts' });
         return;
       }
 
@@ -178,10 +183,27 @@ export const updateUser = async (req: Request, res: Response): Promise<void> => 
     const { id } = req.params;
     const { username, password, name, role, is_active } = req.body;
 
+    if (!req.user) {
+      res.status(401).json({ error: 'User not authenticated' });
+      return;
+    }
+
     const user = await User.findByPk(id);
     if (!user) {
       res.status(404).json({ error: 'User not found' });
       return;
+    }
+
+    if (req.user.role === 'account' || req.user.role === 'super-admin-manager') {
+      if (user.role !== 'agent') {
+        res.status(403).json({ error: 'This role can only approve agents' });
+        return;
+      }
+      const onlyIsActive = Object.keys(req.body).every((key) => key === 'is_active');
+      if (!onlyIsActive) {
+        res.status(403).json({ error: 'This role can only update is_active' });
+        return;
+      }
     }
 
     const updates: any = {};
@@ -207,7 +229,7 @@ export const updateUser = async (req: Request, res: Response): Promise<void> => 
     }
 
     if (role) {
-      const validRoles = ['super-admin', 'admin', 'agent', 'account'];
+      const validRoles = ['super-admin', 'super-admin-manager', 'admin', 'agent', 'account', 'installer', 'baldev', 'confirmation', 'hr', 'metering'];
       if (!validRoles.includes(role)) {
         res.status(400).json({ error: 'Invalid role' });
         return;

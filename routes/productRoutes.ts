@@ -2,13 +2,14 @@ import express, { Router } from 'express';
 import {
   getAllProducts,
   getProductById,
+  getProductSerialNumbers,
   createProduct,
   updateProduct,
   deleteProduct,
   getInventoryLevels
 } from '../controllers/productController';
-import { authenticate, authorize } from '../middleware/auth';
-import upload from '../middleware/upload';
+import { authenticate, authorizeProductManagement } from '../middleware/auth';
+import { conditionalProductMultipartUpload } from '../middleware/upload';
 import { validate } from '../middleware/validate';
 import { createProductSchema, updateProductSchema } from '../validations/productValidations';
 
@@ -72,6 +73,7 @@ router.use(authenticate);
  *         description: Inventory levels
  */
 router.get('/inventory/levels', authenticate, getInventoryLevels);
+router.get('/:id/serial-numbers', getProductSerialNumbers);
 
 /**
  * @swagger
@@ -113,7 +115,13 @@ router.get('/inventory/levels', authenticate, getInventoryLevels);
  *       400:
  *         description: Validation error
  */
-router.post('/', authorize('super-admin'), upload.single('image'), validate(createProductSchema), createProduct);
+router.post(
+  '/',
+  authorizeProductManagement,
+  conditionalProductMultipartUpload('create'),
+  validate(createProductSchema),
+  createProduct
+);
 
 /**
  * @swagger
@@ -157,7 +165,13 @@ router.post('/', authorize('super-admin'), upload.single('image'), validate(crea
  *       404:
  *         description: Product not found
  */
-router.put('/:id', authorize('super-admin'), upload.single('image'), validate(updateProductSchema), updateProduct);
+router.put(
+  '/:id',
+  authorizeProductManagement,
+  conditionalProductMultipartUpload('update'),
+  validate(updateProductSchema),
+  updateProduct
+);
 
 /**
  * @swagger
@@ -179,7 +193,7 @@ router.put('/:id', authorize('super-admin'), upload.single('image'), validate(up
  *       404:
  *         description: Product not found
  */
-router.delete('/:id', authorize('super-admin'), deleteProduct);
+router.delete('/:id', authorizeProductManagement, deleteProduct);
 
 export default router;
 

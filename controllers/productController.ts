@@ -1,9 +1,43 @@
 import { Request, Response } from 'express';
-import { Product, AdminInventory } from '../models';
+import { Product, AdminInventory, ProductSerialNumber, InventoryTransaction } from '../models';
 import { v4 as uuidv4 } from 'uuid';
 import { Op } from 'sequelize';
 import sequelize from '../config/database';
 import { logError, logInfo } from '../utils/loggerHelper';
+import { deleteFileFromS3IfExists } from '../middleware/upload';
+import { SYS_STORAGE_CREDENTIALS_MESSAGE, SYS_STORAGE_OPTIONAL_NO_IMAGE_HINT } from '../utils/mapAwsStorageError';
+import fs from 'fs';
+import path from 'path';
+import XLSX from 'xlsx';
+
+const logProductInventoryTransaction = async ({
+  productId,
+  transactionType,
+  quantity,
+  reference,
+  notes,
+  createdBy,
+  transaction
+}: {
+  productId: string;
+  transactionType: 'purchase' | 'adjustment' | 'sale' | 'transfer' | 'return';
+  quantity: number;
+  reference: string;
+  notes?: string | null;
+  createdBy?: string | null;
+  transaction?: any;
+}) => {
+  if (!quantity || Number.isNaN(quantity)) return;
+  await InventoryTransaction.create({
+    id: uuidv4(),
+    product_id: productId,
+    transaction_type: transactionType,
+    quantity,
+    reference,
+    notes: notes || null,
+    created_by: createdBy || null
+  }, transaction ? { transaction } : undefined);
+};
 
 // Get all products
 export const getAllProducts = async (req: Request, res: Response): Promise<void> => {
@@ -47,10 +81,109 @@ export const getProductById = async (req: Request, res: Response): Promise<void>
       return;
     }
 
+    const serials = await ProductSerialNumber.findAll({
+      where: { product_id: id },
+      order: [['created_at', 'DESC']]
+    });
+
     logInfo('Get product by ID', { productId: id });
-    res.json(product);
+    res.json({
+      ...product.toJSON(),
+      selling_price: product.selling_price !== undefined && product.selling_price !== null
+        ? product.selling_price
+        : product.unit_price,
+      serial_numbers: serials.map((s) => ({
+        id: s.id,
+        serial_number: s.serial_number,
+        product_id: s.product_id,
+        cost_price: s.cost_price !== undefined && s.cost_price !== null
+          ? Number(s.cost_price)
+          : s.price !== undefined && s.price !== null
+            ? Number(s.price)
+            : null,
+        status: s.status,
+        created_at: s.created_at
+      }))
+    });
   } catch (error) {
     logError('Get product by ID error', error, { productId: req.params.id });
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+// Get serial numbers for a product
+export const getProductSerialNumbers = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+    const statusFilter = req.query.status as string | undefined;
+
+    const product = await Product.findByPk(id);
+    if (!product) {
+      res.status(404).json({ error: 'Product not found' });
+      return;
+    }
+
+    const where: any = { product_id: id };
+    if (statusFilter) {
+      if (statusFilter === 'available') {
+        where.status = {
+          [Op.notIn]: ['dispatched', 'acknowledged', 'sold']
+        };
+      } else {
+        where.status = statusFilter;
+      }
+    }
+
+    let serials = await ProductSerialNumber.findAll({
+      where,
+      order: [['created_at', 'DESC']]
+    });
+
+    if (serials.length === 0 && product.name) {
+      const byNameWhere: any = {
+        product_name: {
+          [Op.iLike]: product.name
+        }
+      };
+      if (statusFilter) {
+        if (statusFilter === 'available') {
+          byNameWhere.status = {
+            [Op.notIn]: ['dispatched', 'acknowledged', 'sold']
+          };
+        } else {
+          byNameWhere.status = statusFilter;
+        }
+      }
+      serials = await ProductSerialNumber.findAll({
+        where: byNameWhere,
+        order: [['created_at', 'DESC']]
+      });
+    }
+
+    res.json({
+      product_id: id,
+      total_serial_numbers: serials.length,
+      serial_numbers: serials.map((s) => {
+        const resolvedCost = s.cost_price !== undefined && s.cost_price !== null
+          ? Number(s.cost_price)
+          : s.price !== undefined && s.price !== null
+            ? Number(s.price)
+            : null;
+        return {
+          id: s.id,
+          serial_number: s.serial_number,
+          product_id: s.product_id,
+          cost_price: resolvedCost,
+          price: resolvedCost,
+          product_name: s.product_name,
+          category: s.category,
+          status: s.status,
+          created_at: s.created_at
+        };
+      })
+    });
+  } catch (error) {
+    logError('Get product serial numbers error', error, { productId: req.params.id });
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -58,7 +191,7 @@ export const getProductById = async (req: Request, res: Response): Promise<void>
 // Create product
 export const createProduct = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { name, model, wattage, category, quantity, unit_price, image } = req.body;
+    const { name, model, wattage, category, quantity, unit_price, selling_price, image, serial_numbers, default_price, cost_price, serial_number_prices, product_name, product_category } = req.body;
 
     if (!name || !model || !category) {
       res.status(400).json({
@@ -72,18 +205,84 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
       return;
     }
 
-    // Check if product with same name and model already exists
-    const existingProduct = await Product.findOne({ where: { name, model } });
+    const normalizedName = name.trim().toLowerCase();
+    const normalizedModel = model.trim().toLowerCase();
+
+    // Check if product with same name and model already exists (case-insensitive, trimmed)
+    const existingProduct = await Product.findOne({
+      where: {
+        [Op.and]: [
+          sequelize.where(
+            sequelize.fn('lower', sequelize.fn('trim', sequelize.col('name'))),
+            normalizedName
+          ),
+          sequelize.where(
+            sequelize.fn('lower', sequelize.fn('trim', sequelize.col('model'))),
+            normalizedModel
+          )
+        ]
+      }
+    });
 
     if (existingProduct) {
       res.status(400).json({
-        error: 'Product with this name and model already exists'
+        success: false,
+        error: 'Validation error',
+        details: [
+          {
+            path: 'name',
+            message: `Product with name '${name}' and model '${model}' already exists. Please edit the existing product to add quantity.`
+          }
+        ]
       });
       return;
     }
 
+    const serialNumbers = serial_numbers ? parseSerialNumbers(serial_numbers) : [];
+    const priceMap = parseSerialNumberPrices(serial_number_prices);
+    const defaultPriceInput = default_price !== undefined && default_price !== null && default_price !== ''
+      ? Number(default_price)
+      : cost_price !== undefined && cost_price !== null && cost_price !== ''
+        ? Number(cost_price)
+        : undefined;
+    const hasDefaultPrice = defaultPriceInput !== undefined && !isNaN(defaultPriceInput);
+    const hasPriceMap = Object.keys(priceMap).length > 0;
+    const maxSerialPrice = hasDefaultPrice
+      ? defaultPriceInput!
+      : hasPriceMap && serialNumbers.length > 0
+        ? Math.max(
+            ...serialNumbers
+              .map((sn) => Number((priceMap as any)[sn]))
+              .filter((price) => !isNaN(price))
+          )
+        : undefined;
+
     const id = uuidv4();
-    const imagePath = req.file ? `/uploads/${req.file.filename}` : image;
+    // S3-only upload path for product images (ignore empty multipart file parts)
+    const imageDiskFile =
+      req.file && req.file.size !== 0 ? req.file : null;
+    const uploadedS3Image = imageDiskFile ? (imageDiskFile as any).s3Location : null;
+    if (imageDiskFile && !uploadedS3Image) {
+      res.status(503).json({
+        success: false,
+        error: {
+          code: 'SYS_STORAGE',
+          message: SYS_STORAGE_CREDENTIALS_MESSAGE,
+          hint: SYS_STORAGE_OPTIONAL_NO_IMAGE_HINT
+        }
+      });
+      return;
+    }
+    const imagePath = uploadedS3Image || image;
+
+    const resolvedCostPrice = unit_price !== undefined && unit_price !== null
+      ? unit_price
+      : maxSerialPrice !== undefined && !isNaN(maxSerialPrice)
+        ? maxSerialPrice
+        : null;
+    const resolvedSellingPrice = selling_price !== undefined && selling_price !== null
+      ? selling_price
+      : null;
 
     const newProduct = await Product.create({
       id,
@@ -92,13 +291,128 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
       wattage: wattage || null,
       category,
       quantity: quantity || 0,
-      unit_price: unit_price !== undefined ? unit_price : null,
+      unit_price: resolvedCostPrice,
+      selling_price: resolvedSellingPrice,
       image: imagePath || null,
       created_by: req.user.id
     });
 
+    const normalizedCategory = category ? String(category).toLowerCase() : '';
+    const requiresSerials = ['panels', 'panel', 'inverters', 'inverter', 'meter', 'meters'].includes(normalizedCategory);
+    const hasQuantity = quantity !== undefined && Number(quantity) > 0;
+
+    let createdSerials: string[] = [];
+    if (serial_numbers) {
+      const defaultPrice = defaultPriceInput;
+
+      if (serialNumbers.length === 0) {
+        res.status(400).json({ error: 'Serial numbers array is empty' });
+        return;
+      }
+
+      if (hasDefaultPrice && hasPriceMap) {
+        res.status(400).json({ error: 'Cannot provide both default_price and serial_number_prices' });
+        return;
+      }
+
+      if (hasDefaultPrice && defaultPrice! <= 0) {
+        res.status(400).json({ error: 'default_price must be greater than 0' });
+        return;
+      }
+
+      if (hasPriceMap) {
+        const missingPrices = serialNumbers.filter((sn) => {
+          const price = Number((priceMap as any)[sn]);
+          return isNaN(price) || price <= 0;
+        });
+        if (missingPrices.length > 0) {
+          res.status(400).json({
+            error: 'Validation error',
+            details: [{
+              path: 'serial_number_prices',
+              message: `Missing or invalid prices for serial numbers: ${missingPrices.join(', ')}`
+            }]
+          });
+          return;
+        }
+      }
+
+      if (quantity && serialNumbers.length !== Number(quantity)) {
+        res.status(400).json({
+          error: 'Validation error',
+          details: [{
+            path: 'serial_numbers',
+            message: `Expected ${quantity} serial numbers, got ${serialNumbers.length}`
+          }]
+        });
+        return;
+      }
+
+      const uniqueSerials = Array.from(new Set(serialNumbers));
+      if (uniqueSerials.length !== serialNumbers.length) {
+        res.status(400).json({ error: 'Duplicate serial numbers provided' });
+        return;
+      }
+
+      const existingSerials = await ProductSerialNumber.findAll({
+        where: { serial_number: { [Op.in]: uniqueSerials } },
+        attributes: ['serial_number']
+      });
+      if (existingSerials.length > 0) {
+        const duplicates = existingSerials.map((s) => s.serial_number);
+        res.status(400).json({ error: `Duplicate serial numbers found: ${duplicates.join(', ')}` });
+        return;
+      }
+
+      const ownerType = req.user?.role === 'super-admin' ? 'super-admin' : req.user?.role === 'admin' ? 'admin' : null;
+      const ownerId = ownerType ? req.user?.id : null;
+      const serialProductName = (product_name || name).toString();
+      const serialCategory = (product_category || category).toString();
+
+      for (const serial of uniqueSerials) {
+        const serialPrice = hasDefaultPrice
+          ? defaultPrice!
+          : hasPriceMap
+            ? Number((priceMap as any)[serial])
+            : null;
+        await ProductSerialNumber.create({
+          id: uuidv4(),
+          product_id: newProduct.id,
+          serial_number: serial,
+          owner_id: ownerId,
+          owner_type: ownerType,
+          status: 'available',
+          price: serialPrice,
+          cost_price: serialPrice,
+          product_name: serialProductName,
+          category: serialCategory
+        });
+      }
+      createdSerials = uniqueSerials;
+    }
+
+    if (requiresSerials && hasQuantity && createdSerials.length === 0) {
+      res.status(400).json({ error: 'Serial numbers are required for this category' });
+      return;
+    }
+
+    const initialQuantity = Number(newProduct.quantity || 0);
+    if (initialQuantity > 0) {
+      await logProductInventoryTransaction({
+        productId: newProduct.id,
+        transactionType: 'purchase',
+        quantity: initialQuantity,
+        reference: 'product_create',
+        notes: 'Initial stock on product creation',
+        createdBy: req.user?.id || null
+      });
+    }
+
     logInfo('Product created', { productId: newProduct.id, name: newProduct.name, model: newProduct.model, createdBy: req.user?.id });
-    res.status(201).json(newProduct);
+    res.status(201).json({
+      ...newProduct.toJSON(),
+      serial_numbers: createdSerials
+    });
   } catch (error) {
     logError('Create product error', error, { name: req.body.name, model: req.body.model, createdBy: req.user?.id });
     res.status(500).json({ error: 'Server error' });
@@ -106,10 +420,90 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
 };
 
 // Update product
+const parseSerialNumbers = (raw: any): string[] => {
+  if (!raw) return [];
+  if (Array.isArray(raw)) {
+    return raw.map(String).map((val) => val.trim()).filter(Boolean);
+  }
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.map(String).map((val) => val.trim()).filter(Boolean);
+      }
+    } catch {
+      // fall through to split
+    }
+    return raw
+      .split(/[\n,]+/)
+      .map((val) => val.trim())
+      .filter(Boolean);
+  }
+  return [];
+};
+
+const parseSerialNumberPrices = (raw: any): Record<string, number> => {
+  if (!raw) return {};
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed;
+      }
+    } catch {
+      return {};
+    }
+  }
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    return raw;
+  }
+  return {};
+};
+
+const parseSerialNumbersFromFile = (file: Express.Multer.File): string[] => {
+  const ext = path.extname(file.originalname || '').toLowerCase();
+
+  if (ext === '.csv') {
+    const text = fs.readFileSync(file.path, 'utf8');
+    const lines = text.split(/\r?\n/).filter(Boolean);
+    let startRow = 0;
+    if (lines[0] && /serial|number|sn/i.test(lines[0])) {
+      startRow = 1;
+    }
+    const serials: string[] = [];
+    for (let i = startRow; i < lines.length; i += 1) {
+      const firstColumn = lines[i].split(',')[0]?.trim();
+      if (firstColumn) serials.push(firstColumn);
+    }
+    return serials;
+  }
+
+  if (ext === '.xlsx' || ext === '.xls') {
+    const buffer = fs.readFileSync(file.path);
+    const workbook = XLSX.read(buffer, { type: 'buffer' });
+    const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+    const data = XLSX.utils.sheet_to_json(firstSheet, { header: 1, defval: '' }) as Array<Array<string | number>>;
+    let startRow = 0;
+    if (data.length > 0 && typeof data[0][0] === 'string' && /serial|number|sn/i.test(data[0][0])) {
+      startRow = 1;
+    }
+    const serials: string[] = [];
+    for (let i = startRow; i < data.length; i += 1) {
+      const cell = data[i][0];
+      if (cell !== undefined && cell !== null && String(cell).trim() !== '') {
+        serials.push(String(cell).trim());
+      }
+    }
+    return serials;
+  }
+
+  throw new Error('Unsupported serial_number_excel file type');
+};
+
 export const updateProduct = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const { name, model, wattage, category, quantity, unit_price, image } = req.body;
+    const { name, model, wattage, category, quantity, unit_price, selling_price, image, stock_to_add, serial_numbers, default_price, cost_price, serial_number_prices, product_name, product_category, use_max_cost_price } = req.body;
 
     const product = await Product.findByPk(id);
     if (!product) {
@@ -135,24 +529,69 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
       updates.category = category;
     }
 
-    if (quantity !== undefined) {
-      if (quantity < 0) {
+    /**
+     * Stock semantics (single rule):
+     * - quantity alone: sets absolute on-hand quantity (delta logged as adjustment).
+     * - stock_to_add alone: adds to current quantity (logged as purchase).
+     * - both: quantity must equal current + stock_to_add (frontend consistency check).
+     */
+    const stockToAdd = stock_to_add !== undefined ? Number(stock_to_add) : undefined;
+    if (stockToAdd !== undefined && (isNaN(stockToAdd) || stockToAdd < 0)) {
+      res.status(400).json({ error: 'stock_to_add must be a non-negative number' });
+      return;
+    }
+
+    const quantityNumber = quantity !== undefined ? Number(quantity) : undefined;
+    if (quantityNumber !== undefined) {
+      if (!Number.isFinite(quantityNumber) || quantityNumber < 0) {
         res.status(400).json({ error: 'Quantity cannot be negative' });
         return;
       }
-      updates.quantity = quantity;
+      if (stockToAdd === undefined) {
+        updates.quantity = quantityNumber;
+      }
     }
 
     if (unit_price !== undefined) {
-      if (unit_price < 0) {
+      const unitPriceNumber = unit_price === null || unit_price === '' ? null : Number(unit_price);
+      if (unitPriceNumber !== null && (!Number.isFinite(unitPriceNumber) || unitPriceNumber < 0)) {
         res.status(400).json({ error: 'Unit price cannot be negative' });
         return;
       }
-      updates.unit_price = unit_price;
+      updates.unit_price = unitPriceNumber;
     }
 
-    if (req.file) {
-      updates.image = `/uploads/${req.file.filename}`;
+    if (selling_price !== undefined) {
+      if (selling_price < 0) {
+        res.status(400).json({ error: 'Selling price cannot be negative' });
+        return;
+      }
+      updates.selling_price = selling_price;
+    }
+
+    const rawImageFile =
+      (req.file as Express.Multer.File) || ((req as any).files?.image?.[0] as Express.Multer.File | undefined);
+    const imageFile =
+      rawImageFile && rawImageFile.size !== 0 ? rawImageFile : null;
+    if (imageFile) {
+      const uploadedS3Image = (imageFile as any).s3Location;
+      if (!uploadedS3Image) {
+        res.status(503).json({
+          success: false,
+          error: {
+            code: 'SYS_STORAGE',
+            message: SYS_STORAGE_CREDENTIALS_MESSAGE,
+            hint: SYS_STORAGE_OPTIONAL_NO_IMAGE_HINT
+          }
+        });
+        return;
+      }
+      updates.image = uploadedS3Image;
+      
+      // Delete old image from S3 if it exists
+      if (product.image) {
+        await deleteFileFromS3IfExists(product.image);
+      }
     } else if (image !== undefined) {
       updates.image = image;
     }
@@ -174,15 +613,243 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
       }
     }
 
-    await product.update(updates);
+    const effectiveCategory = (category || product.category || '').toString().toLowerCase();
+    const requiresSerials = ['panels', 'panel', 'inverters', 'inverter', 'meter', 'meters'].includes(effectiveCategory);
+    const baseQuantityBeforeUpdate = Number(product.quantity || 0);
+    const plannedAbsoluteQuantity = updates.quantity !== undefined ? Number(updates.quantity) : undefined;
+
+    let createdSerials: string[] = [];
+    await sequelize.transaction(async (transaction) => {
+      if (Object.keys(updates).length > 0) {
+        await product.update(updates, { transaction });
+      }
+
+      if (
+        plannedAbsoluteQuantity !== undefined &&
+        Number.isFinite(plannedAbsoluteQuantity) &&
+        plannedAbsoluteQuantity !== baseQuantityBeforeUpdate
+      ) {
+        const quantityDelta = plannedAbsoluteQuantity - baseQuantityBeforeUpdate;
+        await logProductInventoryTransaction({
+          productId: product.id,
+          transactionType: 'adjustment',
+          quantity: quantityDelta,
+          reference: 'manual_quantity_update',
+          notes: `Manual quantity set from ${baseQuantityBeforeUpdate} to ${plannedAbsoluteQuantity}`,
+          createdBy: req.user?.id || null,
+          transaction
+        });
+      }
+
+      if (stockToAdd !== undefined) {
+        const excelFile = (req as any).files?.serial_number_excel?.[0] as Express.Multer.File | undefined;
+        const serialNumbers = parseSerialNumbers(serial_numbers);
+        const excelSerials = excelFile ? parseSerialNumbersFromFile(excelFile) : [];
+        const finalSerials = serialNumbers.length > 0 ? serialNumbers : excelSerials;
+        const priceMap = parseSerialNumberPrices(serial_number_prices);
+        const defaultPriceInput = default_price !== undefined && default_price !== null && default_price !== ''
+          ? Number(default_price)
+          : cost_price !== undefined && cost_price !== null && cost_price !== ''
+            ? Number(cost_price)
+            : undefined;
+        const hasDefaultPrice = defaultPriceInput !== undefined && !isNaN(defaultPriceInput);
+        const hasPriceMap = Object.keys(priceMap).length > 0;
+
+        const currentQuantity = Number(product.quantity);
+        if (!Number.isFinite(currentQuantity) || currentQuantity < 0) {
+          throw new Error('Current product quantity is invalid');
+        }
+
+        // Contract (delta mode): stock_to_add is always additive.
+        // If frontend also sends quantity, it must match current + stock_to_add.
+        if (quantityNumber !== undefined) {
+          const expectedQuantity = currentQuantity + stockToAdd;
+          if (quantityNumber !== expectedQuantity) {
+            throw new Error(
+              `quantity must match current quantity + stock_to_add (${currentQuantity} + ${stockToAdd} = ${expectedQuantity})`
+            );
+          }
+        }
+
+        if (finalSerials.length === 0) {
+          if (requiresSerials && stockToAdd > 0) {
+            throw new Error('Serial numbers are required for this category');
+          }
+          if (stockToAdd > 0) {
+            await product.increment('quantity', { by: stockToAdd, transaction });
+            await logProductInventoryTransaction({
+              productId: product.id,
+              transactionType: 'purchase',
+              quantity: stockToAdd,
+              reference: 'manual_add_stock',
+              notes: `Stock added via product update${finalSerials.length > 0 ? ` (${finalSerials.length} serials)` : ''}`,
+              createdBy: req.user?.id || null,
+              transaction
+            });
+          }
+          if (excelFile) {
+            try {
+              fs.unlinkSync(excelFile.path);
+            } catch (error) {
+              logError('Failed to delete serial_number_excel file', error, { path: excelFile.path });
+            }
+          }
+          return;
+        }
+
+        if (hasDefaultPrice && hasPriceMap) {
+          throw new Error('Cannot provide both default_price and serial_number_prices');
+        }
+
+        if (hasDefaultPrice && defaultPriceInput! <= 0) {
+          throw new Error('default_price must be greater than 0');
+        }
+
+        if (hasPriceMap) {
+          const missingPrices = finalSerials.filter((sn) => {
+            const price = Number((priceMap as any)[sn]);
+            return isNaN(price) || price <= 0;
+          });
+          if (missingPrices.length > 0) {
+            throw new Error(`Missing or invalid prices for serial numbers: ${missingPrices.join(', ')}`);
+          }
+        }
+
+        if (stockToAdd > 0 && finalSerials.length !== stockToAdd) {
+          throw new Error(`Expected ${stockToAdd} serial numbers, got ${finalSerials.length}`);
+        }
+
+        const uniqueSerials = Array.from(new Set(finalSerials));
+        if (uniqueSerials.length !== finalSerials.length) {
+          throw new Error('Duplicate serial numbers provided');
+        }
+
+        const existingSerials = await ProductSerialNumber.findAll({
+          where: { serial_number: { [Op.in]: uniqueSerials } },
+          attributes: ['serial_number'],
+          transaction
+        });
+        if (existingSerials.length > 0) {
+          const duplicates = existingSerials.map((s) => s.serial_number);
+          throw new Error(`Duplicate serial numbers found: ${duplicates.join(', ')}`);
+        }
+
+        const isAssigningSerialsToExistingStock = stockToAdd === 0 && finalSerials.length > 0;
+        if (isAssigningSerialsToExistingStock) {
+          const existingSerialCount = await ProductSerialNumber.count({
+            where: { product_id: product.id },
+            transaction
+          });
+          const availableSlots = currentQuantity - existingSerialCount;
+          if (availableSlots <= 0) {
+            throw new Error('No unassigned stock available to map serial numbers');
+          }
+          if (finalSerials.length > availableSlots) {
+            throw new Error(`Only ${availableSlots} stock units are available for serial assignment`);
+          }
+        }
+
+        const ownerType = req.user?.role === 'super-admin' ? 'super-admin' : req.user?.role === 'admin' ? 'admin' : null;
+        const ownerId = ownerType ? req.user?.id : null;
+        const serialProductName = (product_name || product.name).toString();
+        const serialCategory = (product_category || product.category).toString();
+
+        for (const serial of uniqueSerials) {
+          const serialPrice = hasDefaultPrice
+            ? defaultPriceInput!
+            : hasPriceMap
+              ? Number((priceMap as any)[serial])
+              : null;
+          await ProductSerialNumber.create({
+            id: uuidv4(),
+            product_id: product.id,
+            serial_number: serial,
+            owner_id: ownerId,
+            owner_type: ownerType,
+            status: 'available',
+            price: serialPrice,
+            cost_price: serialPrice,
+            product_name: serialProductName,
+            category: serialCategory
+          }, { transaction });
+        }
+        createdSerials = uniqueSerials;
+
+        if (stockToAdd > 0) {
+          await product.increment('quantity', { by: stockToAdd, transaction });
+          await logProductInventoryTransaction({
+            productId: product.id,
+            transactionType: 'purchase',
+            quantity: stockToAdd,
+            reference: 'manual_add_stock',
+            notes: `Stock added via product update (${uniqueSerials.length} serials)`,
+            createdBy: req.user?.id || null,
+            transaction
+          });
+        }
+
+        if (selling_price === undefined && use_max_cost_price !== false) {
+          const maxRow = await ProductSerialNumber.findOne({
+            where: { product_id: product.id },
+            attributes: [[sequelize.literal('COALESCE(MAX(cost_price), MAX(price))'), 'max_price']],
+            raw: true,
+            transaction
+          });
+          const maxPrice = maxRow && (maxRow as any).max_price !== null
+            ? Number((maxRow as any).max_price)
+            : null;
+          if (maxPrice !== null && !isNaN(maxPrice)) {
+            await product.update({ selling_price: maxPrice }, { transaction });
+          }
+        }
+
+        if (excelFile) {
+          try {
+            fs.unlinkSync(excelFile.path);
+          } catch (error) {
+            logError('Failed to delete serial_number_excel file', error, { path: excelFile.path });
+          }
+        }
+      }
+
+      if (use_max_cost_price === true && selling_price === undefined) {
+        const maxRow = await ProductSerialNumber.findOne({
+          where: { product_id: product.id },
+          attributes: [[sequelize.literal('COALESCE(MAX(cost_price), MAX(price))'), 'max_price']],
+          raw: true,
+          transaction
+        });
+        const maxPrice = maxRow && (maxRow as any).max_price !== null
+          ? Number((maxRow as any).max_price)
+          : null;
+        if (maxPrice !== null && !isNaN(maxPrice)) {
+          await product.update({ selling_price: maxPrice }, { transaction });
+        }
+      }
+    });
 
     const updatedProduct = await Product.findByPk(id);
 
     logInfo('Product updated', { productId: id, updatedBy: req.user?.id, updates: Object.keys(updates) });
-    res.json(updatedProduct);
+    res.json({
+      ...updatedProduct?.toJSON(),
+      serial_numbers_added: stockToAdd && stockToAdd > 0 ? stockToAdd : 0,
+      serial_numbers: createdSerials.length > 0 ? createdSerials : undefined
+    });
   } catch (error) {
     logError('Update product error', error, { productId: req.params.id, updatedBy: req.user?.id });
-    res.status(500).json({ error: 'Server error' });
+    const message = error instanceof Error ? error.message : 'Server error';
+    if (message.includes('Missing or invalid prices') || message.includes('default_price') || message.includes('serial_number_prices')) {
+      res.status(400).json({
+        error: 'Validation error',
+        details: [{
+          path: 'pricing',
+          message
+        }]
+      });
+      return;
+    }
+    res.status(400).json({ error: message });
   }
 };
 
@@ -207,6 +874,11 @@ export const deleteProduct = async (req: Request, res: Response): Promise<void> 
       return;
     }
 
+    // Delete associated image from S3 if it exists
+    if (product.image) {
+      await deleteFileFromS3IfExists(product.image);
+    }
+    
     await product.destroy();
     logInfo('Product deleted', { productId: id, name: product.name, deletedBy: req.user?.id });
     res.json({ message: 'Product deleted successfully' });

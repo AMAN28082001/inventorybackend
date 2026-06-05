@@ -2,6 +2,21 @@ import { Request, Response, NextFunction } from 'express';
 import { ZodSchema, ZodError } from 'zod';
 import logger from '../config/logger';
 
+/** e.g. ['phases', 1, 'paymentMode'] -> phases[1].paymentMode */
+const formatZodPath = (path: readonly PropertyKey[]): string => {
+  let out = '';
+  for (const segment of path) {
+    if (typeof segment === 'number') {
+      out += `[${segment}]`;
+    } else if (typeof segment === 'string') {
+      out += out === '' ? segment : `.${segment}`;
+    } else {
+      out += out === '' ? String(segment) : `.${String(segment)}`;
+    }
+  }
+  return out;
+};
+
 export const validate = (schema: ZodSchema) => {
   return (req: Request, res: Response, next: NextFunction): void => {
     try {
@@ -18,11 +33,18 @@ export const validate = (schema: ZodSchema) => {
       next();
     } catch (error) {
       if (error instanceof ZodError) {
-        const details = error.issues.map((err) => ({
-          field: err.path.join('.'),
-          message: err.message
-        }));
-        
+        const details = error.issues.map((err) => {
+          const path = formatZodPath(err.path);
+          return {
+            path,
+            field: path,
+            message: err.message
+          };
+        });
+
+        const primaryMessage =
+          details[0]?.message || 'Request validation failed';
+
         // Log validation errors for debugging
         logger.warn('Validation failed', {
           path: req.path,
@@ -35,7 +57,7 @@ export const validate = (schema: ZodSchema) => {
           success: false,
           error: {
             code: 'VAL_001',
-            message: 'Validation error',
+            message: primaryMessage,
             details
           }
         });

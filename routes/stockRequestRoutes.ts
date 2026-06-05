@@ -9,7 +9,7 @@ import {
   deleteStockRequest
 } from '../controllers/stockRequestController';
 import { authenticate, authorize } from '../middleware/auth';
-import upload from '../middleware/upload';
+import upload, { uploadToS3 } from '../middleware/upload';
 import { validateWithJsonParse } from '../middleware/validateWithJsonParse';
 import { logRequestBeforeValidation, logRequestAfterValidation } from '../middleware/requestLogger';
 import { createStockRequestSchema, updateStockRequestSchema } from '../validations/stockRequestValidations';
@@ -18,6 +18,15 @@ const router: Router = express.Router();
 
 // All routes require authentication
 router.use(authenticate);
+
+// Block agents from all stock request operations
+router.use((req, res, next) => {
+  if (req.user?.role === 'agent') {
+    res.status(403).json({ error: 'Agents cannot access stock requests' });
+    return;
+  }
+  next();
+});
 
 /**
  * @swagger
@@ -96,6 +105,9 @@ router.get('/:id', getStockRequestById);
  *                 type: string
  *               notes:
  *                 type: string
+ *               status:
+ *                 type: string
+ *                 enum: [pending]
  *     responses:
  *       201:
  *         description: Stock request created successfully
@@ -104,17 +116,17 @@ router.get('/:id', getStockRequestById);
  */
 router.post('/', 
   authorize('admin', 'agent'), 
-  logRequestBeforeValidation,      // Log BEFORE validation
-  validateWithJsonParse(createStockRequestSchema, ['items']),  // Validation middleware
-  logRequestAfterValidation,        // Log AFTER validation
+  logRequestBeforeValidation,
+  validateWithJsonParse(createStockRequestSchema, ['items']),
+  logRequestAfterValidation,
   createStockRequest
 );
 
 // Dispatch - super-admin and admins can dispatch
-router.post('/:id/dispatch', authorize('super-admin', 'admin'), upload.single('dispatch_image'), dispatchStockRequest);
+router.post('/:id/dispatch', authorize('super-admin', 'admin'), upload.single('dispatch_image'), uploadToS3('stock-requests'), dispatchStockRequest);
 
 // Confirm - requester can confirm
-router.post('/:id/confirm', upload.single('confirmation_image'), confirmStockRequest);
+router.post('/:id/confirm', upload.single('confirmation_image'), uploadToS3('stock-requests'), confirmStockRequest);
 
 // Update - requester can update pending requests
 router.put('/:id', validateWithJsonParse(updateStockRequestSchema, ['items']), updateStockRequest);

@@ -1,7 +1,8 @@
 import { Request, Response } from 'express';
-import { AdminInventory, User, Product } from '../models';
+import { AdminInventory, User, Product, ProductSerialNumber } from '../models';
 import { v4 as uuidv4 } from 'uuid';
 import { logError, logInfo } from '../utils/loggerHelper';
+import { Op } from 'sequelize';
 
 // Get all admin inventory
 export const getAllAdminInventory = async (req: Request, res: Response): Promise<void> => {
@@ -138,6 +139,65 @@ export const getAdminInventoryByAdminId = async (req: Request, res: Response): P
     res.json(formatted);
   } catch (error) {
     logError('Get admin inventory by admin ID error', error, { adminId: req.params.adminId });
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+// Get serial numbers for a product mapped to an admin
+export const getAdminProductSerialNumbers = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { adminId, productId } = req.params;
+    const statusFilter = (req.query.status as string | undefined) || 'acknowledged,dispatched';
+
+    const admin = await User.findOne({
+      where: { id: adminId, role: 'admin' },
+      attributes: ['id']
+    });
+
+    if (!admin) {
+      res.status(404).json({ error: 'Admin not found' });
+      return;
+    }
+
+    const statusList = statusFilter.split(',').map((val) => val.trim()).filter(Boolean);
+    const where: any = {
+      product_id: productId,
+      [Op.or]: [
+        { owner_id: adminId, owner_type: 'admin' },
+        { dispatched_to_admin_id: adminId }
+      ]
+    };
+    if (statusList.length > 0) {
+      where.status = { [Op.in]: statusList };
+    }
+
+    const serials = await ProductSerialNumber.findAll({
+      where,
+      order: [['created_at', 'DESC']]
+    });
+
+    res.json(serials.map((serial) => {
+      const resolvedCost = serial.cost_price !== undefined && serial.cost_price !== null
+        ? Number(serial.cost_price)
+        : serial.price !== undefined && serial.price !== null
+          ? Number(serial.price)
+          : null;
+      return {
+        id: serial.id,
+        serial_number: serial.serial_number,
+        product_id: serial.product_id,
+        cost_price: resolvedCost,
+        price: resolvedCost,
+        product_name: serial.product_name,
+        category: serial.category,
+        status: serial.status,
+        created_at: serial.created_at,
+        owner_id: serial.owner_id,
+        owner_type: serial.owner_type
+      };
+    }));
+  } catch (error) {
+    logError('Get admin product serial numbers error', error, { adminId: req.params.adminId, productId: req.params.productId });
     res.status(500).json({ error: 'Server error' });
   }
 };

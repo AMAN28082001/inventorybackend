@@ -1,11 +1,13 @@
 import { Request, Response } from 'express';
+import { deleteFileFromS3IfExists } from '../middleware/upload';
 import {
   StockRequest,
   StockRequestItem,
   Product,
   User,
   AdminInventory,
-  InventoryTransaction
+  InventoryTransaction,
+  ProductSerialNumber
 } from '../models';
 import { v4 as uuidv4 } from 'uuid';
 import sequelize from '../config/database';
@@ -134,31 +136,14 @@ export const getAllStockRequests = async (req: Request, res: Response): Promise<
     const userId = req.user.id;
 
     if (userRole === 'agent') {
-      // Agents only see their own requests
-      andConditions.push({ requested_by_id: userId });
+      res.status(403).json({ error: 'Agents cannot access stock requests' });
+      return;
     } else if (userRole === 'admin') {
-      // Admins see:
-      // 1. Requests from their agents
-      // 2. Their own requests (to super-admin or other admins)
-      // 3. Incoming admin-to-admin transfers (requested_from = admin's ID)
-      const agents = await User.findAll({
-        where: {
-          role: 'agent',
-          created_by_id: userId
-        },
-        attributes: ['id']
+      // Admins only see their own requests to super-admin
+      andConditions.push({
+        requested_by_id: userId,
+        requested_from: 'super-admin'
       });
-      const agentIds = agents.map((agent) => agent.id);
-
-      const roleCondition: any = {
-        [Op.or]: [
-          { requested_by_id: { [Op.in]: agentIds } },
-          { requested_by_id: userId },
-          { requested_from: userId }
-        ]
-      };
-
-      andConditions.push(roleCondition);
     } else if (userRole === 'super-admin') {
       // Super-admin sees requests from admins (requested_from = 'super-admin')
       andConditions.push({ requested_from: 'super-admin' });
@@ -208,8 +193,36 @@ export const getStockRequestById = async (req: Request, res: Response): Promise<
       return;
     }
 
+    const serialRows = await ProductSerialNumber.findAll({
+      where: {
+        stock_request_id: id,
+        status: { [Op.in]: ['dispatched', 'acknowledged'] }
+      },
+      order: [['created_at', 'DESC']]
+    });
+
+    const serialsByProduct: Record<string, string[]> = {};
+    for (const serial of serialRows) {
+      const productId = serial.product_id;
+      if (!serialsByProduct[productId]) {
+        serialsByProduct[productId] = [];
+      }
+      serialsByProduct[productId].push(serial.serial_number);
+    }
+
+    const response = request.toJSON() as any;
+    if (Object.keys(serialsByProduct).length > 0) {
+      response.dispatched_serial_numbers = serialsByProduct;
+      if (Array.isArray(response.items)) {
+        response.items = response.items.map((item: any) => ({
+          ...item,
+          serial_numbers: item.product_id ? (serialsByProduct[item.product_id] || []) : []
+        }));
+      }
+    }
+
     logInfo('Get stock request by ID', { requestId: id });
-    res.json(request);
+    res.json(response);
   } catch (error) {
     logError('Get stock request by ID error', error, { requestId: req.params.id });
     res.status(500).json({ error: 'Server error' });
@@ -224,6 +237,12 @@ export const createStockRequest = async (req: Request, res: Response): Promise<v
     if (!req.user) {
       await transaction.rollback();
       res.status(401).json({ error: 'User not authenticated' });
+      return;
+    }
+
+    if (req.user.role === 'agent') {
+      await transaction.rollback();
+      res.status(403).json({ error: 'Agents cannot create stock requests' });
       return;
     }
 
@@ -460,6 +479,39 @@ export const dispatchStockRequest = async (req: Request, res: Response): Promise
 
     const { id } = req.params;
     const { rejection_reason } = req.body;
+    const serialNumberRangesRaw = (req.body as any).serial_number_ranges;
+    const serialNumbersRaw = (req.body as any).serial_numbers;
+    let serialNumberRanges: Record<string, { from: string; to: string }> | null = null;
+    let serialNumbersMap: Record<string, string[]> | null = null;
+
+    if (serialNumberRangesRaw) {
+      if (req.user.role !== 'super-admin') {
+        await transaction.rollback();
+        res.status(403).json({ error: 'Only super-admin can specify serial number ranges' });
+        return;
+      }
+      try {
+        serialNumberRanges = typeof serialNumberRangesRaw === 'string'
+          ? JSON.parse(serialNumberRangesRaw)
+          : serialNumberRangesRaw;
+      } catch {
+        await transaction.rollback();
+        res.status(400).json({ error: 'Invalid serial_number_ranges JSON' });
+        return;
+      }
+    }
+
+    if (serialNumbersRaw) {
+      try {
+        serialNumbersMap = typeof serialNumbersRaw === 'string'
+          ? JSON.parse(serialNumbersRaw)
+          : serialNumbersRaw;
+      } catch {
+        await transaction.rollback();
+        res.status(400).json({ error: 'Invalid serial_numbers JSON' });
+        return;
+      }
+    }
 
     // Lock the stock request first without include (PostgreSQL doesn't allow FOR UPDATE with LEFT OUTER JOIN)
     const request = await StockRequest.findByPk(id, {
@@ -534,6 +586,14 @@ export const dispatchStockRequest = async (req: Request, res: Response): Promise
       }
     }
 
+    if (serialNumberRanges && request.requested_by_role !== 'admin') {
+      await transaction.rollback();
+      res.status(400).json({ error: 'Serial number ranges are only supported for admin destinations' });
+      return;
+    }
+
+    const transferredSerialsByProduct: Record<string, string[]> = {};
+
     // Determine the actual source admin ID
     // If requested_from is "admin" (placeholder for agent requests), use the dispatching admin's ID
     const actualSourceAdminId =
@@ -568,6 +628,107 @@ export const dispatchStockRequest = async (req: Request, res: Response): Promise
           res.status(400).json({ error: `Product ${item.product_id} not found` });
           return;
         }
+
+        if (serialNumberRanges) {
+          const range = serialNumberRanges[item.product_id];
+          if (!range || !range.from || !range.to) {
+            await transaction.rollback();
+            res.status(400).json({ error: `Serial number range missing for product ${item.product_id}` });
+            return;
+          }
+
+          const serialsInRange = await ProductSerialNumber.findAll({
+            where: {
+              product_id: item.product_id,
+              serial_number: { [Op.between]: [range.from, range.to] },
+              status: 'available',
+              [Op.or]: [
+                { owner_id: null },
+                { owner_type: 'super-admin' },
+                { owner_id: req.user.id }
+              ]
+            },
+            order: [['serial_number', 'ASC']],
+            transaction,
+            lock: transaction.LOCK.UPDATE
+          });
+
+          if (serialsInRange.length !== item.quantity) {
+            await transaction.rollback();
+            res.status(400).json({
+              error: 'Validation error',
+              details: [{
+                path: `serial_number_ranges.${item.product_id}`,
+                message: `Range contains ${serialsInRange.length} serial numbers, but quantity is ${item.quantity}`
+              }]
+            });
+            return;
+          }
+
+          await ProductSerialNumber.update(
+            {
+              owner_id: request.requested_by_id,
+              owner_type: 'admin',
+              status: 'dispatched',
+              stock_request_id: request.id,
+              dispatched_to_admin_id: request.requested_by_id,
+              dispatched_at: new Date()
+            },
+            {
+              where: { id: { [Op.in]: serialsInRange.map((s) => s.id) } },
+              transaction
+            }
+          );
+
+          transferredSerialsByProduct[item.product_id] = serialsInRange.map((s) => s.serial_number);
+        }
+
+        if (serialNumbersMap && serialNumbersMap[item.product_id]) {
+          const serialsList = serialNumbersMap[item.product_id];
+          if (!Array.isArray(serialsList) || serialsList.length === 0) {
+            await transaction.rollback();
+            res.status(400).json({ error: `serial_numbers for product ${item.product_id} must be a non-empty array` });
+            return;
+          }
+
+          const serialRows = await ProductSerialNumber.findAll({
+            where: {
+              product_id: item.product_id,
+              serial_number: { [Op.in]: serialsList },
+              status: 'available'
+            },
+            transaction,
+            lock: transaction.LOCK.UPDATE
+          });
+
+          if (serialRows.length !== serialsList.length) {
+            await transaction.rollback();
+            res.status(400).json({ error: `Some serial numbers are invalid or not available for product ${item.product_id}` });
+            return;
+          }
+
+          const destinationRole = request.requested_by_role === 'admin' ? 'admin' : 'agent';
+          await ProductSerialNumber.update(
+            {
+              owner_id: request.requested_by_id,
+              owner_type: destinationRole,
+              status: 'dispatched',
+              stock_request_id: request.id,
+              dispatched_to_admin_id: request.requested_by_id,
+              dispatched_at: new Date()
+            },
+            {
+              where: { id: { [Op.in]: serialRows.map((s) => s.id) } },
+              transaction
+            }
+          );
+
+          transferredSerialsByProduct[item.product_id] = [
+            ...(transferredSerialsByProduct[item.product_id] || []),
+            ...serialRows.map((s) => s.serial_number)
+          ];
+        }
+
         await product.decrement('quantity', { by: item.quantity, transaction });
 
         if (request.requested_by_role === 'admin' && request.requested_by_id) {
@@ -624,6 +785,53 @@ export const dispatchStockRequest = async (req: Request, res: Response): Promise
 
         // If destination is an admin (admin-to-admin transfer), increase their inventory
         if (request.requested_by_role === 'admin' && request.requested_by_id && item.product_id) {
+          if (serialNumberRanges) {
+            const range = serialNumberRanges[item.product_id];
+            if (!range || !range.from || !range.to) {
+              await transaction.rollback();
+              res.status(400).json({ error: `Serial number range missing for product ${item.product_id}` });
+              return;
+            }
+
+            const serialsInRange = await ProductSerialNumber.findAll({
+              where: {
+                product_id: item.product_id,
+                serial_number: { [Op.between]: [range.from, range.to] },
+                status: 'available',
+                owner_id: actualSourceAdminId,
+                owner_type: 'admin'
+              },
+              order: [['serial_number', 'ASC']],
+              transaction,
+              lock: transaction.LOCK.UPDATE
+            });
+
+            if (serialsInRange.length !== item.quantity) {
+              await transaction.rollback();
+              res.status(400).json({
+                error: 'Validation error',
+                details: [{
+                  path: `serial_number_ranges.${item.product_id}`,
+                  message: `Range contains ${serialsInRange.length} serial numbers, but quantity is ${item.quantity}`
+                }]
+              });
+              return;
+            }
+
+            await ProductSerialNumber.update(
+              {
+                owner_id: request.requested_by_id,
+                owner_type: 'admin'
+              },
+              {
+                where: { id: { [Op.in]: serialsInRange.map((s) => s.id) } },
+                transaction
+              }
+            );
+
+            transferredSerialsByProduct[item.product_id] = serialsInRange.map((s) => s.serial_number);
+          }
+
           await adjustAdminInventory(request.requested_by_id, item.product_id, item.quantity, transaction);
         }
         // Note: If destination is an agent (admin-to-agent transfer), they don't have inventory records
@@ -631,7 +839,16 @@ export const dispatchStockRequest = async (req: Request, res: Response): Promise
       }
     }
 
-    const dispatchImage = req.file ? `/uploads/${req.file.filename}` : request.dispatch_image;
+    const uploadedS3DispatchImage = req.file ? (req.file as any).s3Location : null;
+    if (req.file && !uploadedS3DispatchImage) {
+      throw new Error('Dispatch image upload failed. Could not store file in S3.');
+    }
+    const dispatchImage = uploadedS3DispatchImage || request.dispatch_image;
+    
+    // Delete old dispatch image from S3 if it exists
+    if (request.dispatch_image && req.file) {
+      await deleteFileFromS3IfExists(request.dispatch_image);
+    }
 
     // Update request with dispatch info
     // If requested_from was "admin" (placeholder), update it to the actual admin ID
@@ -684,7 +901,11 @@ export const dispatchStockRequest = async (req: Request, res: Response): Promise
     }
 
     logInfo('Stock request dispatched', { requestId: id, dispatchedBy: req.user.id, status: updated.status });
-    res.json(updated);
+    const response = updated.toJSON() as any;
+    if (Object.keys(transferredSerialsByProduct).length > 0) {
+      response.serial_numbers = transferredSerialsByProduct;
+    }
+    res.json(response);
   } catch (error: any) {
     await transaction.rollback();
     logError('Dispatch stock request error', error, { requestId: req.params.id, dispatchedBy: req.user?.id });
@@ -723,7 +944,17 @@ export const confirmStockRequest = async (req: Request, res: Response): Promise<
       return;
     }
 
-    const confirmationImage = req.file ? `/uploads/${req.file.filename}` : request.confirmation_image;
+    const uploadedS3ConfirmationImage = req.file ? (req.file as any).s3Location : null;
+    if (req.file && !uploadedS3ConfirmationImage) {
+      res.status(500).json({ error: 'Confirmation image upload failed. Could not store file in S3.' });
+      return;
+    }
+    const confirmationImage = uploadedS3ConfirmationImage || request.confirmation_image;
+    
+    // Delete old confirmation image from S3 if it exists
+    if (request.confirmation_image && req.file) {
+      await deleteFileFromS3IfExists(request.confirmation_image);
+    }
     await request.update({
       status: 'confirmed',
       confirmed_by_id: req.user.id,
@@ -731,6 +962,17 @@ export const confirmStockRequest = async (req: Request, res: Response): Promise<
       confirmed_date: new Date(),
       confirmation_image: confirmationImage
     });
+
+    await ProductSerialNumber.update(
+      { status: 'acknowledged' },
+      {
+        where: {
+          stock_request_id: request.id,
+          status: 'dispatched',
+          dispatched_to_admin_id: request.requested_by_id
+        }
+      }
+    );
 
     const updated = await StockRequest.findByPk(id, {
       include: buildRequestIncludes()

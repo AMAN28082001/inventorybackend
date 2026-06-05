@@ -1,8 +1,9 @@
 import { Request, Response } from 'express';
 import fs from 'fs';
 import { v4 as uuidv4 } from 'uuid';
-import { Review } from '../models';
+import { Review, sequelize } from '../models';
 import { logError, logInfo } from '../utils/loggerHelper';
+import { readTextFileAutoEncoding } from '../utils/readTextFileEncoding';
 
 /** Used when CSV has no `type` column or a row has an empty type cell. */
 const DEFAULT_REVIEW_TYPE = 'Solar Customer';
@@ -112,7 +113,7 @@ export const getReviews = async (req: Request, res: Response): Promise<void> => 
       where,
       limit,
       offset,
-      order: [['createdAt', 'DESC']],
+      order: sequelize.random(),
       attributes: ['id', 'content']
     });
 
@@ -192,7 +193,7 @@ export const importReviewsFromCsv = async (req: Request, res: Response): Promise
   }
 
   try {
-    let raw = fs.readFileSync(file.path, 'utf8');
+    let raw = readTextFileAutoEncoding(file.path);
     if (raw.charCodeAt(0) === 0xfeff) {
       raw = raw.slice(1);
     }

@@ -1,8 +1,22 @@
 import { createLogger, format, transports } from 'winston';
 import LokiTransport from 'winston-loki';
 
-const customJobName = process.env.LOKI_JOB_NAME || 'Solar_Inventory';
-const lokiHostip = process.env.LOKI_HOST_IP;
+const normalizeEnvValue = (value?: string): string => {
+  if (!value) return '';
+  return value.trim().replace(/^['"]+|['"]+$/g, '');
+};
+
+const customJobName = normalizeEnvValue(process.env.LOKI_JOB_NAME) || 'Solar_Inventory';
+const lokiHostip = normalizeEnvValue(process.env.LOKI_HOST_IP) || "http://43.204.133.228:3100";
+
+const isValidUrl = (value: string): boolean => {
+  try {
+    new URL(value);
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 
 
@@ -30,9 +44,10 @@ const safeStringify = format((info: any) => {
 });
 
 const transportArray: any[] = [];
+const logToConsole = process.env.LOG_CONSOLE === 'true';
 
-// Add console transport for development
-if (process.env.NODE_ENV !== 'production') {
+// Terminal output is opt-in only (LOG_CONSOLE=true). Default: Loki / silent sink.
+if (logToConsole) {
   transportArray.push(
     new transports.Console({
       format: format.combine(
@@ -48,29 +63,28 @@ if (process.env.NODE_ENV !== 'production') {
   );
 }
 
+let skippedInvalidLokiHost: string | null = null;
+
 // Add Loki transport if host is configured
 if (lokiHostip) {
-  transportArray.push(
-    new LokiTransport({
-      host: lokiHostip,
-      labels: { job: customJobName },
-      json: true,
-      batching: true,
-      interval: 5 // push logs every 5 seconds
-    })
-  );
+  if (isValidUrl(lokiHostip)) {
+    transportArray.push(
+      new LokiTransport({
+        host: lokiHostip,
+        labels: { job: customJobName },
+        json: true,
+        batching: true,
+        interval: 5 // push logs every 5 seconds
+      })
+    );
+  } else {
+    skippedInvalidLokiHost = lokiHostip;
+  }
 }
 
-// If no transports configured, add console as fallback
+// Keep logger callable without printing to stdout (no console spam in dev)
 if (transportArray.length === 0) {
-  transportArray.push(
-    new transports.Console({
-      format: format.combine(
-        format.timestamp(),
-        format.simple()
-      )
-    })
-  );
+  transportArray.push(new transports.Console({ silent: true }));
 }
 
 const options = {
@@ -81,10 +95,16 @@ const options = {
     format.json()
   ),
   transports: transportArray,
-  level: process.env.LOG_LEVEL || 'info'
+  level: normalizeEnvValue(process.env.LOG_LEVEL) || 'info'
 };
 
 const logger = createLogger(options);
+
+if (skippedInvalidLokiHost) {
+  logger.warn('Skipping Loki transport due to invalid LOKI_HOST_IP', {
+    lokiHostIp: skippedInvalidLokiHost
+  });
+}
 
 export default logger;
 

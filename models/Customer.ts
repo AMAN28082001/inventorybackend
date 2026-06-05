@@ -6,28 +6,30 @@ interface CustomerAttributes {
   firstName: string;
   lastName: string;
   mobile: string;
-  email: string;
+  email: string | null;
   streetAddress: string;
   city: string;
   state: string;
   pincode: string;
+  notes?: string | null;
   dealerId?: string | null;
   createdAt?: Date;
   updatedAt?: Date;
 }
 
-interface CustomerCreationAttributes extends Optional<CustomerAttributes, 'id' | 'dealerId' | 'createdAt' | 'updatedAt'> {}
+interface CustomerCreationAttributes extends Optional<CustomerAttributes, 'id' | 'notes' | 'dealerId' | 'createdAt' | 'updatedAt'> {}
 
 class Customer extends Model<CustomerAttributes, CustomerCreationAttributes> implements CustomerAttributes {
   public id!: string;
   public firstName!: string;
   public lastName!: string;
   public mobile!: string;
-  public email!: string;
+  public email!: string | null;
   public streetAddress!: string;
   public city!: string;
   public state!: string;
   public pincode!: string;
+  public notes!: string | null;
   public dealerId!: string | null;
   public readonly createdAt!: Date;
   public readonly updatedAt!: Date;
@@ -54,7 +56,7 @@ Customer.init(
     },
     email: {
       type: DataTypes.STRING(255),
-      allowNull: false
+      allowNull: true
     },
     streetAddress: {
       type: DataTypes.TEXT,
@@ -71,6 +73,10 @@ Customer.init(
     pincode: {
       type: DataTypes.STRING(6),
       allowNull: false
+    },
+    notes: {
+      type: DataTypes.TEXT,
+      allowNull: true
     },
     dealerId: {
       type: DataTypes.STRING(50),

@@ -11,9 +11,19 @@ import Sale from './Sale';
 import SaleItem from './SaleItem';
 import InventoryTransaction from './InventoryTransaction';
 import StockReturn from './StockReturn';
+import AccountManager from './AccountManager';
+import AccountManagerHistory from './AccountManagerHistory';
+import ProductSerialNumber from './ProductSerialNumber';
+import CallingLead from './CallingLead';
+import DealerLeadAssignment from './DealerLeadAssignment';
+import CallingActionHistory from './CallingActionHistory';
+import CallingLeadUploadBatch from './CallingLeadUploadBatch';
+import CallingLeadUploadRow from './CallingLeadUploadRow';
+import QuotationPaymentPhase from './QuotationPaymentPhase';
 import Review from './Review';
 
 // Define all associations
+
 // User associations
 User.hasMany(Product, { foreignKey: 'created_by', as: 'createdProducts' });
 User.hasMany(AdminInventory, { foreignKey: 'admin_id', as: 'inventory' });
@@ -34,6 +44,7 @@ Product.hasMany(InventoryTransaction, { foreignKey: 'product_id', as: 'transacti
 Product.hasMany(StockReturn, { foreignKey: 'product_id', as: 'returns' });
 Product.hasMany(StockRequestItem, { foreignKey: 'product_id', as: 'stockRequestItems' });
 Product.hasMany(SaleItem, { foreignKey: 'product_id', as: 'saleItems' });
+Product.hasMany(ProductSerialNumber, { foreignKey: 'product_id', as: 'serialNumbers' });
 Product.belongsTo(User, { foreignKey: 'created_by', as: 'creator' });
 
 // AdminInventory associations
@@ -58,6 +69,9 @@ Sale.hasMany(SaleItem, { foreignKey: 'sale_id', as: 'items', onDelete: 'CASCADE'
 SaleItem.belongsTo(Sale, { foreignKey: 'sale_id', as: 'sale' });
 SaleItem.belongsTo(Product, { foreignKey: 'product_id', as: 'product' });
 
+// Serial number associations
+ProductSerialNumber.belongsTo(Product, { foreignKey: 'product_id', as: 'product' });
+
 // InventoryTransaction associations
 InventoryTransaction.belongsTo(Product, { foreignKey: 'product_id', as: 'product' });
 InventoryTransaction.belongsTo(User, { foreignKey: 'created_by', as: 'creator' });
@@ -68,6 +82,20 @@ InventoryTransaction.belongsTo(Sale, { foreignKey: 'related_sale_id', as: 'relat
 StockReturn.belongsTo(User, { foreignKey: 'admin_id', as: 'admin' });
 StockReturn.belongsTo(User, { foreignKey: 'processed_by', as: 'processor' });
 StockReturn.belongsTo(Product, { foreignKey: 'product_id', as: 'product' });
+
+// AccountManager associations
+AccountManager.hasMany(AccountManagerHistory, { foreignKey: 'accountManagerId', as: 'history', onDelete: 'CASCADE' });
+AccountManagerHistory.belongsTo(AccountManager, { foreignKey: 'accountManagerId', as: 'accountManager' });
+
+// Calling lead module associations
+CallingLead.hasOne(DealerLeadAssignment, { foreignKey: 'leadId', as: 'assignment', onDelete: 'CASCADE' });
+DealerLeadAssignment.belongsTo(CallingLead, { foreignKey: 'leadId', as: 'lead' });
+CallingLead.hasMany(CallingActionHistory, { foreignKey: 'leadId', as: 'actionHistory', onDelete: 'CASCADE' });
+CallingActionHistory.belongsTo(CallingLead, { foreignKey: 'leadId', as: 'lead' });
+CallingLeadUploadBatch.hasMany(CallingLeadUploadRow, { foreignKey: 'batchId', as: 'rows', onDelete: 'CASCADE' });
+CallingLeadUploadRow.belongsTo(CallingLeadUploadBatch, { foreignKey: 'batchId', as: 'batch' });
+CallingLeadUploadBatch.hasMany(CallingLead, { foreignKey: 'batchId', as: 'leads', onDelete: 'SET NULL' });
+CallingLead.belongsTo(CallingLeadUploadBatch, { foreignKey: 'batchId', as: 'batch' });
 
 // Sync database (use with caution in production)
 export const syncDatabase = async (force: boolean = false): Promise<void> => {
@@ -91,8 +119,16 @@ export {
   SaleItem,
   InventoryTransaction,
   StockReturn,
+  ProductSerialNumber,
+  AccountManager,
+  AccountManagerHistory,
+  CallingLead,
+  DealerLeadAssignment,
+  CallingActionHistory,
+  CallingLeadUploadBatch,
+  CallingLeadUploadRow,
+  QuotationPaymentPhase,
   Review
 };
-
 
 

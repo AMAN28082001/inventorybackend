@@ -1,8 +1,8 @@
 import express, { Router } from 'express';
-import { login, refreshToken, logout, changePassword } from '../controllers/quotationAuthController';
+import { login, refreshToken, logout, changePassword, resetPassword, forgotPassword } from '../controllers/quotationAuthController';
 import { authenticate } from '../middleware/authQuotation';
 import { validate } from '../middleware/validate';
-import { loginSchema, changePasswordSchema } from '../validations/quotationAuthValidations';
+import { loginSchema, changePasswordSchema, resetPasswordSchema, forgotPasswordSchema } from '../validations/quotationAuthValidations';
 
 const router: Router = express.Router();
 
@@ -108,7 +108,7 @@ router.post('/refresh', refreshToken);
  *       401:
  *         description: Unauthorized
  */
-router.post('/logout', authenticate, logout);
+router.post('/logout', logout);
 
 /**
  * @swagger
@@ -154,6 +154,112 @@ router.post('/logout', authenticate, logout);
  *         description: Unauthorized
  */
 router.put('/change-password', authenticate, validate(changePasswordSchema), changePassword);
+
+/**
+ * @swagger
+ * /api/auth/reset-password:
+ *   post:
+ *     summary: Reset password with old password
+ *     description: Allows a user to reset their password by providing their username, old password, and new password. No authentication required.
+ *     tags: [Auth - Quotation]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - username
+ *               - oldPassword
+ *               - newPassword
+ *             properties:
+ *               username:
+ *                 type: string
+ *                 example: dealer123
+ *               oldPassword:
+ *                 type: string
+ *                 example: oldpassword123
+ *               newPassword:
+ *                 type: string
+ *                 minLength: 6
+ *                 example: newpassword123
+ *     responses:
+ *       200:
+ *         description: Password reset successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: Password reset successfully
+ *                 data:
+ *                   type: object
+ *                   nullable: true
+ *       400:
+ *         description: Validation error
+ *       401:
+ *         description: Invalid username or old password
+ */
+router.post('/reset-password', validate(resetPasswordSchema), resetPassword);
+
+/**
+ * @swagger
+ * /api/auth/forgot-password:
+ *   post:
+ *     summary: Reset password with date of birth
+ *     description: Allows a user to reset their password when they've forgotten it, using their username and date of birth for verification. No authentication required.
+ *     tags: [Auth - Quotation]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - username
+ *               - dateOfBirth
+ *               - newPassword
+ *             properties:
+ *               username:
+ *                 type: string
+ *                 example: dealer123
+ *               dateOfBirth:
+ *                 type: string
+ *                 format: date
+ *                 pattern: '^\d{4}-\d{2}-\d{2}$'
+ *                 example: '1990-01-15'
+ *               newPassword:
+ *                 type: string
+ *                 minLength: 6
+ *                 example: newpassword123
+ *     responses:
+ *       200:
+ *         description: Password reset successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: Password reset successfully
+ *                 data:
+ *                   type: object
+ *                   nullable: true
+ *       400:
+ *         description: Validation error
+ *       401:
+ *         description: Username or date of birth does not match our records
+ */
+router.post('/forgot-password', validate(forgotPasswordSchema), forgotPassword);
 
 export default router;
 

@@ -4,6 +4,36 @@ import { Customer, Quotation } from '../models/index-quotation';
 import { Op } from 'sequelize';
 import { logError, logInfo } from '../utils/loggerHelper';
 
+const isMissingNotesColumnError = (error: unknown): boolean => {
+  const message = String((error as any)?.parent?.message || (error as any)?.original?.message || (error as Error)?.message || '');
+  return /column\s+"notes"\s+does not exist/i.test(message) || /column\s+"notes"\s+of relation\s+"customers"/i.test(message);
+};
+
+const createCustomerRecord = async (payload: {
+  id: string;
+  firstName: string;
+  lastName: string;
+  mobile: string;
+  email: string | null;
+  streetAddress: string;
+  city: string;
+  state: string;
+  pincode: string;
+  notes?: string | null;
+  dealerId: string;
+}) => {
+  try {
+    return await Customer.create(payload);
+  } catch (error) {
+    if (payload.notes && isMissingNotesColumnError(error)) {
+      const { notes: _notes, ...withoutNotes } = payload;
+      logError('customers.notes column missing — create without notes (run yarn migrate)', error);
+      return Customer.create(withoutNotes);
+    }
+    throw error;
+  }
+};
+
 // Create customer
 export const createCustomer = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -15,7 +45,10 @@ export const createCustomer = async (req: Request, res: Response): Promise<void>
       return;
     }
 
-    const { firstName, lastName, mobile, email, address } = req.body;
+    const { firstName, lastName, mobile, email, address, notes, remarks } = req.body;
+    const normalizedLastName = (lastName ?? '').trim();
+    const normalizedEmail = (email ?? '').trim();
+    const normalizedNotes = String(notes ?? remarks ?? '').trim() || null;
 
     // Check if customer with mobile already exists
     const existingCustomer = await Customer.findOne({ where: { mobile } });
@@ -31,16 +64,17 @@ export const createCustomer = async (req: Request, res: Response): Promise<void>
       return;
     }
 
-    const customer = await Customer.create({
+    const customer = await createCustomerRecord({
       id: uuidv4(),
       firstName,
-      lastName,
+      lastName: normalizedLastName,
       mobile,
-      email,
+      email: normalizedEmail !== '' ? normalizedEmail : null,
       streetAddress: address.street,
       city: address.city,
       state: address.state,
       pincode: address.pincode,
+      notes: normalizedNotes,
       dealerId: req.dealer.id
     });
 
@@ -52,15 +86,17 @@ export const createCustomer = async (req: Request, res: Response): Promise<void>
       data: {
         id: customerData.id,
         firstName: customerData.firstName,
-        lastName: customerData.lastName,
+        lastName: customerData.lastName ?? '',
         mobile: customerData.mobile,
-        email: customerData.email,
+        email: customerData.email ?? '',
         address: {
           street: customerData.streetAddress || '',
           city: customerData.city || '',
           state: customerData.state || '',
           pincode: customerData.pincode || ''
         },
+        notes: customerData.notes ?? '',
+        remarks: customerData.notes ?? '',
         createdAt: customerData.createdAt,
         updatedAt: customerData.updatedAt
       }
@@ -118,9 +154,9 @@ export const getCustomers = async (req: Request, res: Response): Promise<void> =
       return {
         id: customerData.id,
         firstName: customerData.firstName,
-        lastName: customerData.lastName,
+        lastName: customerData.lastName ?? '',
         mobile: customerData.mobile,
-        email: customerData.email,
+        email: customerData.email ?? '',
         address: {
           street: customerData.streetAddress || '',
           city: customerData.city || '',
@@ -194,9 +230,9 @@ export const getCustomerById = async (req: Request, res: Response): Promise<void
       data: {
         id: customerData.id,
         firstName: customerData.firstName,
-        lastName: customerData.lastName,
+        lastName: customerData.lastName ?? '',
         mobile: customerData.mobile,
-        email: customerData.email,
+        email: customerData.email ?? '',
         address: {
           street: customerData.streetAddress || '',
           city: customerData.city || '',
@@ -230,6 +266,8 @@ export const updateCustomer = async (req: Request, res: Response): Promise<void>
 
     const { customerId } = req.params;
     const { firstName, lastName, mobile, email, address } = req.body;
+    const normalizedLastName = (lastName ?? '').trim();
+    const normalizedEmail = (email ?? '').trim();
 
     // Admins can update all customers, dealers only their own
     const where: any = { id: customerId };
@@ -267,9 +305,9 @@ export const updateCustomer = async (req: Request, res: Response): Promise<void>
     // Update customer fields
     const updateData: any = {};
     if (firstName !== undefined) updateData.firstName = firstName;
-    if (lastName !== undefined) updateData.lastName = lastName;
+    if (lastName !== undefined) updateData.lastName = normalizedLastName;
     if (mobile !== undefined) updateData.mobile = mobile;
-    if (email !== undefined) updateData.email = email;
+    if (email !== undefined) updateData.email = normalizedEmail !== '' ? normalizedEmail : null;
     
     // Update address fields if address object is provided
     if (address) {
@@ -289,9 +327,9 @@ export const updateCustomer = async (req: Request, res: Response): Promise<void>
       data: {
         id: customerData.id,
         firstName: customerData.firstName,
-        lastName: customerData.lastName,
+        lastName: customerData.lastName ?? '',
         mobile: customerData.mobile,
-        email: customerData.email,
+        email: customerData.email ?? '',
         address: {
           street: customerData.streetAddress || '',
           city: customerData.city || '',

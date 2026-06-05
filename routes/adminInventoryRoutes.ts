@@ -3,6 +3,7 @@ import {
   getAllAdminInventory,
   getAdminInventoryById,
   getAdminInventoryByAdminId,
+  getAdminProductSerialNumbers,
   upsertAdminInventory,
   updateAdminInventory,
   deleteAdminInventory
@@ -19,6 +20,7 @@ router.use(authenticate);
 // Get routes - accessible by all authenticated users
 router.get('/', getAllAdminInventory);
 router.get('/admin/:adminId', getAdminInventoryByAdminId);
+router.get('/admin/:adminId/products/:productId/serial-numbers', getAdminProductSerialNumbers);
 router.get('/:id', getAdminInventoryById);
 
 // Create/Update routes - super-admin manages

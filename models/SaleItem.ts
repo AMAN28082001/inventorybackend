@@ -11,9 +11,10 @@ interface SaleItemAttributes {
   unit_price: number;
   line_total: number;
   gst_rate: number;
+  serial_numbers?: string[] | null;
 }
 
-interface SaleItemCreationAttributes extends Optional<SaleItemAttributes, 'id' | 'product_id' | 'gst_rate'> {}
+interface SaleItemCreationAttributes extends Optional<SaleItemAttributes, 'id' | 'product_id' | 'gst_rate' | 'serial_numbers'> {}
 
 class SaleItem extends Model<SaleItemAttributes, SaleItemCreationAttributes> implements SaleItemAttributes {
   public id!: string;
@@ -25,6 +26,7 @@ class SaleItem extends Model<SaleItemAttributes, SaleItemCreationAttributes> imp
   public unit_price!: number;
   public line_total!: number;
   public gst_rate!: number;
+  public serial_numbers!: string[] | null;
 }
 
 SaleItem.init(
@@ -77,6 +79,10 @@ SaleItem.init(
       validate: {
         min: 0
       }
+    },
+    serial_numbers: {
+      type: DataTypes.JSONB,
+      allowNull: true
     }
   },
   {

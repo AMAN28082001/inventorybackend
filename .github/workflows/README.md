@@ -1,13 +1,13 @@
 # GitHub Actions Workflows
 
-This directory contains CI/CD workflows for the Chairbord Solar Inventory Backend.
+This directory contains CI/CD workflows for the Chairbord Solar Inventory Backend
 
 ## Workflow Files
 
 - **`ci.yml`** - Continuous Integration (type checking, building, security scanning)
 - **`test.yml`** - Testing workflow (runs tests with database)
 - **`deploy-staging.yml`** - Deploy to staging environment
-- **`deploy-production.yml`** - Deploy to production environment
+- **`deploy-production.yml`** - Deploy to production environments
 - **`docker-hub.yml`** - Build and push to Docker Hub
 
 ## Quick Start

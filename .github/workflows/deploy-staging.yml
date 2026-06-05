@@ -62,7 +62,9 @@ jobs:
             
             # Application Configuration
             PORT=${{ secrets.PORT || '3000' }}
-            NODE_ENV=staging
+            NODE_ENV=development
+            UPLOAD_DIR=${{ secrets.UPLOAD_DIR || './uploads' }}
+            MAX_FILE_SIZE=${{ secrets.MAX_FILE_SIZE || '5242880' }}
             
             # JWT Configuration
             JWT_SECRET=${{ secrets.JWT_SECRET }}
@@ -72,11 +74,31 @@ jobs:
             LOKI_HOST_IP=${{ secrets.LOKI_HOST_IP || '' }}
             LOKI_JOB_NAME=${{ secrets.LOKI_JOB_NAME || 'Solar_Inventory' }}
             LOG_LEVEL=${{ secrets.LOG_LEVEL || 'info' }}
+
+            # AWS Configuration
+            AWS_ACCESS_KEY=${{ secrets.AWS_ACCESS_KEY || '' }}
+            AWS_SECRET_KEY=${{ secrets.AWS_SECRET_KEY || '' }}
+            AWS_BUCKET_NAME=${{ secrets.AWS_BUCKET_NAME || 'cbpl-bajaj-node' }}
+            AWS_REGION=${{ secrets.AWS_REGION }}
             
             # Production URL
             PROD_URL=${{ secrets.STAGING_URL || '' }}
             EOF
             chmod 600 .env
+
+            echo "🔎 Previewing generated .env on staging server..."
+            echo "Non-sensitive values:"
+            grep -E '^(PORT|NODE_ENV|UPLOAD_DIR|MAX_FILE_SIZE|LOG_LEVEL|LOKI_HOST_IP|LOKI_JOB_NAME|AWS_BUCKET_NAME|AWS_REGION|PROD_URL)=' .env || true
+
+            echo "Sensitive values presence:"
+            for key in DB_HOST DB_PORT DB_NAME DB_USER DB_PASSWORD DB_SSL DB_SSL_REJECT_UNAUTHORIZED JWT_SECRET JWT_EXPIRE AWS_ACCESS_KEY AWS_SECRET_KEY; do
+              value=$(awk -F= -v target="$key" '$1 == target { print substr($0, index($0, "=") + 1); exit }' .env)
+              if [ -z "$value" ]; then
+                echo "$key=EMPTY_OR_MISSING"
+              else
+                echo "$key=SET"
+              fi
+            done
 
       - name: Deploy to staging server
         uses: appleboy/ssh-action@v1.0.0
@@ -86,31 +108,73 @@ jobs:
           key: ${{ secrets.STAGING_SSH_KEY }}
           port: ${{ secrets.STAGING_PORT || 22 }}
           script: |
-            cd ${{ secrets.STAGING_DEPLOY_PATH || '/opt/chairbord-api' }}
+            set -e  # Exit on error
+            DEPLOY_PATH=${{ secrets.STAGING_DEPLOY_PATH || '/opt/chairbord-api' }}
             IMAGE_NAME=vikasyadav30/cbplsolarinventory:develop
-            CONTAINER_NAME="cbpl-staging"
-            PORT=${PORT:-3000}
+            CONTAINER_NAME="cbpl-solar-inventory-backend-staging"
+            
+            echo "🚀 Starting staging deployment..."
+            echo "📁 Deploy path: $DEPLOY_PATH"
+            echo "🐳 Image: $IMAGE_NAME"
+            echo "📦 Container: $CONTAINER_NAME"
+            
+            # Navigate to deploy path
+            cd $DEPLOY_PATH || { echo "❌ Failed to cd to $DEPLOY_PATH"; exit 1; }
+            echo "✅ Changed to directory: $(pwd)"
+            
+            # Check if .env file exists
+            if [ ! -f .env ]; then
+              echo "❌ .env file not found in $DEPLOY_PATH"
+              exit 1
+            fi
+            echo "✅ .env file found"
             
             # Pull the latest image
-            docker pull $IMAGE_NAME
+            echo "📥 Pulling image from Docker Hub..."
+            sudo docker pull $IMAGE_NAME || { echo "❌ Failed to pull image"; exit 1; }
+            echo "✅ Image pulled successfully"
             
             # Stop and remove old container
-            docker stop $CONTAINER_NAME || true
-            docker rm $CONTAINER_NAME || true
+            echo "🛑 Stopping old container..."
+            sudo docker stop $CONTAINER_NAME || echo "⚠️  Container not running (this is OK)"
+            sudo docker rm $CONTAINER_NAME || echo "⚠️  Container not found (this is OK)"
+            echo "✅ Old container removed"
             
             # Run new container with .env file
-            docker run -d \
+            echo "🚀 Starting new container..."
+            ENV_FILE_PATH="$DEPLOY_PATH/.env"
+            echo "📄 Using .env file at: $ENV_FILE_PATH"
+            sudo docker run -d \
               --name $CONTAINER_NAME \
               --restart unless-stopped \
-              -p $PORT:3000 \
-              --env-file .env \
-              $IMAGE_NAME
+              -p 3050:3000 \
+              -e PORT=3000 \
+              --env-file "$ENV_FILE_PATH" \
+              $IMAGE_NAME || { echo "❌ Failed to start container"; exit 1; }
+            echo "✅ Container started"
+            
+            # Wait a moment for container to start
+            sleep 5
+            
+            # Check if container is running
+            if sudo docker ps | grep -q $CONTAINER_NAME; then
+              echo "✅ Container is running"
+            else
+              echo "❌ Container is not running!"
+              echo "📋 Container logs:"
+              sudo docker logs $CONTAINER_NAME || true
+              exit 1
+            fi
             
             # Run migrations
-            docker exec $CONTAINER_NAME npm run migrate || true
+            echo "🔄 Running migrations..."
+            sudo docker exec $CONTAINER_NAME npm run migrate || echo "⚠️  Migrations failed (non-critical)"
             
             # Clean up unused images
-            docker system prune -f
+            echo "🧹 Cleaning up unused images..."
+            sudo docker system prune -f || true
+            
+            echo "✅ Staging deployment completed successfully!"
 
       - name: Health check
         run: |
@@ -131,4 +195,3 @@ jobs:
           webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-

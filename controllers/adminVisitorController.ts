@@ -247,7 +247,7 @@ export const getVisitorById = async (req: Request, res: Response): Promise<void>
   }
 };
 
-// Update visitor (admin)
+// Update visitors (admin)
 export const updateVisitor = async (req: Request, res: Response): Promise<void> => {
   try {
     if (!req.dealer || req.dealer.role !== 'admin') {
@@ -404,3 +404,4 @@ export const deleteVisitor = async (req: Request, res: Response): Promise<void> 
     });
   }
 };
+

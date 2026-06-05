@@ -68,8 +68,9 @@ jobs:
             DB_SSL=${{ secrets.DB_SSL || 'false' }}
             DB_SSL_REJECT_UNAUTHORIZED=${{ secrets.DB_SSL_REJECT_UNAUTHORIZED || 'true' }}
             
-            # Application Configuration
-            PORT=${{ secrets.PORT || '3000' }}
+            # Application Configuration (PORT=3000 inside container; APP_PORT is host/nginx upstream)
+            PORT=3000
+            APP_PORT=${{ secrets.APP_PORT || secrets.PORT || '3050' }}
             NODE_ENV=production
             
             # JWT Configuration

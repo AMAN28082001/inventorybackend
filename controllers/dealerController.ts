@@ -2,7 +2,8 @@ import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
 import { Dealer, Quotation, Visitor } from '../models/index-quotation';
-import { Op } from 'sequelize';
+import { Op, Sequelize } from 'sequelize';
+import { approvedQuotationValueFromRow } from '../utils/quotationApiJson';
 import { logError, logInfo } from '../utils/loggerHelper';
 
 // Register new dealer (PUBLIC)
@@ -231,6 +232,74 @@ export const updateDealerProfile = async (req: Request, res: Response): Promise<
   }
 };
 
+const buildDealerDashboardMetrics = async (dealerId: string) => {
+  const now = new Date();
+  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  const baseWhere = { dealerId };
+  const approvedStatusWhere = Sequelize.where(
+    Sequelize.fn('LOWER', Sequelize.fn('TRIM', Sequelize.col('status'))),
+    'approved'
+  );
+
+  const [totalQuotations, uniqueCustomers, thisMonthQuotations, approvedRows] = await Promise.all([
+    Quotation.count({ where: baseWhere }),
+    Quotation.count({ where: baseWhere, distinct: true, col: 'customerId' }),
+    Quotation.count({
+      where: {
+        ...baseWhere,
+        createdAt: { [Op.gte]: startOfMonth }
+      }
+    }),
+    Quotation.findAll({
+      where: {
+        ...baseWhere,
+        [Op.and]: [approvedStatusWhere]
+      },
+      attributes: ['subtotal', 'totalAmount', 'finalAmount']
+    })
+  ]);
+
+  const approvedQuotationCount = approvedRows.length;
+  const approvedQuotationValue = approvedRows.reduce(
+    (sum, row) => sum + approvedQuotationValueFromRow(row),
+    0
+  );
+
+  return {
+    totalQuotations,
+    uniqueCustomers,
+    thisMonthQuotations,
+    approvedQuotationCount,
+    approvedQuotationValue
+  };
+};
+
+/** Dealer dashboard cards — approved quotation value/count (§7.9). */
+export const getDealerDashboardStats = async (req: Request, res: Response): Promise<void> => {
+  try {
+    if (!req.dealer) {
+      res.status(401).json({
+        success: false,
+        error: { code: 'AUTH_003', message: 'User not authenticated' }
+      });
+      return;
+    }
+
+    const data = await buildDealerDashboardMetrics(req.dealer.id);
+
+    res.json({
+      success: true,
+      data
+    });
+  } catch (error) {
+    logError('Get dealer dashboard stats error', error, { dealerId: req.dealer?.id });
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
+};
+
 // Get dealer statistics
 export const getDealerStatistics = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -251,45 +320,42 @@ export const getDealerStatistics = async (req: Request, res: Response): Promise<
       if (endDate) where.createdAt[Op.lte] = new Date(endDate as string);
     }
 
-    // Get all quotations
     const allQuotations = await Quotation.findAll({ where });
-    const totalQuotations = allQuotations.length;
-    const totalRevenue = allQuotations.reduce((sum, q) => sum + Number(q.finalAmount), 0);
+    const dashboard = await buildDealerDashboardMetrics(req.dealer.id);
 
-    // Get unique customers
-    const uniqueCustomerIds = [...new Set(allQuotations.map(q => q.customerId))];
-    const totalCustomers = uniqueCustomerIds.length;
-
-    // This month's data
+    const amountForRow = (q: Quotation) => approvedQuotationValueFromRow(q);
+    const totalRevenue = allQuotations.reduce((sum, q) => sum + amountForRow(q), 0);
+    const totalCustomers = dashboard.uniqueCustomers;
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-    const thisMonthQuotations = await Quotation.findAll({
-      where: {
-        dealerId: req.dealer.id,
-        createdAt: { [Op.gte]: startOfMonth }
-      }
+    const thisMonthRows = allQuotations.filter((q) => {
+      const created = q.createdAt ? new Date(q.createdAt) : null;
+      return created ? created >= startOfMonth : false;
     });
     const thisMonth = {
-      quotations: thisMonthQuotations.length,
-      revenue: thisMonthQuotations.reduce((sum, q) => sum + Number(q.finalAmount), 0)
+      quotations: dashboard.thisMonthQuotations,
+      revenue: thisMonthRows.reduce((sum, q) => sum + amountForRow(q), 0)
     };
 
-    // Status breakdown
     const statusBreakdown = {
-      pending: allQuotations.filter(q => q.status === 'pending').length,
-      approved: allQuotations.filter(q => q.status === 'approved').length,
-      rejected: allQuotations.filter(q => q.status === 'rejected').length,
-      completed: allQuotations.filter(q => q.status === 'completed').length
+      pending: allQuotations.filter((q) => q.status === 'pending').length,
+      approved: allQuotations.filter((q) => q.status === 'approved').length,
+      rejected: allQuotations.filter((q) => q.status === 'rejected').length,
+      completed: allQuotations.filter((q) => q.status === 'completed').length
     };
 
     res.json({
       success: true,
       data: {
-        totalQuotations,
+        totalQuotations: dashboard.totalQuotations,
         totalCustomers,
         totalRevenue,
         thisMonth,
-        statusBreakdown
+        statusBreakdown,
+        approvedQuotationCount: dashboard.approvedQuotationCount,
+        approvedQuotationValue: dashboard.approvedQuotationValue,
+        uniqueCustomers: dashboard.uniqueCustomers,
+        thisMonthQuotations: dashboard.thisMonthQuotations
       }
     });
   } catch (error) {
