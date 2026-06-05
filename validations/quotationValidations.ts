@@ -30,7 +30,8 @@ const booleanOrString = z.union([
   })
 ]);
 
-const productsSchema = z.object({
+/** Plain object — no refinements (Zod v4 forbids `.partial()` on schemas with refinements). */
+const productsSchemaObject = z.object({
   systemType: z.enum(['on-grid', 'off-grid', 'hybrid', 'dcr', 'non-dcr', 'both', 'customize']),
   phase: z.enum(['1-Phase', '3-Phase'], 'Phase must be 1-Phase or 3-Phase').optional(),
   panelBrand: z.string().nullish(),
@@ -96,7 +97,14 @@ const productsSchema = z.object({
     type: z.enum(['dcr', 'non-dcr']),
     price: z.number().nonnegative()
   })).nullish()
-}).superRefine((val, ctx) => {
+});
+
+type ProductsSchemaInput = z.infer<typeof productsSchemaObject>;
+
+const refineProductsPanelQuantity = (
+  val: Partial<ProductsSchemaInput> & Record<string, unknown>,
+  ctx: z.RefinementCtx
+): void => {
   if (hasPdfPanelRangeKey(val)) return;
   if (isTataDcrPackageSet(val)) return;
   const missingQty = (size: unknown, qty: unknown) => {
@@ -129,7 +137,12 @@ const productsSchema = z.object({
       path: ['panelQuantity']
     });
   }
-});
+};
+
+const productsSchema = productsSchemaObject.superRefine(refineProductsPanelQuantity);
+
+/** PATCH products — partial fields; apply refinements after `.partial()` on the base object. */
+const productsPartialSchema = productsSchemaObject.partial().superRefine(refineProductsPanelQuantity);
 
 const paymentModeEnum = z.enum(
   ['cash', 'upi', 'loan', 'netbanking', 'bank_transfer', 'cheque', 'card', 'mix'],
@@ -209,7 +222,7 @@ export const updateDiscountSchema = z.object({
 });
 
 export const updateProductsSchema = z.object({
-  products: productsSchema.partial().refine((val) => {
+  products: productsPartialSchema.refine((val) => {
     if (val.systemType === 'customize') {
       return Array.isArray(val.customPanels) && val.customPanels.length > 0;
     }
