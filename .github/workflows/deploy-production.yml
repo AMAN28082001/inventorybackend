@@ -48,6 +48,7 @@ jobs:
             ${{ env.IMAGE_NAME }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          platforms: linux/amd64,linux/arm64
 
       - name: Create .env file on production server
         uses: appleboy/ssh-action@v1.0.0
@@ -90,75 +91,42 @@ jobs:
       - name: Deploy to production server
         uses: appleboy/ssh-action@v1.0.0
         with:
-          host: ${{ secrets.STAGING_HOST }}
-          username: ${{ secrets.STAGING_USER }}
-          key: ${{ secrets.STAGING_SSH_KEY }}
-          port: ${{ secrets.PROD_PORT || 3050 }}
+          host: ${{ secrets.PROD_HOST }}
+          username: ${{ secrets.PROD_USER }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          port: ${{ secrets.PROD_PORT || 22 }}
           script: |
-            set -e  # Exit on error
+            set -e
             DEPLOY_PATH=${{ secrets.PROD_DEPLOY_PATH || '/opt/chairbord-api' }}
             IMAGE_NAME=vikasyadav30/cbplsolarinventory:main
             CONTAINER_NAME="cbpl-solar-inventory-backend-prod"
-            
-            echo "🚀 Starting deployment..."
-            echo "📁 Deploy path: $DEPLOY_PATH"
-            echo "🐳 Image: $IMAGE_NAME"
-            echo "📦 Container: $CONTAINER_NAME"
-            
-            # Navigate to deploy path
-            cd $DEPLOY_PATH || { echo "❌ Failed to cd to $DEPLOY_PATH"; exit 1; }
-            echo "✅ Changed to directory: $(pwd)"
-            
-            # Check if .env file exists
+
+            cd "$DEPLOY_PATH" || { echo "Failed to cd to $DEPLOY_PATH"; exit 1; }
             if [ ! -f .env ]; then
-              echo "❌ .env file not found in $DEPLOY_PATH"
+              echo ".env file not found"
               exit 1
             fi
-            echo "✅ .env file found"
-            
-            # Pull the latest image
-            echo "📥 Pulling image from Docker Hub..."
-            sudo docker pull $IMAGE_NAME || { echo "❌ Failed to pull image"; exit 1; }
-            echo "✅ Image pulled successfully"
-            
-            # Stop and remove old container
-            echo "🛑 Stopping old container..."
-            sudo docker stop $CONTAINER_NAME || echo "⚠️  Container not running (this is OK)"
-            sudo docker rm $CONTAINER_NAME || echo "⚠️  Container not found (this is OK)"
-            echo "✅ Old container removed"
-            
-            # Run new container with .env file
-            echo "🚀 Starting new container..."
+
+            sudo docker pull "$IMAGE_NAME"
+            sudo docker stop "$CONTAINER_NAME" || true
+            sudo docker rm "$CONTAINER_NAME" || true
             sudo docker run -d \
-              --name $CONTAINER_NAME \
+              --name "$CONTAINER_NAME" \
               --restart unless-stopped \
               -p 3050:3000 \
-              --env-file .env \
-              $IMAGE_NAME || { echo "❌ Failed to start container"; exit 1; }
-            echo "✅ Container started"
-            
-            # Wait a moment for container to start
+              -e PORT=3000 \
+              --env-file "$DEPLOY_PATH/.env" \
+              "$IMAGE_NAME"
+
             sleep 5
-            
-            # Check if container is running
-            if sudo docker ps | grep -q $CONTAINER_NAME; then
-              echo "✅ Container is running"
-            else
-              echo "❌ Container is not running!"
-              echo "📋 Container logs:"
-              sudo docker logs $CONTAINER_NAME || true
+            if ! sudo docker ps | grep -q "$CONTAINER_NAME"; then
+              echo "Container failed to start"
+              sudo docker logs "$CONTAINER_NAME" || true
               exit 1
             fi
-            
-            # Run migrations
-            echo "🔄 Running migrations..."
-            sudo docker exec $CONTAINER_NAME npm run migrate || echo "⚠️  Migrations failed (non-critical)"
-            
-            # Clean up unused images
-            echo "🧹 Cleaning up unused images..."
+
+            sudo docker exec "$CONTAINER_NAME" npm run migrate || echo "Migrations failed (non-critical)"
             sudo docker system prune -f || true
-            
-            echo "✅ Deployment completed successfully!"
 
       - name: Health check
         run: |
@@ -188,7 +156,7 @@ jobs:
           port: ${{ secrets.PROD_PORT || 22 }}
           script: |
             cd ${{ secrets.PROD_DEPLOY_PATH || '/opt/chairbord-api' }}
-            docker-compose up -d api || true
+            sudo docker start cbpl-solar-inventory-backend-prod || true
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
