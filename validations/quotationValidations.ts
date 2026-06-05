@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { ALLOWED_PAYMENT_MODES, normalizePaymentModeInput } from '../utils/paymentMode';
 import { normalizeSubsidyChequesFromRequestBody } from '../utils/subsidyChequesNormalize';
 import { hasPdfPanelRangeKey, PDF_PANEL_RANGE_KEYS } from '../utils/quotationProductPdfDisplay';
+import { isTataDcrPackageSet } from '../utils/quotationTataDcrValidation';
 
 const addressSchema = z.object({
   street: z.string().min(1),
@@ -97,6 +98,7 @@ const productsSchema = z.object({
   })).nullish()
 }).superRefine((val, ctx) => {
   if (hasPdfPanelRangeKey(val)) return;
+  if (isTataDcrPackageSet(val)) return;
   const missingQty = (size: unknown, qty: unknown) => {
     const hasSize = size !== undefined && size !== null && String(size).trim() !== '';
     if (!hasSize) return false;

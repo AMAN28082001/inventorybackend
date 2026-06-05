@@ -1,6 +1,6 @@
 # Backend changes handoff (May 2026)
 
-**Single handoff doc for the API team.** Full specs: `BACKEND_CHANGES_REQUIRED.md` (§7.8–§7.9, dealer queue §E–§H, §J, §X, §Y). Reference contracts: `BACKEND_ADMIN_QUOTATION_STATUS.ts`. Implementation: `controllers/callingLeadController.ts`, `controllers/quotationController.ts`, `controllers/visitController.ts`, `controllers/customerController.ts`, `utils/quotationProductPdfDisplay.ts`, `utils/quotationTataDcrValidation.ts`, `utils/s3Service.ts`.
+**Single handoff doc for the API team.** Full specs: `BACKEND_CHANGES_REQUIRED.md` (§7.8–§7.9, dealer queue §E–§H, §J, §X, §Y). Reference contracts: `BACKEND_ADMIN_QUOTATION_STATUS.ts`. Implementation: `controllers/callingLeadController.ts`, `controllers/quotationController.ts`, `controllers/visitController.ts`, `controllers/customerController.ts`, `utils/quotationProductPdfDisplay.ts`, `utils/s3Service.ts`.
 
 ## Sprint checklist (copy for tracking)
 
@@ -28,7 +28,6 @@
 | 20 | Medium | Payment Management list fields (dealer, phases, dates) | **Done** | §12 |
 | 21 | Medium | Admin Overview kW — `products` + `systemKw` on list | **Done** | §13 |
 | 22 | Medium | `GET /api/quotations/pricing-tables` (June 2026 defaults) | **Done** | §2.5 |
-| 23 | **High** | Tata DCR `tata_530_570` + `VAL_003` relax + GET echo PDF keys | **Done** | §2.6 |
 
 **Deploy before QA:**
 
@@ -101,24 +100,13 @@ Optional: `TZ=Asia/Kolkata` if weekly HR reports must match SPA Mon–Sun in IST
 | `pdfDcrPanelRangeKey` | BOTH — DCR line |
 | `pdfNonDcrPanelRangeKey` | BOTH — Non-DCR line |
 
-**Allowed values (`pdf_panel_range_key`):**
+**Allowed values:** `waaree_540_560_bifacial`, `waaree_580_700_bifacial_topcon`, `adani_540_580_bifacial`, `adani_610_625_bifacial_topcon`, `premier_600_625_bifacial_topcon`, **`tata_530_570`** (`530W - 570W`, Tata DCR packages only). Unknown keys stored as `null`.
 
-| Key | PDF / overview panel spec text |
-|-----|--------------------------------|
-| `waaree_540_560_bifacial` | 540-560W Bifacial |
-| `waaree_580_700_bifacial_topcon` | 580-700W Bifacial Topcon |
-| `adani_540_580_bifacial` | 540-580W Bifacial |
-| `adani_610_625_bifacial_topcon` | 610-625W Bifacial Topcon |
-| `premier_600_625_bifacial_topcon` | 600-625W Bifacial Topcon |
-| **`tata_530_570`** | **530W - 570W** (Tata DCR package sets only) |
+**PDF display (client-generated; keys must round-trip on GET):**
 
-Unknown keys normalize to `null` on persist. Labels: `utils/quotationProductPdfDisplay.ts` → `PDF_PANEL_RANGE_LABELS`.
-
-**PDF / overview display rules (client-generated PDF; keys must round-trip on GET):**
-
-- When a range key is set, the **panel** line uses the **range label** above — not generic “As per the set” for panel wattage.
-- **Tata DCR** (`panelBrand` = `Tata`, `systemType` = `dcr`) with **`tata_530_570`**: inverter line on PDF is always **“As per the set”** (package BOM), even if `products` stores catalog values (`Vsole/Xwatt`, `5kW`, etc.).
-- TOPCon technology note on PDF only when the active range key contains `topcon` (see `pdfPanelRangeShowsTopconNote()`).
+- When a range key is set, panel line uses the **range label** (e.g. `530W - 570W` for `tata_530_570`), not generic “As per the set” for panels.
+- **Tata DCR** (`panelBrand` = `Tata`, `systemType` = `dcr`) + `tata_530_570`: inverter line on PDF is **“As per the set”** even if DB stores catalog placeholders (`Vsole/Xwatt`, `5kW`).
+- TOPCon note on PDF only when range key contains `topcon` (e.g. `adani_610_625_bifacial_topcon`).
 
 **Clear on uncheck (critical):** `PATCH …/products` uses `buildQuotationProductPdfPersistFieldsForUpdate` — only overwrites PDF columns **present in the body**. Explicit `""`, `null`, or `false` clears DB values; omitted keys are left unchanged (no accidental wipe on partial PATCH).
 
@@ -148,99 +136,61 @@ Unknown keys normalize to `null` on persist. Labels: `utils/quotationProductPdfD
 - Range keys are **not** passed into `validateProductSelection` or `calculatePricing`.
 - **`validUntil`** on create defaults to **`createdAt + 7 days`** (was 5).
 
-**Server PDFs:** use `utils/quotationProductPdfDisplay.ts` (`PDF_PANEL_RANGE_KEYS`, `PDF_PANEL_RANGE_LABELS`, `extractPdfPanelRangeKeysFromProducts`, `pdfInverterUsesAsPerTheSet`).
+**Server PDFs:** use `utils/quotationProductPdfDisplay.ts` (`PDF_PANEL_RANGE_KEYS`, `extractPdfPanelRangeKeysFromProducts`).
 
-**Frontend flow:** create may omit PDF keys on POST; follow-up `PATCH …/products` with range keys — backend must accept that PATCH. **GET is source of truth** for overview/PDF after save (not browser `localStorage`). New quotations are **DCR-only** on the SPA; legacy rows may remain `non-dcr` / `both`.
+**Frontend flow:** create may omit PDF keys on POST; follow-up `PATCH …/products` with range keys — backend must accept that PATCH (this implementation).
 
-**Pricing tables (§2.5):** `GET /api/quotations/pricing-tables` (alias of `GET /api/config/pricing`). When DB `dcr` is empty, API returns June 2026 defaults: Adani 555W, Adani Topcon 620W, Waaree 540W, Premier Energies, **Tata DCR** (`utils/defaultPricingTables.ts`).
+**Pricing tables:** `GET /api/quotations/pricing-tables` (alias of `GET /api/config/pricing`). When DB `dcr` is empty, API returns June 2026 defaults: Adani 555W, Adani Topcon 620W, Waaree 540W, Premier Energies, **Tata DCR** (`utils/defaultPricingTables.ts`).
 
-### §2.5 — Pricing tables API (optional but recommended)
+**New quotes:** frontend is **DCR-only**; legacy rows may remain `non-dcr` / `both`. **GET is source of truth** for `pdf_panel_range_key` after save (not browser `localStorage`).
 
-| Tata DCR row (example) | `systemSize` | Phase | Price (INR) |
-|------------------------|--------------|-------|---------------|
-| 5.1 kW 1-Phase package | `5.1kW` | 1-Phase | 310000 |
+### 2.6 Tata DCR package sets — `VAL_003` fix (**implemented**)
 
-Also: `3.1kW`, `6kW`, `8kW`, `10kW` Tata DCR rows in defaults when DB `dcr` is empty.
+**Code:** `utils/quotationTataDcrValidation.ts`, `utils/quotationProductPdfDisplay.ts` (`PDF_PANEL_RANGE_KEYS`, `PDF_PANEL_RANGE_LABELS`), `controllers/quotationController.ts` → `validateProductSelection`.
 
-### §2.6 — Tata DCR package sets (`VAL_003` fix)
-
-**Status: implemented** — `utils/quotationTataDcrValidation.ts`, `validateProductSelection` early path in `controllers/quotationController.ts`.
-
-**Do not return `VAL_003` / “Invalid product selection”** when `systemType === 'dcr'` and `panelBrand === 'Tata'` and the payload matches a fixed package set:
+**Do not return `VAL_003` for valid Tata DCR when:**
 
 | Rule | Allowed |
 |------|---------|
-| `panelSize` | `As per the set`, `530W`, or other catalog placeholder |
+| `systemType` | `dcr` |
+| `panelBrand` | `Tata` |
+| `panelSize` | `As per the set`, `530W`, or catalog placeholder |
 | `panelQuantity` | `0` or omitted when `pdf_panel_range_key` = `tata_530_570` |
-| `inverterBrand` / `inverterSize` | `As per the set`, `Vsole/Xwatt`, `3kW`–`30kW` |
+| `inverterBrand` / `inverterSize` | `As per the set`, `Vsole/Xwatt`, `Vsole/Xwatt/Saatvik`, `3kW`–`30kW` |
 | `structureSize` | `3.1kW`, `5.1kW`, `3kW`, `5kW`, `6kW`, `8kW`, `10kW` |
-| `acCableSize` / `dcCableSize` | `As per Set` / `As per the set` |
 | PDF key | `pdfPanelRangeKey` / `pdf_panel_range_key` = **`tata_530_570`** |
 
 **PATCH shapes (both accepted):**
 
-1. **Display + PDF keys** (after create):
+1. **Display + PDF key** — `PATCH /api/quotations/{id}/products` with `pdfPanelRangeKey: "tata_530_570"` (and snake_case).
+2. **Catalog-normalized** — `panelSize: "530W"`, `panelQuantity: 10`, `inverterBrand: "Vsole/Xwatt"`, `inverterSize: "5kW"`, `structureSize: "5kW"` plus PDF key on same or follow-up PATCH.
+
+**Required GET shape after save** (`products` on list/detail):
 
 ```json
 {
-  "products": {
-    "systemType": "dcr",
-    "panelBrand": "Tata",
-    "panelSize": "530W",
-    "panelQuantity": 10,
-    "inverterBrand": "Vsole/Xwatt",
-    "inverterSize": "5kW",
-    "structureSize": "5kW",
-    "pdfPanelRangeKey": "tata_530_570",
-    "pdf_panel_range_key": "tata_530_570"
-  }
-}
-```
-
-2. **Catalog-normalized** (POST may use this; PATCH can add PDF keys only):
-
-```json
-{
-  "products": {
-    "systemType": "dcr",
-    "panelBrand": "Tata",
-    "panelSize": "530W",
-    "panelQuantity": 0,
-    "inverterBrand": "Vsole/Xwatt",
-    "inverterSize": "5kW",
-    "structureSize": "5.1kW",
-    "centralSubsidy": 78000,
-    "systemPrice": 310000,
-    "pdfPanelRangeKey": "tata_530_570"
-  }
-}
-```
-
-**Required GET shape after save** (`GET /api/quotations/{id}` — `products` must include):
-
-```json
-{
+  "systemType": "dcr",
   "panelBrand": "Tata",
   "panelSize": "530W",
+  "panelQuantity": 10,
+  "inverterBrand": "Vsole/Xwatt",
+  "inverterSize": "5kW",
+  "structureSize": "5kW",
   "pdfPanelRangeKey": "tata_530_570",
   "pdf_panel_range_key": "tata_530_570"
 }
 ```
 
-If `pdf_panel_range_key` is missing on GET, the overview stays wrong after reload even when PATCH succeeded.
+**Checklist (Tata):**
 
-### §2 — Backend checklist
-
-- [x] `tata_530_570` in `PDF_PANEL_RANGE_KEYS` + Zod enum
-- [x] Persist PDF keys on `PATCH /api/quotations/{id}/products` (JSONB + `quotation_products` columns)
-- [x] **Return** `pdf_panel_range_key` on GET list/detail (`quotationProductPdfDisplayApiFields`)
-- [x] PATCH clears keys on `""` / `null`
-- [x] `panelQuantity` 0 when range key set (Zod `hasPdfPanelRangeKey`)
-- [x] Tata DCR: no `VAL_003` for valid package payloads (`validateTataDcrProductSelection`)
-- [x] `As per the set` / `As per Set`; structure `3.1kW` / `5.1kW`
-- [x] Combined `inverterBrand` / `meterBrand` strings
-- [x] Tata DCR rows in default pricing tables
-- [ ] Frontend can drop client-side PDF inference once GET always echoes keys (verify in staging)
+- [x] `tata_530_570` in PDF range enum + Zod schema
+- [x] Persist on `quotation_products` via `PATCH …/products` (`buildQuotationProductPdfPersistFieldsForUpdate`)
+- [x] Always return `pdf_panel_range_key` on GET (`quotationProductPdfDisplayApiFields`)
+- [x] `validateProductSelection` Tata path — no `VAL_003` for package payloads
+- [x] `panelQuantity` 0 when range key set (Zod `hasPdfPanelRangeKey` + Tata package bypass)
+- [x] `As per the set` / `As per Set` on panel, inverter, cables
+- [x] Structure `3.1kW` / `5.1kW`
+- [x] (Optional) Tata DCR rows in `GET /api/quotations/pricing-tables` defaults
 
 ---
 
@@ -735,7 +685,7 @@ BOTH: DCR kW + Non-DCR kW. CUSTOMIZE: sum all custom panel rows.
 |----------|--------|--------|
 | **1** | Calling queue `LEAD_004` | **Done** — A + B (claim/assign/patch) + C |
 | **2** | HR upload live counts | **Done** |
-| **3** | PDF panel range keys + **Tata `tata_530_570`** + `VAL_003` | **Done** (+ migrate) |
+| **3** | PDF panel range keys on products (incl. **`tata_530_570`**, Tata `VAL_003`) | **Done** (+ migrate) |
 | **4** | Remarks, tabs, start vs submit, customer note | **Done** (+ customer `notes` migrate) |
 | **5** | HR/Admin `GET` calling-actions (`dealerId`, dates, `custom`, aliases) | **Done** — §4.8 |
 | **6** | Quotation create stability | **Done** — §5 |

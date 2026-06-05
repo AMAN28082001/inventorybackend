@@ -14,7 +14,7 @@ export const PDF_PANEL_RANGE_KEYS = [
 
 export type PdfPanelRangeKey = (typeof PDF_PANEL_RANGE_KEYS)[number];
 
-/** Human-readable panel spec for proposal PDF / overview (matches frontend `lib/quotation-pdf-display.ts`). */
+/** Human-readable panel spec for PDF/overview (client mirrors `lib/quotation-pdf-display.ts`). */
 export const PDF_PANEL_RANGE_LABELS: Record<PdfPanelRangeKey, string> = {
   waaree_540_560_bifacial: '540-560W Bifacial',
   waaree_580_700_bifacial_topcon: '580-700W Bifacial Topcon',
@@ -22,32 +22,6 @@ export const PDF_PANEL_RANGE_LABELS: Record<PdfPanelRangeKey, string> = {
   adani_610_625_bifacial_topcon: '610-625W Bifacial Topcon',
   premier_600_625_bifacial_topcon: '600-625W Bifacial Topcon',
   tata_530_570: '530W - 570W'
-};
-
-export const pdfPanelRangeLabel = (key: string | null | undefined): string | null => {
-  if (!key) return null;
-  const k = String(key).trim() as PdfPanelRangeKey;
-  return (PDF_PANEL_RANGE_LABELS as Record<string, string>)[k] ?? null;
-};
-
-/** TOPCon technology note on PDF when range key contains `topcon` (client rule; for server-rendered PDFs). */
-export const pdfPanelRangeShowsTopconNote = (key: string | null | undefined): boolean =>
-  Boolean(key && String(key).toLowerCase().includes('topcon'));
-
-/** Tata DCR + `tata_530_570`: inverter line on PDF is always “As per the set” (package BOM). */
-export const pdfInverterUsesAsPerTheSet = (
-  products: Record<string, unknown> | null | undefined
-): boolean => {
-  if (!products) return false;
-  const brand = String(products.panelBrand ?? products.panel_brand ?? '')
-    .trim()
-    .toLowerCase();
-  const systemType = String(products.systemType ?? products.system_type ?? '')
-    .trim()
-    .toLowerCase();
-  if (systemType !== 'dcr' || brand !== 'tata') return false;
-  const keys = extractPdfPanelRangeKeysFromProducts(products);
-  return keys.pdfPanelRangeKey === 'tata_530_570';
 };
 
 /** Combined inverter labels shown in the UI / PDF (not a separate PDF flag). */
