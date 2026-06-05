@@ -234,13 +234,14 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction): void =>
 // Start HTTP + WebSocket server after DB is ready (avoids 500s when schema lags the Sequelize )
 const httpServer = attachRealtimeServer(app, allowedOrigins);
 void sequelizeBootstrap.then(() => {
-  httpServer.listen(PORT, () => {
+  const listenPort = Number(PORT) || 3000;
+  httpServer.listen(listenPort, '0.0.0.0', () => {
     logger.info('Server started', {
-      port: PORT,
+      port: listenPort,
       environment: process.env.NODE_ENV || 'development',
-      apiBaseUrl: `http://localhost:${PORT}/api`,
-      swaggerUrl: `http://localhost:${PORT}/api-docs`,
-      websocketPath: `http://localhost:${PORT}/socket.io`
+      apiBaseUrl: `http://localhost:${listenPort}/api`,
+      swaggerUrl: `http://localhost:${listenPort}/api-docs`,
+      websocketPath: `http://localhost:${listenPort}/socket.io`
     });
   });
 });
