@@ -13,7 +13,7 @@ Product Manager / Super Admin **Add Product** and **Add Stock** flows:
 1. **Decimal prices** — e.g. `85.45` for unit/cost/selling price.
 2. **Kg → pieces** — user may enter decimal weight in the UI (e.g. `10.5` kg); **frontend** converts to whole pieces before the API call.
 
-**Important:** The backend **never receives raw kg weight** today. It receives final integer `quantity` / `stock_to_add` and `unit: "Pieces"`. Optional audit columns (`weight_per_piece_kg`, `last_stock_weight_kg`) are not required now.
+**Important:** All **kg → piece conversion** (weight **and** price) happens on the **frontend**. The backend only stores final values — integer pieces and **per-piece** `unit_price`. It does **not** receive `total_weight_kg`, `weight_per_piece_kg`, or `price_per_kg`. Optional audit columns are not required now.
 
 ---
 
@@ -22,7 +22,7 @@ Product Manager / Super Admin **Add Product** and **Add Stock** flows:
 | # | Requirement | Status |
 |---|-------------|--------|
 | 1 | `DECIMAL(10,2)` (or equivalent) on all price columns | ✅ |
-| 2 | Accept `unit_price: 85.45` (reject negatives only) | ✅ |
+| 2 | Accept `unit_price: 85.45` / `153.00` per-piece (reject negatives only) | ✅ |
 | 3 | Accept `unit: "Pieces"` for ex-KGS catalog products | ✅ |
 | 4 | Stop catalog-unit mismatch validation (no forced `KGS`) | ✅ |
 | 5 | `stock_to_add` adds **pieces**, not kg (`current + stock_to_add`) | ✅ |
@@ -62,19 +62,26 @@ ALTER TABLE product_serial_numbers ALTER COLUMN price TYPE DECIMAL(10, 2);
 
 ---
 
-## 2. Kg → pieces (frontend → backend contract)
+## 2. Kg → pieces & per-piece price (frontend → backend contract)
 
-### Frontend formula
+### Frontend formulas (client only — no backend math)
 
 ```
 pieces = Math.round(total_weight_kg / weight_per_piece_kg)
+unit_price = round(price_per_kg * weight_per_piece_kg, 2)   // per piece, not per kg
 ```
 
-Decimal kg in the UI (e.g. `10.5` kg) is converted on the client; backend receives **whole pieces only**.
+### What the user enters vs what the API receives
+
+| User enters | Backend receives |
+|-------------|------------------|
+| 10.5 kg total weight | `quantity: 23` (whole pieces) |
+| ₹340/kg at 0.45 kg/piece | `unit_price: 153.00` (per piece) |
+| Catalog unit KGS | `unit: "Pieces"` |
+
+**Not sent:** `total_weight_kg`, `weight_per_piece_kg`, `price_per_kg`.
 
 ### POST `/api/products` (create)
-
-User enters **10.5 kg**; piece weight **0.45 kg** → **23 pieces** (rounded).
 
 ```json
 {
@@ -83,11 +90,9 @@ User enters **10.5 kg**; piece weight **0.45 kg** → **23 pieces** (rounded).
   "category": "Structural Components",
   "quantity": 23,
   "unit": "Pieces",
-  "unit_price": 85.45
+  "unit_price": 153.00
 }
 ```
-
-**Not sent:** `total_weight_kg`, `weight_per_piece_kg`.
 
 ### PUT `/api/products/:id` (add stock)
 
@@ -170,7 +175,7 @@ Also: `Fixed`, `Pillar`.
 
 ## 6. Test plan
 
-1. **Decimal price** — Create with `unit_price: 85.45`; GET returns `85.45`.
+1. **Decimal price** — Create with `unit_price: 153.00`; GET returns `153` (JSON number; DB stores `153.00`).
 2. **Kg create** — POST `quantity: 23`, `unit: "Pieces"` for Nut Bolt; no 400.
 3. **Kg add stock** — PUT `stock_to_add: 11`, `unit: "Pieces"`; quantity increases by 11 pieces.
 4. **Unit codes** — Accept `"PCS"`; stored as `"Pieces"`.

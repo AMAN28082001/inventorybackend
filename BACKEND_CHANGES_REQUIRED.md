@@ -405,10 +405,12 @@ Photo upload with `installationStatus=installer_approved` persists **`installer_
 
 | Topic | Backend action |
 |-------|----------------|
-| Decimal prices | `DECIMAL` columns; `roundProductPrice()`; accept `85.45` |
-| Kg products | Frontend sends integer `quantity` / `stock_to_add` + `unit: "Pieces"` |
-| Unit validation | Accept display names + codes; allow Pieces for ex-KGS catalog items |
+| Decimal prices | `DECIMAL` columns; `roundProductPrice()`; accept `85.45`, `153.00` (per-piece) |
+| Kg products | Frontend converts weight **and** price; API gets integer pieces + per-piece `unit_price` |
+| Unit validation | Accept display names + codes; allow Pieces for ex-KGS catalog items; no catalog mismatch |
 | Persistence | `products.unit` column; normalize PCS→Pieces |
-| GET | `formatProductForApi` returns decimal prices + `unit` |
+| Stock | `stock_to_add` adds integer pieces; structural/KGS items — no serials |
+| GET | `formatProductForApi` — 2dp prices + stored `unit` |
+| No backend conversion | Do not compute kg→pieces or ₹/kg→per-piece unless audit columns added later |
 
 **Endpoints:** `POST /api/products`, `PUT /api/products/:id`, `GET /api/products`, `GET /api/products/:id`
