@@ -354,3 +354,61 @@ ALTER TABLE quotations ADD COLUMN IF NOT EXISTS system_kw NUMERIC(10,2) NULL;
 ```
 
 Set on create/update from products; return as `systemKw` / `system_kw` on list (frontend uses first when present).
+
+---
+
+## §M — Payment Management → Admin Installation (June 2026)
+
+**Handoff:** `BACKEND_CHANGES_HANDOFF.md` §17. **Status: implemented.**
+
+### M.1 — Release endpoint
+
+`PATCH /api/quotations/{id}/installation-release`
+
+```json
+{
+  "installationReadyForInstaller": true,
+  "installationReleasedAt": "2026-06-05T10:30:00.000Z"
+}
+```
+
+Sets `installation_ready_for_installer`, `installation_released_at`, and `installation_status = pending_installer`.
+
+### M.2 — List fields (all installation list GETs)
+
+Return on every row: `installationReadyForInstaller`, `installationReleasedAt`, `installationStatus`, plus installation photo URLs after upload.
+
+Endpoints: `GET /api/admin/quotations`, `GET /api/quotations?status=approved`, `GET /api/installer/quotations`.
+
+### M.3 — Installer queue gate
+
+Row visible only when `installation_ready_for_installer = true` **OR** `installation_released_at` is set. Approved-but-never-released quotations must **not** appear.
+
+### M.4 — Installation tab semantics
+
+| Tab | State |
+|-----|--------|
+| Pending Installation | Released + `pending_installer` / `installer_in_progress` / no photos |
+| Approved Installation | Released + `installer_approved` |
+
+### M.5 — No auto-advance to metering
+
+Photo upload with `installationStatus=installer_approved` persists **`installer_approved`**. Advance to metering **only** when admin sends `pending_metering` (e.g. `PATCH /api/admin/quotations/{id}/installation-status`).
+
+`meteringStatus` / `deriveMeteringStatus` must be `null` while still in the installation pipeline — do not derive `pending_metering` from `installer_approved`.
+
+---
+
+## §N — Decimal prices & kg → pieces inventory (June 2025)
+
+**Full spec:** `BACKEND_CHANGES_DECIMAL_PRICE_KG_TO_PIECES.md`. **Status: implemented.**
+
+| Topic | Backend action |
+|-------|----------------|
+| Decimal prices | `DECIMAL` columns; `roundProductPrice()`; accept `85.45` |
+| Kg products | Frontend sends integer `quantity` / `stock_to_add` + `unit: "Pieces"` |
+| Unit validation | Accept display names + codes; allow Pieces for ex-KGS catalog items |
+| Persistence | `products.unit` column; normalize PCS→Pieces |
+| GET | `formatProductForApi` returns decimal prices + `unit` |
+
+**Endpoints:** `POST /api/products`, `PUT /api/products/:id`, `GET /api/products`, `GET /api/products/:id`

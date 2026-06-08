@@ -8,10 +8,15 @@ import {
   quotationPaymentApiFields,
   quotationAdminMetadataFields,
   quotationProductEnrichmentFields,
-  readStatusHistoryFromRow
+  readStatusHistoryFromRow,
+  serializeInstallationReleaseFields
 } from '../utils/quotationApiJson';
 import { emitRealtime, realtimeEvents } from '../utils/realtime';
-import { INSTALLER_RELEASE_STATUSES } from '../constants/workflowQueues';
+import {
+  buildReleasedToInstallerWhere,
+  INSTALLER_RELEASE_STATUSES,
+  isReleasedToInstallerListQuery
+} from '../constants/workflowQueues';
 import {
   batchLoadInstallationDocsByQuotationId,
   mapInstallationDocumentsForApi
@@ -104,7 +109,12 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
 
     const page = parseInt(req.query.page as string) || 1;
     const limitParam = req.query.limit as string | undefined;
-    const limit = limitParam ? Math.min(parseInt(limitParam) || 20, 1000) : undefined;
+    const wantsReleasedInstallerList = isReleasedToInstallerListQuery(req.query as Record<string, unknown>);
+    const limit = limitParam
+      ? Math.min(parseInt(limitParam) || 20, 1000)
+      : wantsReleasedInstallerList
+        ? 1000
+        : undefined;
     const offset = limit ? (page - 1) * limit : undefined;
     const scope = String(req.query.scope || '').toLowerCase();
     const status = req.query.status as string;
@@ -133,16 +143,11 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
     const installerForwardStates = [...INSTALLER_RELEASE_STATUSES];
     const meteringStates = ['pending_metering', 'metering_in_progress', 'metering_approved', 'mco'];
     const baldevStates = ['installer_approved', 'pending_baldev', 'baldev_approved', 'completed'];
-    if (operationalView === 'installer') {
+    if (operationalView === 'installer' || (wantsReleasedInstallerList && scope !== 'installer_queue')) {
       where.status = 'approved';
       where[Op.and] = [
         ...(where[Op.and] || []),
-        {
-          [Op.or]: [
-            { installationReadyForInstaller: true },
-            { installationStatus: { [Op.in]: installerForwardStates } }
-          ]
-        }
+        buildReleasedToInstallerWhere()
       ];
     } else if (operationalView === 'metering') {
       where.status = 'approved';
@@ -168,7 +173,7 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
       if (installerStatusRaw === 'pending_installer') {
         installerStatuses = ['pending_installer'];
       } else if (installerStatusRaw === 'approved') {
-        installerStatuses = ['installer_approved', 'pending_baldev', 'baldev_approved', 'completed'];
+        installerStatuses = ['installer_approved'];
       } else if (installerStatusRaw) {
         installerStatuses = installerStatusRaw
           .split(',')
@@ -177,14 +182,14 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
       }
 
       where.status = 'approved';
+      const installerStatusClause =
+        installerStatuses.length > 1
+          ? { installationStatus: { [Op.in]: installerStatuses } }
+          : { installationStatus: installerStatuses[0] };
       where[Op.and] = [
         ...(where[Op.and] || []),
-        {
-          [Op.or]: [
-            { installationReadyForInstaller: true },
-            { installationStatus: { [Op.in]: installerStatuses } }
-          ]
-        }
+        buildReleasedToInstallerWhere(),
+        installerStatusClause
       ];
     }
 
@@ -242,7 +247,9 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
       ],
       limit,
       offset,
-      order: [['createdAt', 'DESC']]
+      order: wantsReleasedInstallerList
+        ? [['installationReleasedAt', 'DESC'], ['approvedAt', 'DESC'], ['createdAt', 'DESC']]
+        : [['createdAt', 'DESC']]
     });
     const phaseRows = await QuotationPaymentPhase.findAll({
       where: { quotationId: { [Op.in]: quotations.rows.map((q: any) => q.id) } },
@@ -328,8 +335,7 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
             paymentPhases: phases,
             payment_phases: phases,
             status: q.status,
-            installationReadyForInstaller: Boolean((q as any).installationReadyForInstaller),
-            installation_ready_for_installer: Boolean((q as any).installationReadyForInstaller),
+            ...serializeInstallationReleaseFields(row),
             approvedAt: (q as any).approvedAt || null,
             installerApprovedAt: (q as any).installerApprovedAt || null,
             installer_approved_at: (q as any).installerApprovedAt || null,

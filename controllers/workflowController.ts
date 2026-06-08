@@ -6,7 +6,11 @@ import { v4 as uuidv4 } from 'uuid';
 import { Op } from 'sequelize';
 import { Quotation, QuotationInstallationDoc, Dealer, Customer, QuotationProduct, Visit, VisitAssignment, Visitor, CustomPanel } from '../models/index-quotation';
 import { logError, logInfo } from '../utils/loggerHelper';
-import { INSTALLER_RELEASE_STATUSES, resolveInstallerQueueStatuses } from '../constants/workflowQueues';
+import {
+  buildReleasedToInstallerWhere,
+  INSTALLER_RELEASE_STATUSES,
+  resolveInstallerQueueStatuses
+} from '../constants/workflowQueues';
 import { toDateOnlyStringOrNull } from '../utils/quotationApiJson';
 import { getInstallationTeamIdFromRequest } from '../utils/installationTeamRole';
 import {
@@ -189,9 +193,12 @@ const getWorkflowQueue = async (
         : requestedStatuses[0] || targetStatus;
 
     if (releaseRequired) {
-      // Source-of-truth contract: operational queues only include records released by account management.
-      where.installationReadyForInstaller = true;
-      where.installationStatus = installationStatusFilter;
+      // Source-of-truth: only rows sent from Payment Management (flag or release timestamp).
+      where[Op.and] = [
+        ...(where[Op.and] || []),
+        buildReleasedToInstallerWhere(),
+        { installationStatus: installationStatusFilter }
+      ];
     } else {
       where.installationStatus = installationStatusFilter;
     }
@@ -1780,7 +1787,7 @@ export const installerUploadDocuments = async (req: Request, res: Response): Pro
         }
       }
       await quotation.update({
-        installationStatus: 'pending_baldev',
+        installationStatus: 'installer_approved',
         installerId: isAdmin ? quotation.installerId : req.user?.id || quotation.installerId,
         installerActionAt: new Date(),
         installerApprovedAt: new Date(),

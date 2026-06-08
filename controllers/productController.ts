@@ -9,6 +9,8 @@ import { SYS_STORAGE_CREDENTIALS_MESSAGE, SYS_STORAGE_OPTIONAL_NO_IMAGE_HINT } f
 import fs from 'fs';
 import path from 'path';
 import XLSX from 'xlsx';
+import { formatProductForApi } from '../utils/productApiFormat';
+import { normalizeProductUnit, roundProductPrice } from '../utils/productUnit';
 
 const logProductInventoryTransaction = async ({
   productId,
@@ -62,7 +64,7 @@ export const getAllProducts = async (req: Request, res: Response): Promise<void>
     });
 
     logInfo('Get all products', { count: products.length, category: category as string || 'all', search: search as string || 'none' });
-    res.json(products);
+    res.json(products.map((p) => formatProductForApi(p)));
   } catch (error) {
     logError('Get all products error', error);
     res.status(500).json({ error: 'Server error' });
@@ -87,11 +89,12 @@ export const getProductById = async (req: Request, res: Response): Promise<void>
     });
 
     logInfo('Get product by ID', { productId: id });
+    const formatted = formatProductForApi(product);
     res.json({
-      ...product.toJSON(),
-      selling_price: product.selling_price !== undefined && product.selling_price !== null
-        ? product.selling_price
-        : product.unit_price,
+      ...formatted,
+      selling_price: formatted.selling_price !== undefined && formatted.selling_price !== null
+        ? formatted.selling_price
+        : formatted.unit_price,
       serial_numbers: serials.map((s) => ({
         id: s.id,
         serial_number: s.serial_number,
@@ -191,7 +194,23 @@ export const getProductSerialNumbers = async (req: Request, res: Response): Prom
 // Create product
 export const createProduct = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { name, model, wattage, category, quantity, unit_price, selling_price, image, serial_numbers, default_price, cost_price, serial_number_prices, product_name, product_category } = req.body;
+    const {
+      name,
+      model,
+      wattage,
+      category,
+      quantity,
+      unit,
+      unit_price,
+      selling_price,
+      image,
+      serial_numbers,
+      default_price,
+      cost_price,
+      serial_number_prices,
+      product_name,
+      product_category
+    } = req.body;
 
     if (!name || !model || !category) {
       res.status(400).json({
@@ -240,11 +259,12 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
 
     const serialNumbers = serial_numbers ? parseSerialNumbers(serial_numbers) : [];
     const priceMap = parseSerialNumberPrices(serial_number_prices);
-    const defaultPriceInput = default_price !== undefined && default_price !== null && default_price !== ''
-      ? Number(default_price)
-      : cost_price !== undefined && cost_price !== null && cost_price !== ''
-        ? Number(cost_price)
-        : undefined;
+    const defaultPriceInput =
+      default_price !== undefined && default_price !== null && default_price !== ''
+        ? roundProductPrice(default_price) ?? undefined
+        : cost_price !== undefined && cost_price !== null && cost_price !== ''
+          ? roundProductPrice(cost_price) ?? undefined
+          : undefined;
     const hasDefaultPrice = defaultPriceInput !== undefined && !isNaN(defaultPriceInput);
     const hasPriceMap = Object.keys(priceMap).length > 0;
     const maxSerialPrice = hasDefaultPrice
@@ -275,14 +295,15 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
     }
     const imagePath = uploadedS3Image || image;
 
-    const resolvedCostPrice = unit_price !== undefined && unit_price !== null
-      ? unit_price
-      : maxSerialPrice !== undefined && !isNaN(maxSerialPrice)
-        ? maxSerialPrice
-        : null;
-    const resolvedSellingPrice = selling_price !== undefined && selling_price !== null
-      ? selling_price
-      : null;
+    const resolvedCostPrice =
+      unit_price !== undefined && unit_price !== null
+        ? roundProductPrice(unit_price)
+        : maxSerialPrice !== undefined && !isNaN(maxSerialPrice)
+          ? roundProductPrice(maxSerialPrice)
+          : null;
+    const resolvedSellingPrice =
+      selling_price !== undefined && selling_price !== null ? roundProductPrice(selling_price) : null;
+    const resolvedUnit = unit !== undefined ? normalizeProductUnit(unit) : null;
 
     const newProduct = await Product.create({
       id,
@@ -291,6 +312,7 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
       wattage: wattage || null,
       category,
       quantity: quantity || 0,
+      unit: resolvedUnit,
       unit_price: resolvedCostPrice,
       selling_price: resolvedSellingPrice,
       image: imagePath || null,
@@ -370,11 +392,12 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
       const serialCategory = (product_category || category).toString();
 
       for (const serial of uniqueSerials) {
-        const serialPrice = hasDefaultPrice
+        const rawSerialPrice = hasDefaultPrice
           ? defaultPrice!
           : hasPriceMap
             ? Number((priceMap as any)[serial])
             : null;
+        const serialPrice = rawSerialPrice !== null ? roundProductPrice(rawSerialPrice) : null;
         await ProductSerialNumber.create({
           id: uuidv4(),
           product_id: newProduct.id,
@@ -410,7 +433,7 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
 
     logInfo('Product created', { productId: newProduct.id, name: newProduct.name, model: newProduct.model, createdBy: req.user?.id });
     res.status(201).json({
-      ...newProduct.toJSON(),
+      ...formatProductForApi(newProduct),
       serial_numbers: createdSerials
     });
   } catch (error) {
@@ -503,7 +526,25 @@ const parseSerialNumbersFromFile = (file: Express.Multer.File): string[] => {
 export const updateProduct = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const { name, model, wattage, category, quantity, unit_price, selling_price, image, stock_to_add, serial_numbers, default_price, cost_price, serial_number_prices, product_name, product_category, use_max_cost_price } = req.body;
+    const {
+      name,
+      model,
+      wattage,
+      category,
+      quantity,
+      unit,
+      unit_price,
+      selling_price,
+      image,
+      stock_to_add,
+      serial_numbers,
+      default_price,
+      cost_price,
+      serial_number_prices,
+      product_name,
+      product_category,
+      use_max_cost_price
+    } = req.body;
 
     const product = await Product.findByPk(id);
     if (!product) {
@@ -529,6 +570,15 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
       updates.category = category;
     }
 
+    if (unit !== undefined) {
+      const normalizedUnit = normalizeProductUnit(unit);
+      if (unit !== null && unit !== '' && normalizedUnit === null) {
+        res.status(400).json({ error: 'Invalid unit value' });
+        return;
+      }
+      updates.unit = normalizedUnit;
+    }
+
     /**
      * Stock semantics (single rule):
      * - quantity alone: sets absolute on-hand quantity (delta logged as adjustment).
@@ -536,8 +586,8 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
      * - both: quantity must equal current + stock_to_add (frontend consistency check).
      */
     const stockToAdd = stock_to_add !== undefined ? Number(stock_to_add) : undefined;
-    if (stockToAdd !== undefined && (isNaN(stockToAdd) || stockToAdd < 0)) {
-      res.status(400).json({ error: 'stock_to_add must be a non-negative number' });
+    if (stockToAdd !== undefined && (isNaN(stockToAdd) || stockToAdd < 0 || !Number.isInteger(stockToAdd))) {
+      res.status(400).json({ error: 'stock_to_add must be a non-negative whole number (pieces)' });
       return;
     }
 
@@ -553,8 +603,9 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
     }
 
     if (unit_price !== undefined) {
-      const unitPriceNumber = unit_price === null || unit_price === '' ? null : Number(unit_price);
-      if (unitPriceNumber !== null && (!Number.isFinite(unitPriceNumber) || unitPriceNumber < 0)) {
+      const unitPriceNumber =
+        unit_price === null || unit_price === '' ? null : roundProductPrice(unit_price);
+      if (unit_price !== null && unit_price !== '' && unitPriceNumber === null) {
         res.status(400).json({ error: 'Unit price cannot be negative' });
         return;
       }
@@ -562,11 +613,13 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
     }
 
     if (selling_price !== undefined) {
-      if (selling_price < 0) {
+      const sellingPriceNumber =
+        selling_price === null || selling_price === '' ? null : roundProductPrice(selling_price);
+      if (selling_price !== null && selling_price !== '' && sellingPriceNumber === null) {
         res.status(400).json({ error: 'Selling price cannot be negative' });
         return;
       }
-      updates.selling_price = selling_price;
+      updates.selling_price = sellingPriceNumber;
     }
 
     const rawImageFile =
@@ -647,12 +700,13 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
         const excelSerials = excelFile ? parseSerialNumbersFromFile(excelFile) : [];
         const finalSerials = serialNumbers.length > 0 ? serialNumbers : excelSerials;
         const priceMap = parseSerialNumberPrices(serial_number_prices);
-        const defaultPriceInput = default_price !== undefined && default_price !== null && default_price !== ''
-          ? Number(default_price)
-          : cost_price !== undefined && cost_price !== null && cost_price !== ''
-            ? Number(cost_price)
-            : undefined;
-        const hasDefaultPrice = defaultPriceInput !== undefined && !isNaN(defaultPriceInput);
+        const defaultPriceInput =
+          default_price !== undefined && default_price !== null && default_price !== ''
+            ? roundProductPrice(default_price) ?? undefined
+            : cost_price !== undefined && cost_price !== null && cost_price !== ''
+              ? roundProductPrice(cost_price) ?? undefined
+              : undefined;
+        const hasDefaultPrice = defaultPriceInput !== undefined && defaultPriceInput !== null;
         const hasPriceMap = Object.keys(priceMap).length > 0;
 
         const currentQuantity = Number(product.quantity);
@@ -832,7 +886,7 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
 
     logInfo('Product updated', { productId: id, updatedBy: req.user?.id, updates: Object.keys(updates) });
     res.json({
-      ...updatedProduct?.toJSON(),
+      ...(updatedProduct ? formatProductForApi(updatedProduct) : {}),
       serial_numbers_added: stockToAdd && stockToAdd > 0 ? stockToAdd : 0,
       serial_numbers: createdSerials.length > 0 ? createdSerials : undefined
     });

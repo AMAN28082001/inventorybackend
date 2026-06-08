@@ -11,7 +11,13 @@ import { logError, logInfo } from '../utils/loggerHelper';
 import { deleteFileFromS3IfExists } from '../middleware/upload';
 import { decodeS3UrlPathToKey, generatePublicUrl, isPresignedS3GetUrl } from '../utils/s3Service';
 import { normalizePaymentModeInput } from '../utils/paymentMode';
-import { quotationAmountApiFields, quotationPaymentApiFields, quotationAdminMetadataFields, quotationProductEnrichmentFields } from '../utils/quotationApiJson';
+import {
+  quotationAmountApiFields,
+  quotationPaymentApiFields,
+  quotationAdminMetadataFields,
+  quotationProductEnrichmentFields,
+  serializeInstallationReleaseFields
+} from '../utils/quotationApiJson';
 import { persistQuotationSystemKw } from '../utils/persistQuotationSystemKw';
 import {
   mapInstallationDocumentsForApi,
@@ -24,6 +30,10 @@ import {
   resolveMeterStoredRef
 } from '../utils/meteringMediaApi';
 import { meteringWorkflowApiFields } from '../utils/meteringWorkflowApi';
+import {
+  buildReleasedToInstallerWhere,
+  isReleasedToInstallerListQuery
+} from '../constants/workflowQueues';
 import { extractS3KeyOrStoredPath } from '../utils/s3Service';
 import {
   buildQuotationProductPdfPersistFields,
@@ -1162,7 +1172,12 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
     // Authorization is handled by middleware (authorizeDealerAdminOrVisitor)
     const page = parseInt(req.query.page as string) || 1;
     const limitParam = req.query.limit as string | undefined;
-    const limit = limitParam ? Math.min(parseInt(limitParam) || 20, 1000) : undefined;
+    const wantsReleasedInstallerList = isReleasedToInstallerListQuery(req.query as Record<string, unknown>);
+    const limit = limitParam
+      ? Math.min(parseInt(limitParam) || 20, 1000)
+      : wantsReleasedInstallerList
+        ? 1000
+        : undefined;
     const offset = limit ? (page - 1) * limit : undefined;
     const status = req.query.status as string;
     const search = req.query.search as string;
@@ -1294,6 +1309,18 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
     if (paymentStatus) {
       where.paymentStatus = paymentStatus;
     }
+    if (wantsReleasedInstallerList) {
+      if (!where.status) where.status = 'approved';
+      where[Op.and] = [
+        ...(Array.isArray(where[Op.and]) ? where[Op.and] : []),
+        buildReleasedToInstallerWhere()
+      ];
+    }
+
+    const listOrder: [string, string][] =
+      wantsReleasedInstallerList && safeSortBy === 'createdAt'
+        ? [['installationReleasedAt', 'DESC'], ['createdAt', 'DESC']]
+        : [[safeSortBy, sortOrder]];
 
     let quotations;
     if (search) {
@@ -1349,7 +1376,7 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         ],
         limit,
         offset,
-        order: [[safeSortBy, sortOrder]]
+        order: listOrder
       });
     } else {
       quotations = await Quotation.findAndCountAll({
@@ -1389,7 +1416,7 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         ],
         limit,
         offset,
-        order: [[safeSortBy, sortOrder]]
+        order: listOrder
       });
     }
 
@@ -1482,6 +1509,7 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         systemType: q.systemType,
         ...quotationPaymentApiFields(row),
         ...quotationAdminMetadataFields(row),
+        ...serializeInstallationReleaseFields(row),
         ...quotationAmountApiFields(row, pricing),
         paidAmount: q.paidAmount !== undefined && q.paidAmount !== null ? Number(q.paidAmount) : null,
         remaining: remainingAmount,
@@ -2813,7 +2841,8 @@ export const updateQuotationInstallationRelease = async (req: Request, res: Resp
     // Account-management/admin only; dealer-admin JWT kept for backward compatibility.
     const role = req.user?.role;
     const isAccountManager = role === 'account-management';
-    const isInventoryAdmin = role === 'admin';
+    const isInventoryAdmin =
+      role === 'admin' || role === 'super-admin' || role === 'super-admin-manager';
     const isQuotationAdmin = req.dealer && req.dealer.role === 'admin';
     if (!isAccountManager && !isInventoryAdmin && !isQuotationAdmin) {
       res.status(403).json({
@@ -2853,6 +2882,7 @@ export const updateQuotationInstallationRelease = async (req: Request, res: Resp
       installationStatus: installationReadyForInstaller ? 'pending_installer' : quotation.installationStatus,
       statusHistory: existingHistory
     });
+    await quotation.reload();
 
     const rowPlain = quotation.get({ plain: true }) as unknown as Record<string, unknown>;
     res.json({
@@ -2860,9 +2890,8 @@ export const updateQuotationInstallationRelease = async (req: Request, res: Resp
       data: {
         id: quotation.id,
         quotationId: quotation.id,
+        ...serializeInstallationReleaseFields(rowPlain),
         ...quotationAdminMetadataFields(rowPlain),
-        installationStatus: (quotation as any).installationStatus || null,
-        installation_status: (quotation as any).installationStatus || null,
         updatedAt: quotation.updatedAt
       }
     });

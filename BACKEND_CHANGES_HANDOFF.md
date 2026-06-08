@@ -28,6 +28,7 @@
 | 20 | Medium | Payment Management list fields (dealer, phases, dates) | **Done** | §12 |
 | 21 | Medium | Admin Overview kW — `products` + `systemKw` on list | **Done** | §13 |
 | 22 | Medium | `GET /api/quotations/pricing-tables` (June 2026 defaults) | **Done** | §2.5 |
+| 23 | High | Payment Management → Admin Installation release gate | **Done** | §17 |
 
 **Deploy before QA:**
 
@@ -724,10 +725,106 @@ When both `startDate` and `endDate` are sent, filtering uses that window on `act
 
 ---
 
+## 17. Payment Management → Admin Installation (June 2026)
+
+**Status: implemented in repo.** **Production blocker:** if Installation tab is empty after hard refresh, production API is missing this deploy and/or DB columns — see **`BACKEND_INSTALLATION_RELEASE.md`** (SQL, curl QA, deploy checklist).
+
+Account team releases approved quotations to the installer pipeline; admin Installation tabs and the installer dashboard only show **released** rows. Metering advance is **manual** (admin “Send to Metering”).
+
+### 17.1 — Send to Installer (Account / Payment Management)
+
+`PATCH /api/quotations/{id}/installation-release` (account-manager or dealer admin)
+
+```json
+{
+  "installationReadyForInstaller": true,
+  "installationReleasedAt": "2026-06-05T10:30:00.000Z"
+}
+```
+
+Persists:
+
+| Column | Value |
+|--------|--------|
+| `installation_ready_for_installer` | `true` |
+| `installation_released_at` | ISO timestamp (body or server `now`) |
+| `installation_status` | `pending_installer` |
+
+**Code:** `controllers/quotationController.ts` → `updateQuotationInstallationRelease`.
+
+### 17.2 — List GET must echo release + installation fields
+
+| Endpoint | Consumers |
+|----------|-----------|
+| `GET /api/admin/quotations` | Admin → Installation tab; optional `?operationalView=installer` |
+| `GET /api/quotations?status=approved` | Account Management — “Sent to installer” badge |
+| `GET /api/installer/quotations` | Installer dashboard |
+
+Each row includes (camelCase + snake_case aliases where noted):
+
+- `installationReadyForInstaller` / `installation_ready_for_installer`
+- `installationReleasedAt` / `installation_released_at`
+- `installationStatus` / `installation_status`
+- `installationScheduledAt`, `installationTeamId` (when set)
+- Installation photo URLs after upload (`installationPhotoUrls`, `documents`, `installationFieldUrls`)
+
+**Code:** `quotationAdminMetadataFields`, `meteringWorkflowApiFields`, `mapInstallationDocumentsForApi`.
+
+### 17.3 — Release gate (installer queue)
+
+Include a quotation **only if**:
+
+```
+installation_ready_for_installer = true
+OR installation_released_at IS NOT NULL
+```
+
+**Do not** include approved quotations that were never sent from Payment Management (default `installation_status = pending_installer` alone is **not** enough).
+
+**Code:** `constants/workflowQueues.ts` → `buildReleasedToInstallerWhere()`; used by:
+
+- `GET /api/installer/quotations` (`getInstallerQueue`)
+- `GET /api/admin/quotations?operationalView=installer`
+- `GET /api/admin/quotations?scope=installer_queue`
+
+### 17.4 — Pending vs Approved (Installation tabs)
+
+| Tab | Backend filter (client may refine) |
+|-----|-------------------------------------|
+| **Pending Installation** | Released + `pending_installer` / `installer_in_progress` / no completion photos |
+| **Approved Installation** | Released + `installer_approved` (or completion image URLs on GET) |
+
+`?status=approved` on installer/admin installer queue maps to **`installer_approved` only** (not Baldev/metering).
+
+### 17.5 — Manual metering (no auto-advance)
+
+| Event | `installation_status` |
+|-------|------------------------|
+| Installer uploads photos + submits | `installer_approved` (**not** `pending_metering` / `pending_baldev`) |
+| Admin clicks **Send to Metering** | `pending_metering` via `PATCH /api/admin/quotations/{id}/installation-status` or metering status PATCH |
+
+`deriveMeteringStatus` returns `null` until the row is actually in `pending_metering`+ so Installation rows do not appear in Metering tabs prematurely.
+
+### 17.6 — QA checklist
+
+| Scenario | Expected |
+|----------|----------|
+| Approve but don’t send | **Not** in Installation / installer queue |
+| Send from Payment Management | Appears in **Pending Installation** |
+| Refresh / different browser | Still visible (server persistence) |
+| Upload photos | Moves to **Approved Installation** (`installer_approved`) |
+| Send to Metering | Leaves Installation; shows in Metering queue |
+
+### 17.7 — DB columns (optional migration already applied)
+
+`installation_ready_for_installer`, `installation_released_at`, `installation_status`, `installation_scheduled_at`, `installation_team_id` on `quotations`.
+
+---
+
 ## Related docs
 
 | Doc | Section |
 |-----|---------|
-| `BACKEND_CHANGES_REQUIRED.md` | §7.7–7.8, dealer queue, §J, §X |
+| `BACKEND_CHANGES_REQUIRED.md` | §7.7–7.8, dealer queue, §J, §X, **§M** |
 | `BACKEND_ADMIN_QUOTATION_STATUS.ts` | Reference contracts |
 

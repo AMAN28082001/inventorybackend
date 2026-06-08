@@ -10,7 +10,10 @@ import {
   activateDealer,
   getSystemStatistics
 } from '../controllers/adminController';
-import { updateQuotationInstallationScheduledAt } from '../controllers/quotationController';
+import {
+  updateQuotationInstallationRelease,
+  updateQuotationInstallationScheduledAt
+} from '../controllers/quotationController';
 import {
   createVisitor,
   getAllVisitors,
@@ -46,7 +49,10 @@ import {
   patchQuotationInstallationTeamSchema,
   patchInstallationTeamPasswordSchema
 } from '../validations/adminValidations';
-import { updateInstallationScheduledAtSchema } from '../validations/quotationValidations';
+import {
+  updateInstallationReleaseSchema,
+  updateInstallationScheduledAtSchema
+} from '../validations/quotationValidations';
 import { adminUpdateDealerSchema } from '../validations/dealerValidations';
 
 const router: Router = express.Router();
@@ -115,6 +121,11 @@ router.post(
 );
 
 router.patch('/quotations/:quotationId/installation-status', validate(updateInstallationStatusSchema), updateQuotationInstallationStatus);
+router.patch(
+  '/quotations/:quotationId/installation-release',
+  validate(updateInstallationReleaseSchema),
+  updateQuotationInstallationRelease
+);
 router.patch('/quotations/:quotationId/workflow-status', validate(updateInstallationStatusSchema), updateQuotationInstallationStatus);
 router.patch(
   '/quotations/:quotationId/metering-status',

@@ -381,3 +381,23 @@ export function quotationAdminMetadataFields(q: Record<string, unknown>) {
     status_history: statusHistory
   };
 }
+
+/** Top-level installation release fields for list/detail/PATCH responses (§M / Installation tab). */
+export function serializeInstallationReleaseFields(q: Record<string, unknown>) {
+  const meta = quotationAdminMetadataFields(q);
+  const installationStatus = (q.installationStatus ?? q.installation_status ?? null) as string | null;
+  const isReleasedToInstaller =
+    meta.installationReadyForInstaller || meta.installationReleasedAt != null;
+  return {
+    installationReadyForInstaller: meta.installationReadyForInstaller,
+    installation_ready_for_installer: meta.installation_ready_for_installer,
+    installationReleasedAt: meta.installationReleasedAt,
+    installation_released_at: meta.installation_released_at,
+    installationStatus,
+    installation_status: installationStatus,
+    isReleasedToInstaller,
+    is_released_to_installer: isReleasedToInstaller,
+    sentToInstaller: isReleasedToInstaller,
+    sent_to_installer: isReleasedToInstaller
+  };
+}

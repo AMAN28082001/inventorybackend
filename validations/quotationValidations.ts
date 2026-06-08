@@ -408,7 +408,7 @@ export const updatePaymentModeSchema = z.object({
     .refine((v) => v !== undefined, { message: 'Invalid or missing payment mode' })
 });
 
-export const updateInstallationReleaseSchema = z.object({
+const installationReleaseBodySchema = z.object({
   installationReadyForInstaller: z
     .union([z.boolean(), z.string()])
     .transform((value) => {
@@ -432,6 +432,16 @@ export const updateInstallationReleaseSchema = z.object({
       return parsed.toISOString();
     })
 });
+
+/** Accept camelCase or snake_case keys from Payment Management UI. */
+export const updateInstallationReleaseSchema = z.preprocess((body) => {
+  const raw = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>;
+  return {
+    installationReadyForInstaller:
+      raw.installationReadyForInstaller ?? raw.installation_ready_for_installer,
+    installationReleasedAt: raw.installationReleasedAt ?? raw.installation_released_at
+  };
+}, installationReleaseBodySchema);
 
 const yyyyMmDd = /^\d{4}-\d{2}-\d{2}$/;
 

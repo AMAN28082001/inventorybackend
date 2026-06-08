@@ -8,6 +8,7 @@ interface ProductAttributes {
   category: string;
   wattage?: string | null;
   quantity: number;
+  unit?: string | null;
   unit_price?: number | null;
   selling_price?: number | null;
   image?: string | null;
@@ -16,7 +17,7 @@ interface ProductAttributes {
   updated_at?: Date;
 }
 
-interface ProductCreationAttributes extends Optional<ProductAttributes, 'id' | 'quantity' | 'wattage' | 'unit_price' | 'selling_price' | 'image' | 'created_by' | 'created_at' | 'updated_at'> {}
+interface ProductCreationAttributes extends Optional<ProductAttributes, 'id' | 'quantity' | 'unit' | 'wattage' | 'unit_price' | 'selling_price' | 'image' | 'created_by' | 'created_at' | 'updated_at'> {}
 
 class Product extends Model<ProductAttributes, ProductCreationAttributes> implements ProductAttributes {
   public id!: string;
@@ -25,6 +26,7 @@ class Product extends Model<ProductAttributes, ProductCreationAttributes> implem
   public category!: string;
   public wattage!: string | null;
   public quantity!: number;
+  public unit!: string | null;
   public unit_price!: number | null;
   public selling_price!: number | null;
   public image!: string | null;
@@ -62,6 +64,10 @@ Product.init(
       validate: {
         min: 0
       }
+    },
+    unit: {
+      type: DataTypes.STRING(50),
+      allowNull: true
     },
     unit_price: {
       type: DataTypes.DECIMAL(12, 2),

@@ -17,10 +17,6 @@ export const deriveMeteringStatus = (
   const inst = String(installationStatus || '').trim();
   if (!inst) return null;
   if (METERING_CANONICAL_STATUSES.has(inst)) return inst;
-  if (inst === 'installer_approved') return 'pending_metering';
-  if (inst === 'pending_installer' || inst === 'installer_in_progress') {
-    return 'pending_metering';
-  }
   return null;
 };
 

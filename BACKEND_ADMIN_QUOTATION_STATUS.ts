@@ -669,3 +669,103 @@ export async function patchDealerCallingQueueAction(req, res, db) {
  *
  * This removes false LEAD_005 failures from Recent Actions status edits.
  */
+
+/**
+ * =============================================================================
+ * Payment Management → Admin Installation (release flags) — June 2026
+ * Full spec: BACKEND_INSTALLATION_RELEASE.md
+ * Implemented: controllers/quotationController.ts, utils/quotationApiJson.ts
+ * =============================================================================
+ */
+
+function serializeInstallationReleaseFields(row) {
+  const installationReadyForInstaller = Boolean(
+    row.installationReadyForInstaller ?? row.installation_ready_for_installer ?? false
+  )
+  const installationReleasedAt = row.installationReleasedAt ?? row.installation_released_at ?? null
+  const installationStatus = row.installationStatus ?? row.installation_status ?? null
+  return {
+    installationReadyForInstaller,
+    installation_ready_for_installer: installationReadyForInstaller,
+    installationReleasedAt,
+    installation_released_at: installationReleasedAt,
+    installationStatus,
+    installation_status: installationStatus,
+  }
+}
+
+/**
+ * PATCH /api/quotations/:quotationId/installation-release
+ * Also: PATCH /api/quotations/:id/installation/ready
+ *       PATCH /api/admin/quotations/:id/installation-release
+ */
+export async function patchQuotationInstallationRelease(req, res) {
+  try {
+    const quotationId = req.params.quotationId || req.params.id
+    const body = req.body || {}
+    const installationReadyForInstaller =
+      body.installationReadyForInstaller ?? body.installation_ready_for_installer
+    const installationReleasedAt = body.installationReleasedAt ?? body.installation_released_at
+
+    if (typeof installationReadyForInstaller !== "boolean") {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: "VAL_001",
+          message: "installationReadyForInstaller (or installation_ready_for_installer) must be boolean",
+        },
+      })
+      return
+    }
+
+    const role = req.user?.role
+    const isAccountManager = role === "account-management"
+    const isInventoryAdmin =
+      role === "admin" || role === "super-admin" || role === "super-admin-manager"
+    const isQuotationAdmin = req.dealer && req.dealer.role === "admin"
+    if (!isAccountManager && !isInventoryAdmin && !isQuotationAdmin) {
+      res.status(403).json({
+        success: false,
+        error: { code: "AUTH_004", message: "Insufficient permissions" },
+      })
+      return
+    }
+
+    const quotation = await Quotation.findByPk(quotationId)
+    if (!quotation) {
+      res.status(404).json({
+        success: false,
+        error: { code: "RES_001", message: "Quotation not found" },
+      })
+      return
+    }
+
+    const releaseTimestamp =
+      installationReadyForInstaller === true
+        ? installationReleasedAt
+          ? new Date(installationReleasedAt)
+          : new Date()
+        : null
+
+    await quotation.update({
+      installationReadyForInstaller,
+      installationReleasedAt: releaseTimestamp,
+      installationStatus: installationReadyForInstaller ? "pending_installer" : quotation.installationStatus,
+    })
+    await quotation.reload()
+
+    const row = quotation.get({ plain: true })
+    res.json({
+      success: true,
+      data: {
+        id: quotation.id,
+        quotationId: quotation.id,
+        ...serializeInstallationReleaseFields(row),
+        updatedAt: quotation.updatedAt,
+      },
+    })
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ success: false, error: { code: "SYS_001", message: "Internal error" } })
+  }
+}
