@@ -1,6 +1,6 @@
 # Backend changes handoff (May 2026)
 
-**Single handoff doc for the API team.** Full specs: `BACKEND_CHANGES_REQUIRED.md` (§7.8–§7.9, dealer queue §E–§H, §J, §X, §Y). Reference contracts: `BACKEND_ADMIN_QUOTATION_STATUS.ts`. Implementation: `controllers/callingLeadController.ts`, `controllers/quotationController.ts`, `controllers/visitController.ts`, `controllers/customerController.ts`, `utils/quotationProductPdfDisplay.ts`, `utils/s3Service.ts`.
+**Single handoff doc for the API team.** Full specs: `BACKEND_CHANGES_REQUIRED.md` (§7.8–§7.9, dealer queue **§E.1** / §E–§H, §J, §M–§N, §X, §Y). **Calling queue “current lead disappears before Submit”:** **§4.5.1** (handoff) ↔ **§E.1** (required). Reference contracts: `BACKEND_ADMIN_QUOTATION_STATUS.ts`, `BACKEND_INSTALLATION_RELEASE.md`, `BACKEND_CHANGES_DECIMAL_PRICE_KG_TO_PIECES.md`. Implementation: `controllers/callingLeadController.ts`, `controllers/quotationController.ts`, `controllers/productController.ts`, `controllers/visitController.ts`, `controllers/customerController.ts`, `utils/quotationProductPdfDisplay.ts`, `utils/productUnit.ts`, `utils/s3Service.ts`.
 
 ## Sprint checklist (copy for tracking)
 
@@ -10,6 +10,7 @@
 | 2 | High | PATCH calling action + remarks | **Done** | §4.1 |
 | 3 | High | Queue GET tab buckets | **Done** | §4.4 |
 | 4 | High | `start` without `nextLead` | **Done** | §4.5 |
+| 4b | High | In-progress lead stays `currentLead` until Submit | **Done** | §4.5.1 / §E.1 |
 | 5 | High | Claim on `start` / `LEAD_004` | **Done** | §3 |
 | 6 | High | HR + Admin calling-actions GET | **Done** | §4.8 / §J |
 | 7 | Medium | Customer note on lead PATCH | **Done** | §4.2 |
@@ -29,6 +30,8 @@
 | 21 | Medium | Admin Overview kW — `products` + `systemKw` on list | **Done** | §13 |
 | 22 | Medium | `GET /api/quotations/pricing-tables` (June 2026 defaults) | **Done** | §2.5 |
 | 23 | High | Payment Management → Admin Installation release gate | **Done** | §17 |
+| 24 | High | Inventory — decimal prices + `products.unit` + kg→pieces contract | **Done** | §18 |
+| 25 | Medium | Admin Visitor Reports — `GET /api/admin/visits` | **Done** | §19 |
 
 **Deploy before QA:**
 
@@ -42,6 +45,8 @@ yarn migrate
 | `20260521120000-add-pdf-panel-range-keys-to-quotation-products.js` | `pdfPanelRangeKey`, `pdfDcrPanelRangeKey`, `pdfNonDcrPanelRangeKey` |
 | `20260520120000-add-notes-to-customers.js` | `customers.notes` for calling → quotation prefill |
 | `database/migrations/add_system_kw_to_quotations.sql` (or bootstrap) | `quotations.system_kw` for admin kW + list `systemKw` |
+| `20260415100000-add-installation-release-fields-to-quotations.js` | `installationReadyForInstaller`, `installationReleasedAt` (bootstrap also ensures) |
+| `20260605120000-add-unit-column-to-products.js` | `products.unit` for stock display (Meters, Quantity, Pieces; bootstrap also ensures) |
 
 After migrate, optional backfill: `npx ts-node scripts/backfill-system-kw.ts`
 
@@ -285,6 +290,67 @@ Accepts: `callRemark` / `call_remark`, `statusCategory` / `status_category`, `st
 | `start` | `lead` + `currentLead` (same row, `in_progress`) + `counts` — **no** `nextLead`, **no** full queue snapshot |
 | Outcomes | Full queue snapshot + `nextLead` = new queue head after promote |
 
+### 4.5.1 Active lead must stay `in_progress` until Submit (§E.1)
+
+**Status: implemented** — fixes “current lead disappears before Submit” when FIFO queue head ≠ open call.
+
+| Rule | Backend behavior |
+|------|------------------|
+| `PATCH …/action` **`start`** | Return **same** lead as `in_progress`; **omit** `nextLead`; auto-claim pool lead via **LEAD_004** when unassigned |
+| `GET …/calling-queue/current` | Dealer’s open `in_progress` assignment **must** be `currentLead` (not FIFO head if different) |
+| `GET …/calling-queue/next` | **Do not** return a different head lead while `in_progress` is open — `nextLead: null` |
+| Completion (`called` / `follow_up` / `not_interested` / `rescheduled`) | Persist remarks/status, close assignment, promote queue, return `nextLead` = new head |
+| Concurrency | **One open call per dealer** — `promoteQueuedLeadIfSlotAvailable` skips while `in_progress` exists |
+
+**Wrong (FIFO head steals UI while call is open):**
+
+```json
+{
+  "success": true,
+  "data": {
+    "currentLead": { "leadId": "aaa", "status": "assigned", "name": "Earlier lead" },
+    "nextLead": { "leadId": "bbb", "status": "assigned", "name": "Queue peek" }
+  }
+}
+```
+
+Dealer started **`bbb`** (`in_progress`) but GET returns **`aaa`** because `assignedAt` is earlier.
+
+**Correct (open call wins):**
+
+```json
+{
+  "success": true,
+  "data": {
+    "currentLead": { "leadId": "bbb", "status": "in_progress", "name": "Active call" },
+    "nextLead": null
+  }
+}
+```
+
+After Submit on **`bbb`**:
+
+```json
+{
+  "success": true,
+  "data": {
+    "currentLead": { "leadId": "aaa", "status": "assigned" },
+    "nextLead": { "leadId": "aaa", "status": "assigned" }
+  }
+}
+```
+
+**SQL guard sketch (one open call):**
+
+```sql
+-- Before promoting or returning nextLead, ensure no other in_progress for dealer
+SELECT 1 FROM dealer_lead_assignments
+WHERE "dealerId" = :dealerId AND status = 'in_progress'
+LIMIT 1;
+```
+
+**Code:** `resolveDealerQueueHead()` + `promoteQueuedLeadIfSlotAvailable` early return in `controllers/callingLeadController.ts`.
+
 ### QA
 
 1. Submit with remarks → visible in history GET.
@@ -292,6 +358,8 @@ Accepts: `callRemark` / `call_remark`, `statusCategory` / `status_category`, `st
 3. Double **Start** → same lead until Submit.
 4. **Create Quotation** from calling → customer `notes` saved.
 5. `PATCH` customer note on lead → echoed on next queue GET.
+6. **Start** lead B while lead A is still `assigned` with earlier `assignedAt` → `GET /current` shows B as `currentLead`, `nextLead: null` until Submit.
+7. After Submit on B → `nextLead` advances to A (or next callable row); no stuck `in_progress`.
 
 ### 4.8 HR / Admin — `GET` calling-actions (date & dealer filters) — **§J**
 
@@ -688,6 +756,7 @@ BOTH: DCR kW + Non-DCR kW. CUSTOMIZE: sum all custom panel rows.
 | **2** | HR upload live counts | **Done** |
 | **3** | PDF panel range keys on products (incl. **`tata_530_570`**, Tata `VAL_003`) | **Done** (+ migrate) |
 | **4** | Remarks, tabs, start vs submit, customer note | **Done** (+ customer `notes` migrate) |
+| **4b** | In-progress lead stays `currentLead` until Submit | **Done** — §4.5.1 / §E.1 |
 | **5** | HR/Admin `GET` calling-actions (`dealerId`, dates, `custom`, aliases) | **Done** — §4.8 |
 | **6** | Quotation create stability | **Done** — §5 |
 
@@ -819,12 +888,147 @@ OR installation_released_at IS NOT NULL
 
 `installation_ready_for_installer`, `installation_released_at`, `installation_status`, `installation_scheduled_at`, `installation_team_id` on `quotations`.
 
+**Full spec:** `BACKEND_INSTALLATION_RELEASE.md`
+
+---
+
+## 18. Inventory — decimal prices, product unit, kg → pieces (June 2025)
+
+**Status: implemented in repo.** **Full spec:** `BACKEND_CHANGES_DECIMAL_PRICE_KG_TO_PIECES.md`
+
+Product Manager / Super Admin **Add Product** and **Add Stock**: decimal prices, `unit` on every product, kg catalog items saved as **Pieces** with integer quantity and per-piece price.
+
+### 18.1 — Decimal prices
+
+- `unit_price`, `selling_price`, `default_price`, `cost_price` → `DECIMAL(10,2)` (products may use `DECIMAL(12,2)`).
+- Accept `85.45`, `153.00`; reject negatives only.
+- **Code:** `utils/productUnit.ts` → `roundProductPrice()`; `validations/productValidations.ts`
+
+### 18.2 — Product `unit` column (required)
+
+```sql
+ALTER TABLE products ADD COLUMN IF NOT EXISTS unit VARCHAR(50);
+```
+
+| Operation | Behavior |
+|-----------|----------|
+| `POST /api/products` | Accept `unit`: `Meters`, `Quantity`, `Pieces`, `Kilograms`, … |
+| `PUT /api/products/:id` | Accept `unit`; `PUT { "unit": "Quantity" }` only is valid |
+| `GET /api/products` | Return `unit` on every row (e.g. `900 Meters`, `69 Quantity`) |
+
+Codes normalized on save: `PCS`→`Pieces`, `KGS`→`Kilograms`, `MTR`→`Meters`, `NOS`→`Quantity`.
+
+**Code:** `models/Product.ts`, `controllers/productController.ts`, `utils/productApiFormat.ts`
+
+### 18.3 — Kg → pieces (frontend only; backend stores finals)
+
+| User enters | API receives |
+|-------------|--------------|
+| 10.5 kg | `quantity: 23` (pieces) |
+| ₹340/kg × 0.45 kg/piece | `unit_price: 153.00` (per piece) |
+| Catalog KGS | `unit: "Pieces"` |
+
+**Not sent:** `total_weight_kg`, `weight_per_piece_kg`, `price_per_kg`. No server-side conversion.
+
+### 18.4 — Unit validation (fixes 400)
+
+- Accept display names + codes; **no** catalog-unit mismatch (ex-KGS → `Pieces` OK).
+- Omit `unit` on update → leave unchanged.
+
+### 18.5 — Stock rules
+
+- `stock_to_add` = integer pieces; `new_qty = current + stock_to_add`.
+- Structural/KGS items (nut bolts, J hooks) — serial numbers optional.
+
+### 18.6 — QA checklist
+
+| Test | Expected |
+|------|----------|
+| Create `unit_price: 85.45` | GET returns `85.45` |
+| Create kg product `quantity: 23`, `unit: "Pieces"`, `unit_price: 153.00` | 201, no 400 |
+| `stock_to_add: 11` | Quantity +11 pieces |
+| Custom product `unit: "Meters"` | GET returns `unit` |
+| `PUT` only `{ "unit": "Quantity" }` | Unit updates |
+
+---
+
+## 19. Admin Visitor Reports — `GET /api/admin/visits` (June 2026)
+
+**Status: implemented.** Admin panel **Visitor Reports** tab loads all visits with filters. Until deployed, frontend shows “endpoint not available”.
+
+### 19.1 — Endpoint
+
+```
+GET /api/admin/visits
+Authorization: Bearer {admin_token}
+```
+
+**Fallback:** `GET /api/visits` when JWT is quotation **dealer admin** (`role=admin`) — same payload.
+
+| Actor | `/admin/visits` | `/visits` |
+|-------|-----------------|-----------|
+| Quotation / inventory admin | ✅ | ✅ (fallback) |
+| Dealer (non-admin) | 403 | Own dealer visits only |
+| Visitor | 403 | 403 |
+
+### 19.2 — Query parameters
+
+| Param | Purpose |
+|-------|---------|
+| `status` | `pending`, `approved`, `completed`, `incomplete`, `rejected`, `rescheduled`, or `all` |
+| `visitorId` | Filter by `visit_assignments.visitorId` |
+| `startDate` / `endDate` | `YYYY-MM-DD` on `visitDate` |
+| `search` | Customer, quotation id, location, visitor/dealer name |
+| `page` / `limit` | Pagination (`limit` max **2000** — frontend uses `limit=2000&status=all`) |
+
+### 19.3 — Response row (each visit)
+
+`id`, `quotationId`, `dealerId`, `visitDate`, `visitTime`, `location`, `status`, `visitors[]` → `{ visitorId, visitorName }`, `customer` → `{ firstName, lastName, mobile }`, `dealer` → `{ id, firstName, lastName }`, `rejectionReason`, `notes` (when set). Shape mirrors `GET /api/visitors/me/visits` summary, scoped to all visits.
+
+**Code:** `controllers/visitController.ts` → `getAdminVisits`; `utils/visitApiFormat.ts` → `formatAdminVisitReportRow`
+
+### 19.4 — Details modal (no separate endpoint)
+
+Admin **Details** reuses existing:
+
+```
+GET /api/quotations/{quotationId}/visits
+```
+
+Returns full **completion payload** per visit: `notes`, `length`, `width`, `height`, `unit`, `backLegFeet`, `midLegFeet`, `frontLegFeet`, `images`, `rowDiagramImage`, `meterImage`, presigned URLs (`resolveBrowsableMediaUrl`), `visitors[].visitorName`, `customer.firstName` / `lastName`.
+
+Frontend fallback (works today): same per-quotation GET in a loop — `GET /admin/visits` replaces that for the **list**.
+
+### 19.5 — List vs modal fields
+
+| Endpoint | Media URLs | Names |
+|----------|------------|-------|
+| `GET /admin/visits` (default) | Omitted (faster) | `visitors[].visitorName`, `customer.*`, `dealer.*` |
+| `GET /admin/visits?includeMedia=true` | Included | Same |
+| `GET /quotations/{id}/visits` | Included (modal) | Full completion + names |
+
+### 19.6 — QA
+
+| Test | Expected |
+|------|----------|
+| Admin `GET /admin/visits?limit=2000&status=all` | 200, `data.visits[]` with names (no broken S3 on list) |
+| `GET /quotations/{id}/visits` as admin | Completion fields + browsable image URLs |
+| Dealer token on `/admin/visits` | 403 |
+| `visitorId={uuid}` | Only visits with that assignment |
+| `search=JAGDISH` | Rows matching dealer/visitor/customer/location |
+
+**Full spec:** `BACKEND_CHANGES_REQUIRED.md` §Z / §Z.11
+
 ---
 
 ## Related docs
 
 | Doc | Section |
 |-----|---------|
-| `BACKEND_CHANGES_REQUIRED.md` | §7.7–7.8, dealer queue, §J, §X, **§M** |
+| `BACKEND_CHANGES_REQUIRED.md` | §7.7–7.8, dealer queue, §J, §X, **§M**, **§N**, **§Z** |
+| `API_ENDPOINTS_SUMMARY.md` | `GET /admin/visits` |
+| `API_SPECIFICATION.txt` | §K Admin Visitor Reports |
+| `BACKEND_INSTALLATION_RELEASE.md` | Installation release PATCH + GET contract |
+| `BACKEND_CHANGES_DECIMAL_PRICE_KG_TO_PIECES.md` | Decimal prices + unit + kg→pieces |
 | `BACKEND_ADMIN_QUOTATION_STATUS.ts` | Reference contracts |
 

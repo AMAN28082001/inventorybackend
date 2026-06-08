@@ -1,0 +1,66 @@
+================================================================================
+API SPECIFICATION (excerpt) — Chairbord Solar Inventory / Quotation Backend
+================================================================================
+
+K. GET ALL VISITS — ADMIN VISITOR REPORTS
+--------------------------------------------------------------------------------
+
+Endpoint (primary):
+  GET /api/admin/visits
+
+Authorization:
+  Bearer {admin_token}
+  Allowed: quotation dealer JWT with role=admin; inventory admin / super-admin.
+
+Fallback:
+  GET /api/visits
+  Same response when quotation dealer JWT has role=admin.
+
+Forbidden:
+  Non-admin dealer → 403 on /admin/visits; /visits returns own dealer rows only.
+  Visitor JWT → 403 on both.
+
+Query parameters:
+  status       pending | approved | completed | incomplete | rejected | rescheduled | all
+  visitorId    Filter visits assigned to this visitor (visit_assignments)
+  startDate    YYYY-MM-DD (visitDate lower bound)
+  endDate      YYYY-MM-DD (visitDate upper bound)
+  search       Customer name/mobile, quotation id, location, visitor/dealer name
+  page         Page number (default 1)
+  limit        Page size (default 20, max 2000)
+
+Response 200:
+  {
+    "success": true,
+    "data": {
+      "visits": [
+        {
+          "id": "string",
+          "quotationId": "string",
+          "dealerId": "string",
+          "visitDate": "YYYY-MM-DD",
+          "visitTime": "string",
+          "location": "string",
+          "status": "pending|approved|completed|...",
+          "visitors": [{ "visitorId": "string", "visitorName": "string" }],
+          "customer": { "firstName": "string", "lastName": "string", "mobile": "string" },
+          "dealer": { "id": "string", "firstName": "string", "lastName": "string" },
+          "rejectionReason": "string|null",
+          "notes": "string|null"
+        }
+      ],
+      "pagination": { "page", "limit", "total", "totalPages", "hasNext", "hasPrev" }
+    }
+  }
+
+Notes:
+  - Row shape mirrors GET /api/visitors/me/visits (summary), scoped to all visits.
+  - Frontend typically calls limit=2000&status=all; tab filters are client-side.
+  - Cache-Control: no-store on list responses.
+
+Reference:
+  BACKEND_CHANGES_REQUIRED.md §Z
+  BACKEND_CHANGES_HANDOFF.md §19
+  controllers/visitController.ts → getAdminVisits
+
+================================================================================

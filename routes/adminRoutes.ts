@@ -54,6 +54,7 @@ import {
   updateInstallationScheduledAtSchema
 } from '../validations/quotationValidations';
 import { adminUpdateDealerSchema } from '../validations/dealerValidations';
+import { getAdminVisits } from '../controllers/visitController';
 
 const router: Router = express.Router();
 
@@ -71,6 +72,12 @@ router.use(authenticate);
  */
 router.get('/quotations', getAllQuotations);
 router.get('/quotations/:quotationId', getAdminQuotationById);
+
+/**
+ * Admin Visitor Reports — all visits (admin / super-admin only).
+ * Fallback for frontend: GET /api/visits when quotation dealer JWT has role=admin.
+ */
+router.get('/visits', authorizeAdmin, getAdminVisits);
 
 // All routes below require admin authorization
 router.use(authorizeAdmin);

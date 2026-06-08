@@ -1,7 +1,16 @@
 import { Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { Op } from 'sequelize';
-import { Visit, VisitAssignment, Quotation, Visitor, Customer } from '../models/index-quotation';
+import { Visit, VisitAssignment, Quotation, Visitor, Customer, Dealer } from '../models/index-quotation';
+import {
+  applyVisitListNoCacheHeaders,
+  formatAdminVisitReportListRow,
+  formatAdminVisitReportRow,
+  formatVisitCompletionPayload,
+  getVisitStatusDbVariants,
+  normalizeVisitStatusQuery,
+  visitMatchesAdminSearch
+} from '../utils/visitApiFormat';
 import { logError, logInfo } from '../utils/loggerHelper';
 import {
   extractS3Key,
@@ -402,7 +411,137 @@ export const createVisit = async (req: Request, res: Response): Promise<void> =>
   }
 };
 
-// Get all visits for dealer (visit schedule)
+const isAdminVisitorReportsActor = (req: Request): boolean => {
+  const isQuotationAdmin = Boolean(req.dealer && req.dealer.role === 'admin');
+  const role = req.user?.role;
+  const isInventoryAdmin =
+    role === 'admin' || role === 'super-admin' || role === 'super-admin-manager';
+  return isQuotationAdmin || isInventoryAdmin;
+};
+
+/** GET /api/admin/visits — all visits for Admin Visitor Reports (admin only). */
+export const getAdminVisits = async (req: Request, res: Response): Promise<void> => {
+  try {
+    if (!isAdminVisitorReportsActor(req)) {
+      res.status(403).json({
+        success: false,
+        error: { code: 'AUTH_004', message: 'Insufficient permissions. Admin access required.' }
+      });
+      return;
+    }
+
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = Math.min(parseInt(req.query.limit as string) || 20, 2000);
+    const offset = (page - 1) * limit;
+    const statusQuery = normalizeVisitStatusQuery(req.query.status as string);
+    const visitorId = String(req.query.visitorId || '').trim() || undefined;
+    const startDate = req.query.startDate as string | undefined;
+    const endDate = req.query.endDate as string | undefined;
+    const search = String(req.query.search || '').trim();
+
+    const where: any = {};
+    if (statusQuery !== 'all') {
+      where.status = { [Op.in]: getVisitStatusDbVariants(statusQuery) };
+    }
+    if (startDate || endDate) {
+      where.visitDate = {};
+      if (startDate) where.visitDate[Op.gte] = startDate;
+      if (endDate) where.visitDate[Op.lte] = endDate;
+    }
+    if (visitorId) {
+      const assigned = await VisitAssignment.findAll({
+        where: { visitorId },
+        attributes: ['visitId']
+      });
+      const visitIds = [...new Set(assigned.map((a) => a.visitId))];
+      where.id = { [Op.in]: visitIds.length > 0 ? visitIds : ['__no_visits__'] };
+    }
+
+    const visits = await Visit.findAndCountAll({
+      where,
+      include: [
+        {
+          model: VisitAssignment,
+          as: 'assignments',
+          required: false,
+          include: [
+            {
+              model: Visitor,
+              as: 'visitor',
+              required: false,
+              attributes: ['id', 'firstName', 'lastName']
+            }
+          ]
+        },
+        {
+          model: Quotation,
+          as: 'quotation',
+          required: false,
+          attributes: ['id', 'systemType', 'finalAmount', 'dealerId'],
+          include: [
+            {
+              model: Customer,
+              as: 'customer',
+              required: false,
+              attributes: ['id', 'firstName', 'lastName', 'mobile']
+            },
+            {
+              model: Dealer,
+              as: 'dealer',
+              required: false,
+              attributes: ['id', 'firstName', 'lastName']
+            }
+          ]
+        }
+      ],
+      limit: search ? undefined : limit,
+      offset: search ? undefined : offset,
+      order: [['visitDate', 'DESC'], ['visitTime', 'ASC']],
+      distinct: true,
+      subQuery: false
+    });
+
+    let rows = visits.rows;
+    if (search) {
+      rows = rows.filter((v) => visitMatchesAdminSearch(v, search));
+    }
+    const total = search ? rows.length : visits.count;
+    const pagedRows = search ? rows.slice(offset, offset + limit) : rows;
+
+    const includeMedia =
+      String(req.query.includeMedia || req.query.include_media || '')
+        .trim()
+        .toLowerCase() === 'true';
+
+    const formattedVisits = includeMedia
+      ? await Promise.all(pagedRows.map((v) => formatAdminVisitReportRow(v as any)))
+      : pagedRows.map((v) => formatAdminVisitReportListRow(v as any));
+
+    applyVisitListNoCacheHeaders(res);
+    res.json({
+      success: true,
+      data: {
+        visits: formattedVisits,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.max(1, Math.ceil(total / limit)),
+          hasNext: page < Math.ceil(total / limit),
+          hasPrev: page > 1
+        }
+      }
+    });
+  } catch (error) {
+    logError('Get admin visits error', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
+};
+
+// Get all visits for dealer (visit schedule); quotation admin may load all visits (fallback for reports).
 export const getAllVisits = async (req: Request, res: Response): Promise<void> => {
   try {
     if (!req.dealer) {
@@ -410,6 +549,11 @@ export const getAllVisits = async (req: Request, res: Response): Promise<void> =
         success: false,
         error: { code: 'AUTH_003', message: 'User not authenticated' }
       });
+      return;
+    }
+
+    if (isAdminVisitorReportsActor(req)) {
+      await getAdminVisits(req, res);
       return;
     }
 
@@ -769,16 +913,44 @@ export const getVisitsForQuotation = async (req: Request, res: Response): Promis
               attributes: ['id', 'username', 'firstName', 'lastName', 'email', 'mobile', 'employeeId', 'isActive']
             }
           ]
+        },
+        {
+          model: Quotation,
+          as: 'quotation',
+          required: false,
+          attributes: ['id', 'dealerId'],
+          include: [
+            {
+              model: Customer,
+              as: 'customer',
+              required: false,
+              attributes: ['id', 'firstName', 'lastName', 'mobile', 'email']
+            },
+            {
+              model: Dealer,
+              as: 'dealer',
+              required: false,
+              attributes: ['id', 'firstName', 'lastName']
+            }
+          ]
+        },
+        {
+          model: Dealer,
+          as: 'dealer',
+          required: false,
+          attributes: ['id', 'firstName', 'lastName']
         }
       ],
       order: [['visitDate', 'DESC'], ['visitTime', 'DESC']]
     });
 
-    const mappedVisits = await Promise.all(visits.map(async (v) => mapVisitDetailPayload(v)));
+    const mappedVisits = await Promise.all(visits.map((v) => formatVisitCompletionPayload(v as any)));
 
+    applyVisitListNoCacheHeaders(res);
     res.json({
       success: true,
       data: {
+        quotationId,
         visits: mappedVisits
       }
     });

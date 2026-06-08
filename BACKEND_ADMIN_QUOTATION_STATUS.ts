@@ -526,10 +526,13 @@ export function callingActionToApiJson(row) {
 }
 
 /**
- * GET /dealers/me/calling-queue/next
+ * GET /dealers/me/calling-queue/next  (alias: /current)
  * IMPORTANT backend behavior:
  * - Do not hard-cap action history to 10.
  * - Return full action history by default OR support client-controlled pagination.
+ * - §4.5.1 / §E.1: when dealer has an open in_progress assignment, currentLead MUST be
+ *   that row (not FIFO queue head). nextLead must be null until Submit closes the call.
+ *   promoteQueuedLeadIfSlotAvailable must not run while in_progress is open.
  *
  * Recommended:
  *   const limit = req.query.limit ? clamp(Number(req.query.limit), 1, 5000) : 1000
@@ -538,7 +541,8 @@ export function callingActionToApiJson(row) {
  * Response shape example:
  * {
  *   success: true,
- *   currentLead: {...},
+ *   currentLead: {...},           // in_progress when call is open
+ *   nextLead: null,               // null while in_progress; new head after Submit
  *   scheduledLeads: [...],
  *   recentActions: actionRows.map(callingActionToApiJson),  // no fixed 10-row slice
  *   counts: { pending, queued, scheduled, completed }
@@ -558,6 +562,9 @@ export function callingActionToApiJson(row) {
  *     }
  *
  * Backend MUST:
+ * - On action "start": return lead + currentLead (same in_progress row) + counts;
+ *   omit nextLead (see HANDOFF §4.5.1 / REQUIRED §E.1).
+ * - On outcome actions: persist remarks, close assignment, return full snapshot with nextLead.
  * - Parse payload.callRemark using parseTaggedCallRemark()
  * - Persist values separately:
  *     status_category   (or statusCategory)

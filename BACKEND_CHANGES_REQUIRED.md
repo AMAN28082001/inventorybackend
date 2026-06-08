@@ -182,10 +182,14 @@ if (isTataDcrPackageSet(products)) {
 
 | Priority | Topic | Status |
 |----------|--------|--------|
+| **High** | Payment Management → Installation release | **Done** — §M, HANDOFF §17, `BACKEND_INSTALLATION_RELEASE.md` |
+| **High** | Inventory decimal prices + `products.unit` + kg→pieces | **Done** — §N, HANDOFF §18, `BACKEND_CHANGES_DECIMAL_PRICE_KG_TO_PIECES.md` |
+| **Medium** | Admin Visitor Reports `GET /api/admin/visits` | **Done** — §Z, HANDOFF §19 |
 | **High** | Tata DCR + `tata_530_570` + `VAL_003` fix | **Done** — §X.6, HANDOFF §2.6 |
 | **High** | Persist/return `pdf_panel_range_key` on GET | **Done** |
 | **High** | HR upload live counts | **Done** — §7.8 |
-| **High** | Calling queue `LEAD_004` + remarks | **Done** |
+| **High** | Calling queue `LEAD_004` + remarks | **Done** — §E |
+| **High** | In-progress lead stays `currentLead` until Submit | **Done** — §E.1, HANDOFF §4.5.1 |
 | **Medium** | Tata pricing in `GET /pricing-tables` | **Done** (defaults) |
 
 Until GET echoes `pdf_panel_range_key`, frontend overview/PDF may show wrong panel text after full reload despite client-side inference.
@@ -406,11 +410,235 @@ Photo upload with `installationStatus=installer_approved` persists **`installer_
 | Topic | Backend action |
 |-------|----------------|
 | Decimal prices | `DECIMAL` columns; `roundProductPrice()`; accept `85.45`, `153.00` (per-piece) |
+| Product `unit` | `products.unit` VARCHAR(50); POST/PUT all products; GET returns unit (Meters, Quantity, Pieces, …) |
 | Kg products | Frontend converts weight **and** price; API gets integer pieces + per-piece `unit_price` |
-| Unit validation | Accept display names + codes; allow Pieces for ex-KGS catalog items; no catalog mismatch |
-| Persistence | `products.unit` column; normalize PCS→Pieces |
+| Unit validation | Display names + codes; Pieces for ex-KGS; omit `unit` on update → unchanged |
 | Stock | `stock_to_add` adds integer pieces; structural/KGS items — no serials |
-| GET | `formatProductForApi` — 2dp prices + stored `unit` |
-| No backend conversion | Do not compute kg→pieces or ₹/kg→per-piece unless audit columns added later |
+| GET | `formatProductForApi` — 2dp prices + `unit` on every row |
+| No backend conversion | Store final values only unless audit columns added later |
 
 **Endpoints:** `POST /api/products`, `PUT /api/products/:id`, `GET /api/products`, `GET /api/products/:id`
+
+---
+
+## §Z — Admin Visitor Reports (`GET /api/admin/visits`)
+
+**Handoff:** `BACKEND_CHANGES_HANDOFF.md` §19. **Status: implemented.**
+
+### Z.1 — Endpoint
+
+`GET /api/admin/visits` — admin / super-admin only (`authorizeAdmin`).
+
+Fallback: `GET /api/visits` when quotation dealer JWT has `role=admin` (delegates to same handler).
+
+### Z.2 — Auth
+
+| Role | `/api/admin/visits` | `/api/visits` |
+|------|---------------------|---------------|
+| Quotation admin / inventory admin | 200 | 200 (admin fallback) |
+| Dealer (non-admin) | 403 | Own `dealerId` rows |
+| Visitor | 403 | 403 |
+
+### Z.3 — Query: `status`
+
+Values: `pending`, `approved`, `completed`, `incomplete`, `rejected`, `rescheduled`, `all` (default all when omitted). Aliases `approve`/`complete`/`reject`/`reschedule` map to DB variants.
+
+### Z.4 — Query: `visitorId`
+
+Filters visits that have a `visit_assignments` row for that visitor.
+
+### Z.5 — Query: `startDate` / `endDate`
+
+Inclusive filter on `visits.visitDate` (`DATE`), format `YYYY-MM-DD`.
+
+### Z.6 — Query: `search`
+
+Case-insensitive match on: visit id, quotation id, location, customer name/mobile, dealer name, visitor name.
+
+### Z.7 — Query: `page` / `limit`
+
+Default `page=1`, `limit=20`, max `limit=2000`. Frontend loads `limit=2000&status=all` for client-side tab filters.
+
+### Z.8 — Response shape
+
+```json
+{
+  "success": true,
+  "data": {
+    "visits": [
+      {
+        "id": "visit-uuid",
+        "quotationId": "QT-XXXX",
+        "dealerId": "dealer-uuid",
+        "visitDate": "2026-06-05",
+        "visitTime": "10:00 - 11:00",
+        "location": "Jaipur",
+        "status": "pending",
+        "visitors": [{ "visitorId": "…", "visitorName": "Rahul Kumar" }],
+        "customer": { "firstName": "Amit", "lastName": "Sharma", "mobile": "9876543210" },
+        "dealer": { "id": "…", "firstName": "JAGDISH", "lastName": "YADAV" },
+        "rejectionReason": null,
+        "notes": null
+      }
+    ],
+    "pagination": { "page": 1, "limit": 2000, "total": 42, "totalPages": 1, "hasNext": false, "hasPrev": false }
+  }
+}
+```
+
+### Z.9 — Includes / joins
+
+`visit_assignments` + `visitors`, `quotations` + `customers` + `dealers`. Media URLs presigned via `resolveBrowsableMediaUrl(s)` when present.
+
+### Z.10 — Caching
+
+`Cache-Control: no-store` on list responses.
+
+### Z.11 — Details modal: `GET /quotations/{id}/visits`
+
+**No separate completion endpoint.** Admin Details modal uses per-quotation visits (same as frontend fallback today).
+
+**Auth:** `authorizeDealerAdminOrVisitor` — quotation **admin** sees any quotation; dealer sees own.
+
+**Each visit must include (completion + names):**
+
+| Field | Notes |
+|-------|--------|
+| `notes`, `length`, `width`, `height`, `unit` | Site / completion |
+| `backLegFeet`, `midLegFeet`, `frontLegFeet` | + snake_case aliases |
+| `images`, `rowDiagramImage`, `meterImage` | Presigned/browsable URLs (§U pattern) |
+| `visitors[]` | `visitorId`, **`visitorName`**, `firstName`, `lastName` |
+| `customer` | `firstName`, `lastName`, `mobile`, `fullName` |
+| `quotationId`, `dealerId`, `status` | Top-level ids |
+
+**Code:** `formatVisitCompletionPayload()` in `utils/visitApiFormat.ts`; called from `getVisitsForQuotation`.
+
+### Z.12 — Admin list performance
+
+- `GET /admin/visits` default: **no** completion images on list rows (names only).
+- Optional `?includeMedia=true` if list needs thumbnails.
+- Modal loads media via `GET /quotations/{id}/visits`.
+
+### Z.13 — Test plan
+
+1. Admin `GET /admin/visits?limit=2000&status=all` → visits with `visitorName` + customer names (not UUID-only / N/A)
+2. Dealer JWT → 403 on `/admin/visits`
+3. `GET /quotations/{qtId}/visits` → `notes`, dimensions, presigned `rowDiagramImage` / `images`
+4. `visitorId` filter → subset only
+5. `search` matches customer or dealer name
+6. Quotation admin `GET /visits?limit=2000` → same list shape as `/admin/visits`
+
+**Code:** `controllers/visitController.ts` → `getAdminVisits`, `getVisitsForQuotation`; `routes/adminRoutes.ts`; `utils/visitApiFormat.ts`
+
+---
+
+## §E — Dealer calling queue (remarks, tabs, LEAD_004)
+
+**Handoff:** `BACKEND_CHANGES_HANDOFF.md` §3–§4, §4.8. **Status: implemented.**
+
+| Area | Endpoints | Notes |
+|------|-----------|--------|
+| Claim / assign | `POST …/claim`, `POST …/assign`, `PATCH …/:leadId` | Pool lead → dealer assignment; **LEAD_004** when owned by another dealer |
+| Action PATCH | `PATCH …/calling-queue/{leadId}/action` | `start`, outcomes, tagged remarks — see `lib/calling-remark-payload.ts` |
+| Queue GET | `GET …/calling-queue/current`, `GET …/calling-queue/next` | Tab buckets: `scheduledLeads`, `dialledActions`, `connectedActions`, etc. |
+| HR / Admin history | `GET /api/hr/calling-actions`, `GET /api/admin/calling-actions` | `dealerId`, `range`, `startDate`/`endDate` — see `lib/api.ts` |
+
+**Reference:** `BACKEND_ADMIN_QUOTATION_STATUS.ts` (`patchDealerCallingQueueAction`, `callingActionToApiJson`).
+
+---
+
+## §E.1 — Active lead until Submit (`in_progress` must not disappear)
+
+**Handoff:** `BACKEND_CHANGES_HANDOFF.md` **§4.5.1**. **Status: implemented.**
+
+Fixes dealer UI bug: after **Start Call**, the active row vanished because `GET /current` returned FIFO queue head (`assigned`) instead of the open `in_progress` assignment.
+
+### E.1.1 — Endpoint contract
+
+| Endpoint | When dealer has open `in_progress` | When no open call |
+|----------|-------------------------------------|-------------------|
+| `PATCH …/action` `start` | `lead` + `currentLead` (same, `in_progress`), `counts` — **no** `nextLead` | Same; claim via LEAD_004 if pool lead |
+| `GET …/current` | `currentLead` = open `in_progress` row; `nextLead: null` | `currentLead` / `nextLead` = callable FIFO head |
+| `GET …/next` | Same as `/current` (alias) — **no** different head | Callable FIFO head |
+| `PATCH …/action` outcome | Close row → promote → full snapshot; `nextLead` = new head | Same |
+
+### E.1.2 — Response shapes
+
+**`start` (200):**
+
+```json
+{
+  "success": true,
+  "data": {
+    "lead": { "leadId": "…", "status": "in_progress" },
+    "currentLead": { "leadId": "…", "status": "in_progress" },
+    "pendingCount": 1,
+    "counts": { "pending": 1, "queued": 0, "scheduled": 0, "completed": 12 }
+  }
+}
+```
+
+**`GET /current` while call open:**
+
+```json
+{
+  "success": true,
+  "data": {
+    "currentLead": { "leadId": "…", "status": "in_progress" },
+    "nextLead": null,
+    "queue": [ "... includes in_progress and other callable rows ..." ]
+  }
+}
+```
+
+**Outcome Submit (200):**
+
+```json
+{
+  "success": true,
+  "data": {
+    "leadId": "…",
+    "status": "called",
+    "assignmentStatus": "completed",
+    "currentLead": { "leadId": "next-…", "status": "assigned" },
+    "nextLead": { "leadId": "next-…", "status": "assigned" }
+  }
+}
+```
+
+### E.1.3 — Concurrency
+
+- **Recommended:** one open `in_progress` per dealer.
+- `promoteQueuedLeadIfSlotAvailable` returns early when any `in_progress` exists for that dealer (prevents queue skip during active call).
+
+### E.1.4 — Checklist
+
+| # | Item | Status |
+|---|------|--------|
+| 1 | `start` omits `nextLead` | Done |
+| 2 | `GET /current` prefers `in_progress` over FIFO head | Done — `resolveDealerQueueHead()` |
+| 3 | `GET /next` does not peek past open call | Done — `nextLead: null` |
+| 4 | Completion returns `nextLead` after close + promote | Done |
+| 5 | Pool claim on `start` (LEAD_004) | Done — §3 |
+| 6 | No promote while `in_progress` open | Done |
+
+### E.1.5 — QA
+
+1. Assign leads A (earlier `assignedAt`) and B to same dealer; **Start** B → UI keeps B until Submit.
+2. `GET /current` after Start → `currentLead.status === "in_progress"`, `nextLead === null`.
+3. Submit **called** on B → `nextLead` is A or next callable row; B not in pending queue.
+4. Dealer B cannot steal dealer A’s `in_progress` lead (`LEAD_004`).
+5. Double **Start** on same lead → idempotent `in_progress`, same `currentLead`.
+
+**Code:** `controllers/callingLeadController.ts` — `resolveDealerQueueHead`, `buildDealerQueueSnapshot`, `updateDealerCallingQueueAction`, `promoteQueuedLeadIfSlotAvailable`.
+
+---
+
+## File index (May–June 2026 handoff)
+
+| Doc / code | Topics |
+|------------|--------|
+| `BACKEND_CHANGES_HANDOFF.md` | Sprint checklist, §1 HR counts, §3–§4 calling, **§4.5.1**, §17 installation, §18 products, §19 visits |
+| `BACKEND_CHANGES_REQUIRED.md` | §X PDF, §Y priority, §7.9 dashboard, §M/N/Z, **§E / §E.1** calling queue |
+| `BACKEND_ADMIN_QUOTATION_STATUS.ts` | HR upload reference, `patchDealerCallingQueueAction` |
+| `controllers/callingLeadController.ts` | Calling queue implementation |

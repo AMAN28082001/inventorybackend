@@ -889,6 +889,19 @@ const promoteQueuedLeadIfSlotAvailable = async (
   // Keep argument for backward compatibility with callers.
   void activeLimitPerDealer;
 
+  // §4.5.1 / §E.1 — one open call per dealer: do not promote while in_progress is open.
+  const openCallCount = await DealerLeadAssignment.count({
+    where: {
+      [Op.and]: [
+        { dealerId, status: 'in_progress' },
+        LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE,
+        dealerBatchEligibilityClause(dealerId)
+      ]
+    },
+    transaction
+  });
+  if (openCallCount > 0) return;
+
   const queued = await DealerLeadAssignment.findOne({
     where: {
       dealerId,
@@ -2247,6 +2260,22 @@ const buildRecentActions = async (dealerId: string, limit = 1000) => {
   return out;
 };
 
+/** §4.5.1 / §E.1 — open in_progress row is currentLead; omit nextLead until Submit. */
+const resolveDealerQueueHead = (queue: any[]) => {
+  const inProgressRows = queue.filter((row) => row?.status === 'in_progress');
+  if (inProgressRows.length) {
+    const openCall = inProgressRows.sort((a, b) => {
+      const aAt = a?.actionAt ? new Date(a.actionAt).getTime() : 0;
+      const bAt = b?.actionAt ? new Date(b.actionAt).getTime() : 0;
+      return aAt - bAt;
+    })[0];
+    return { lead: openCall, currentLead: openCall, nextLead: null };
+  }
+
+  const head = queue.length ? queue[0] : null;
+  return { lead: head, currentLead: head, nextLead: head };
+};
+
 const buildDealerQueueSnapshot = async (dealerId: string, recentActionsLimit = 1000) => {
   const [queue, counts, scheduledLeads, recentActions] = await Promise.all([
     buildCallableQueue(dealerId),
@@ -2254,7 +2283,7 @@ const buildDealerQueueSnapshot = async (dealerId: string, recentActionsLimit = 1
     buildScheduledLeads(dealerId),
     buildRecentActions(dealerId, recentActionsLimit)
   ]);
-  const lead = queue.length ? queue[0] : null;
+  const { lead, currentLead, nextLead } = resolveDealerQueueHead(queue);
 
   const dialledActions = filterDialledActions(recentActions);
   const connectedActions = dialledActions.filter((row: any) => classifyActionStage(row) === 'connected');
@@ -2262,8 +2291,8 @@ const buildDealerQueueSnapshot = async (dealerId: string, recentActionsLimit = 1
 
   return {
     lead,
-    currentLead: lead,
-    nextLead: lead,
+    currentLead,
+    nextLead,
     queue,
     leads: queue,
     pendingLeads: queue,
