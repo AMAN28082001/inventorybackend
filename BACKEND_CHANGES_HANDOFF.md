@@ -1,6 +1,6 @@
 # Backend changes handoff (May 2026)
 
-**Single handoff doc for the API team.** Full specs: `BACKEND_CHANGES_REQUIRED.md` (§7.8–§7.9, dealer queue **§E.1** / §E–§H, §J, §M–§N, §X, §Y). **Calling queue “current lead disappears before Submit”:** **§4.5.1** (handoff) ↔ **§E.1** (required). Reference contracts: `BACKEND_ADMIN_QUOTATION_STATUS.ts`, `BACKEND_INSTALLATION_RELEASE.md`, `BACKEND_CHANGES_DECIMAL_PRICE_KG_TO_PIECES.md`. Implementation: `controllers/callingLeadController.ts`, `controllers/quotationController.ts`, `controllers/productController.ts`, `controllers/visitController.ts`, `controllers/customerController.ts`, `utils/quotationProductPdfDisplay.ts`, `utils/productUnit.ts`, `utils/s3Service.ts`.
+**Single handoff doc for the API team.** Full specs: `BACKEND_CHANGES_REQUIRED.md` (§7.8–§7.9, dealer queue **§E.1 / §E.2** / §E–§H, §J, §M–§N, §X, §Y). **Calling queue:** **§4.5.1** / **§E.1** (active lead until Submit); **§4.5.2** / **§E.2** (reschedule / Decision Pending — no 500). Reference contracts: `BACKEND_ADMIN_QUOTATION_STATUS.ts`, `BACKEND_INSTALLATION_RELEASE.md`, `BACKEND_CHANGES_DECIMAL_PRICE_KG_TO_PIECES.md`. Implementation: `controllers/callingLeadController.ts`, `controllers/quotationController.ts`, `controllers/productController.ts`, `controllers/visitController.ts`, `controllers/customerController.ts`, `utils/quotationProductPdfDisplay.ts`, `utils/productUnit.ts`, `utils/s3Service.ts`.
 
 ## Sprint checklist (copy for tracking)
 
@@ -11,6 +11,7 @@
 | 3 | High | Queue GET tab buckets | **Done** | §4.4 |
 | 4 | High | `start` without `nextLead` | **Done** | §4.5 |
 | 4b | High | In-progress lead stays `currentLead` until Submit | **Done** | §4.5.1 / §E.1 |
+| 4c | High | Reschedule / Decision Pending Submit (no 500) | **Done** | §4.5.2 / §E.2 |
 | 5 | High | Claim on `start` / `LEAD_004` | **Done** | §3 |
 | 6 | High | HR + Admin calling-actions GET | **Done** | §4.8 / §J |
 | 7 | Medium | Customer note on lead PATCH | **Done** | §4.2 |
@@ -47,6 +48,7 @@ yarn migrate
 | `database/migrations/add_system_kw_to_quotations.sql` (or bootstrap) | `quotations.system_kw` for admin kW + list `systemKw` |
 | `20260415100000-add-installation-release-fields-to-quotations.js` | `installationReadyForInstaller`, `installationReleasedAt` (bootstrap also ensures) |
 | `20260605120000-add-unit-column-to-products.js` | `products.unit` for stock display (Meters, Quantity, Pieces; bootstrap also ensures) |
+| `20260606120000-ensure-calling-remark-text-columns.js` | `callRemark` TEXT on assignments + action history (§E.2) |
 
 After migrate, optional backfill: `npx ts-node scripts/backfill-system-kw.ts`
 
@@ -262,9 +264,18 @@ Assign/claim endpoints reject a different dealer’s `assignedDealerId`; **`PATC
 
 Accepts: `callRemark` / `call_remark`, `statusCategory` / `status_category`, `statusText` / `status_text`, `statusLabel`, `remark`, tagged `[category] label | free text`.
 
+| Field | Aliases | Notes |
+|-------|---------|--------|
+| Follow-up datetime | `nextFollowUpAt`, `next_follow_up_at` | ISO UTC; **required** for `rescheduled` |
+| Status category | `statusCategory`, `statusCategoryKey`, `status_category` | e.g. `schedule` for Callback Scheduled |
+| Status label | `statusText`, `status_text`, `statusLabel` | e.g. `Callback Scheduled` |
+| Free remark | `remark`, tail after `\|` in `callRemark` | Stored in history `statusReason` |
+
 - **`start`:** remark optional; sets `in_progress` + assignee.
 - **Outcomes** (`called`, `follow_up`, `not_interested`, `rescheduled`): require `callRemark` **or** `statusCategory` + `statusText` (unless `editMode`).
+- **`follow_up` + `nextFollowUpAt`** → treated as **`rescheduled`** (assignment `status: rescheduled`, not `completed`).
 - Persists on assignment + `calling_action_history`; echoed on GET queue/history.
+- **`call_remark`:** replace with one tagged string — do **not** append nested `[schedule] …` chains.
 
 ### 4.2 Customer note
 
@@ -351,6 +362,46 @@ LIMIT 1;
 
 **Code:** `resolveDealerQueueHead()` + `promoteQueuedLeadIfSlotAvailable` early return in `controllers/callingLeadController.ts`.
 
+### 4.5.2 Reschedule / Decision Pending Submit (§E.2)
+
+**Status: implemented** — fixes **500** on Connected → Decision Pending → Callback Scheduled + datetime.
+
+| Requirement | Backend behavior |
+|-------------|------------------|
+| Actions | Accept `rescheduled` (preferred); `follow_up` + `nextFollowUpAt` → same as `rescheduled` |
+| Datetime | Read `nextFollowUpAt` **and** `next_follow_up_at` (ISO UTC) |
+| Assignment status | `rescheduled` — **not** `completed` |
+| Remarks | `status_category: schedule`, `statusText: Callback Scheduled`; single tagged `call_remark` |
+| Replace | `buildTaggedCallRemark()` — no nested `[schedule] [schedule] …` append |
+| Columns | `callRemark` / `call_remark` as **TEXT** (migration `20260606120000`) |
+| Errors | Missing datetime → **400** `VAL_001`; bad transition → **409** `LEAD_005`; never uncaught **500** |
+| Transition | `in_progress` → `rescheduled` for assignee |
+| Response | `lead`, `nextLead`, row in `scheduledLeads` when `nextFollowUpAt` is in the future |
+
+**Example PATCH body (frontend):**
+
+```json
+{
+  "action": "rescheduled",
+  "callRemark": "[schedule] Callback Scheduled | 6 kw panels",
+  "statusCategory": "schedule",
+  "statusText": "Callback Scheduled",
+  "nextFollowUpAt": "2026-06-11T05:07:00.000Z",
+  "next_follow_up_at": "2026-06-11T05:07:00.000Z"
+}
+```
+
+**Common 500 causes (now guarded):**
+
+| Cause | Fix |
+|-------|-----|
+| `rescheduled` missing from action enum | In Zod + DB enum |
+| Ignoring `nextFollowUpAt` / snake_case alias | `resolveNextFollowUpAtFromRequest()` + Zod transform |
+| `call_remark` VARCHAR overflow | TEXT migration + replace-not-append |
+| Uncaught transition / DB errors | `LEAD_005` + `VAL_001` handlers |
+
+**Code:** `validations/callingLeadValidations.ts`, `updateDealerCallingQueueAction` in `controllers/callingLeadController.ts`.
+
 ### QA
 
 1. Submit with remarks → visible in history GET.
@@ -360,6 +411,9 @@ LIMIT 1;
 5. `PATCH` customer note on lead → echoed on next queue GET.
 6. **Start** lead B while lead A is still `assigned` with earlier `assignedAt` → `GET /current` shows B as `currentLead`, `nextLead: null` until Submit.
 7. After Submit on B → `nextLead` advances to A (or next callable row); no stuck `in_progress`.
+8. **Reschedule** with datetime → **200**, assignment `status: rescheduled`, lead appears in `scheduledLeads`, no **500**.
+9. Submit with only `next_follow_up_at` (no camelCase) → **200** (alias read).
+10. `follow_up` + `nextFollowUpAt` → same as `rescheduled` (frontend fallback path).
 
 ### 4.8 HR / Admin — `GET` calling-actions (date & dealer filters) — **§J**
 
@@ -757,6 +811,7 @@ BOTH: DCR kW + Non-DCR kW. CUSTOMIZE: sum all custom panel rows.
 | **3** | PDF panel range keys on products (incl. **`tata_530_570`**, Tata `VAL_003`) | **Done** (+ migrate) |
 | **4** | Remarks, tabs, start vs submit, customer note | **Done** (+ customer `notes` migrate) |
 | **4b** | In-progress lead stays `currentLead` until Submit | **Done** — §4.5.1 / §E.1 |
+| **4c** | Reschedule / Decision Pending Submit | **Done** — §4.5.2 / §E.2 |
 | **5** | HR/Admin `GET` calling-actions (`dealerId`, dates, `custom`, aliases) | **Done** — §4.8 |
 | **6** | Quotation create stability | **Done** — §5 |
 

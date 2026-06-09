@@ -190,6 +190,7 @@ if (isTataDcrPackageSet(products)) {
 | **High** | HR upload live counts | **Done** — §7.8 |
 | **High** | Calling queue `LEAD_004` + remarks | **Done** — §E |
 | **High** | In-progress lead stays `currentLead` until Submit | **Done** — §E.1, HANDOFF §4.5.1 |
+| **High** | Reschedule / Decision Pending Submit (no 500) | **Done** — §E.2, HANDOFF §4.5.2 |
 | **Medium** | Tata pricing in `GET /pricing-tables` | **Done** (defaults) |
 
 Until GET echoes `pdf_panel_range_key`, frontend overview/PDF may show wrong panel text after full reload despite client-side inference.
@@ -634,11 +635,87 @@ Fixes dealer UI bug: after **Start Call**, the active row vanished because `GET 
 
 ---
 
+## §E.2 — Reschedule / Decision Pending Submit (no 500)
+
+**Handoff:** `BACKEND_CHANGES_HANDOFF.md` **§4.5.2**. **Status: implemented.**
+
+Fixes **500** when dealer submits **Connected → Decision Pending → Callback Scheduled** with a datetime on `PATCH /api/dealers/me/calling-queue/{leadId}/action`.
+
+### E.2.1 — Request contract
+
+| Field | Aliases | Required |
+|-------|---------|----------|
+| `action` | — | `rescheduled` (preferred) or `follow_up` when `nextFollowUpAt` set |
+| `nextFollowUpAt` | `next_follow_up_at` | Yes for reschedule (ISO UTC) |
+| `statusCategory` | `status_category`, `statusCategoryKey` | `schedule` for Callback Scheduled |
+| `statusText` | `status_text`, `statusLabel` | e.g. `Callback Scheduled` |
+| `callRemark` | `call_remark` | `[schedule] Callback Scheduled \| free text` |
+
+**Example body:**
+
+```json
+{
+  "action": "rescheduled",
+  "callRemark": "[schedule] Callback Scheduled | 6 kw panels",
+  "statusCategory": "schedule",
+  "statusText": "Callback Scheduled",
+  "nextFollowUpAt": "2026-06-11T05:07:00.000Z",
+  "next_follow_up_at": "2026-06-11T05:07:00.000Z"
+}
+```
+
+### E.2.2 — Backend behavior
+
+| Rule | Implementation |
+|------|----------------|
+| `follow_up` + datetime | Normalized to `rescheduled` in Zod + controller |
+| Assignment status | `rescheduled` (not `completed`) |
+| `call_remark` | **Replace** via `buildTaggedCallRemark()` — no nested tag append |
+| Column type | `callRemark` TEXT — migration `20260606120000-ensure-calling-remark-text-columns.js` |
+| Missing datetime | **400** `VAL_001` |
+| Bad transition | **409** `LEAD_005` |
+| DB string overflow | **400** `VAL_001` (not 500) |
+| Transition | `in_progress` → `rescheduled` for assignee |
+| Response | Full queue snapshot: `lead`, `nextLead`, `scheduledLeads` includes row when follow-up is future |
+
+### E.2.3 — Common 500 causes (addressed)
+
+1. `rescheduled` missing from action enum — Zod + Sequelize ENUM include it.
+2. Ignoring camelCase `nextFollowUpAt` / snake_case `next_follow_up_at` — resolved in validation transform.
+3. `call_remark` VARCHAR overflow from appended history — TEXT migration + replace semantics.
+4. Uncaught exception in transition validator — explicit `LEAD_005` / `VAL_001`; Sequelize length errors mapped to 400.
+
+### E.2.4 — Checklist
+
+| # | Item | Status |
+|---|------|--------|
+| 1 | Accept `rescheduled` + `follow_up` alias with datetime | Done |
+| 2 | Read `nextFollowUpAt` + `next_follow_up_at` | Done |
+| 3 | Set assignment `status: rescheduled` | Done |
+| 4 | Persist `schedule` / Callback Scheduled remarks | Done |
+| 5 | Replace `call_remark` (no append) | Done |
+| 6 | TEXT columns for remarks | Done (+ migrate) |
+| 7 | VAL_001 / LEAD_005 instead of 500 | Done |
+| 8 | Response includes `scheduledLeads` | Done |
+
+### E.2.5 — QA
+
+1. Submit reschedule from `in_progress` → **200**, not **500**.
+2. `GET /current` → lead in `scheduledLeads`, not `currentLead`.
+3. Only `next_follow_up_at` in body → **200**.
+4. `follow_up` + datetime (frontend retry) → same as `rescheduled`.
+5. Missing datetime → **400** `VAL_001`.
+6. Long remark (≤ 4000 chars) → **200** after migrate.
+
+**Code:** `validations/callingLeadValidations.ts`, `controllers/callingLeadController.ts` (`buildTaggedCallRemark`, `resolveNextFollowUpAtFromRequest`).
+
+---
+
 ## File index (May–June 2026 handoff)
 
 | Doc / code | Topics |
 |------------|--------|
 | `BACKEND_CHANGES_HANDOFF.md` | Sprint checklist, §1 HR counts, §3–§4 calling, **§4.5.1**, §17 installation, §18 products, §19 visits |
-| `BACKEND_CHANGES_REQUIRED.md` | §X PDF, §Y priority, §7.9 dashboard, §M/N/Z, **§E / §E.1** calling queue |
+| `BACKEND_CHANGES_REQUIRED.md` | §X PDF, §Y priority, §7.9 dashboard, §M/N/Z, **§E / §E.1 / §E.2** calling queue |
 | `BACKEND_ADMIN_QUOTATION_STATUS.ts` | HR upload reference, `patchDealerCallingQueueAction` |
 | `controllers/callingLeadController.ts` | Calling queue implementation |

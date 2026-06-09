@@ -565,6 +565,12 @@ export function callingActionToApiJson(row) {
  * - On action "start": return lead + currentLead (same in_progress row) + counts;
  *   omit nextLead (see HANDOFF §4.5.1 / REQUIRED §E.1).
  * - On outcome actions: persist remarks, close assignment, return full snapshot with nextLead.
+ * - §E.2 Reschedule (Decision Pending → Callback Scheduled):
+ *     action: "rescheduled" OR "follow_up" when nextFollowUpAt / next_follow_up_at is set
+ *     → assignment.status = "rescheduled" (NOT completed)
+ *     → nextFollowUpAt required (400 VAL_001 if missing/invalid)
+ *     → call_remark = single `[schedule] Callback Scheduled | remark` — replace, never append
+ *     → response includes lead, nextLead, scheduledLeads (future follow-up)
  * - Parse payload.callRemark using parseTaggedCallRemark()
  * - Persist values separately:
  *     status_category   (or statusCategory)
@@ -591,23 +597,56 @@ export async function patchDealerCallingQueueAction(req, res, db) {
     }
 
     const body = req.body || {}
-    const action = body.action
+    let action = body.action
+    const nextFollowUpAt = body.nextFollowUpAt ?? body.next_follow_up_at ?? null
 
-    // For "start" actions, callRemark may be missing.
+    // §E.2 — follow_up + datetime is reschedule submit (frontend may retry with follow_up on 500).
+    if (action === "follow_up" && nextFollowUpAt) {
+      action = "rescheduled"
+    }
+
+    if (action === "rescheduled") {
+      if (!nextFollowUpAt) {
+        res.status(400).json({
+          success: false,
+          error: { code: "VAL_001", message: "nextFollowUpAt is required for rescheduled action" },
+        })
+        return
+      }
+      const followUpDate = new Date(nextFollowUpAt)
+      if (Number.isNaN(followUpDate.getTime()) || followUpDate.getTime() <= Date.now()) {
+        res.status(400).json({
+          success: false,
+          error: { code: "VAL_001", message: "nextFollowUpAt must be a valid future ISO datetime" },
+        })
+        return
+      }
+    }
+
     const parsed = parseTaggedCallRemark(body.callRemark ?? body.call_remark)
-    const normalizedCategory = normalizeStatusCategory(parsed.statusCategory)
-
+    const normalizedCategory =
+      normalizeStatusCategory(body.statusCategory ?? body.status_category ?? parsed.statusCategory)
     const statusCategory = normalizedCategory
-    const statusText = parsed.status
-    const remark = parsed.remark
+    const statusText =
+      body.statusText ?? body.status_text ?? body.statusLabel ?? parsed.status ?? null
+    const remark = body.remark ?? parsed.remark ?? null
 
     const updates: any = {
       action,
-      nextFollowUpAt: body.nextFollowUpAt ?? null,
+      nextFollowUpAt: action === "rescheduled" ? nextFollowUpAt : null,
       actionAt: body.actionAt ?? new Date(),
+      assignmentStatus: action === "rescheduled" ? "rescheduled" : "completed",
     }
 
-    if (body.callRemark || body.call_remark) {
+    if (statusCategory && statusText) {
+      updates.status_category = statusCategory
+      updates.status_text = statusText
+      updates.remark = remark
+      // Replace — do not append nested [schedule] chains (§E.2).
+      updates.call_remark = remark
+        ? `[${statusCategory}] ${statusText} | ${remark}`
+        : `[${statusCategory}] ${statusText}`
+    } else if (body.callRemark || body.call_remark) {
       if (!normalizedCategory) {
         res.status(400).json({
           success: false,
@@ -618,20 +657,22 @@ export async function patchDealerCallingQueueAction(req, res, db) {
         })
         return
       }
-
       updates.status_category = statusCategory
       updates.status_text = statusText
       updates.remark = remark
-      updates.call_remark = `[${statusCategory}] ${statusText}${remark ? ` | ${remark}` : ''}`
+      updates.call_remark = remark
+        ? `[${statusCategory}] ${statusText} | ${remark}`
+        : `[${statusCategory}] ${statusText}`
     }
 
-    // MUST update the latest state for this leadId (so GET de-duplicates).
     await db.dealerCallingLeads.updateById(leadId, updates)
 
     const updatedRow = await db.dealerCallingLeads.findById(leadId)
     res.json({
       success: true,
       lead: callingActionToApiJson(updatedRow),
+      nextLead: null,
+      scheduledLeads: action === "rescheduled" ? [callingActionToApiJson(updatedRow)] : [],
     })
   } catch (e) {
     console.error(e)

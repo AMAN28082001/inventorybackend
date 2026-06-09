@@ -16,75 +16,99 @@ export const uploadCallingLeadsSchema = z.object({
   }, z.coerce.number().int().min(1).max(50).optional())
 });
 
+const ALLOWED_STATUS_CATEGORIES = [
+  'call_connectivity',
+  'lead_validity',
+  'customer_intent',
+  'financial',
+  'competition',
+  'schedule',
+  'other'
+] as const;
+
+const parseFollowUpDate = (raw: unknown): Date | null => {
+  const value = String(raw ?? '').trim();
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
 export const dealerLeadActionSchema = z
   .object({
-  action: z.enum(['start', 'called', 'follow_up', 'not_interested', 'rescheduled']),
-  callRemark: z.string().max(5000).optional(),
-  /** Explicit history edit (PATCH) — relax assignment transition guards for completed rows */
-  editMode: z.coerce.boolean().optional(),
-  /** API / contract aliases (snake_case) */
-  status_category: z.string().max(64).optional(),
-  status_text: z.string().max(128).optional(),
-  statusCategory: z.enum([
-    'call_connectivity',
-    'lead_validity',
-    'customer_intent',
-    'financial',
-    'competition',
-    'schedule',
-    'other'
-  ]).optional(),
-  statusCategoryKey: z.enum([
-    'call_connectivity',
-    'lead_validity',
-    'customer_intent',
-    'financial',
-    'competition',
-    'schedule',
-    'other'
-  ]).optional(),
-  statusLabel: z.string().max(128).optional(),
-  statusCategoryLabel: z.string().max(128).optional(),
-  statusReason: z.string().max(255).optional(),
-  isCustomReason: z.boolean().optional(),
-  nextFollowUpAt: z.string().datetime().optional(),
-  actionAt: z.string().datetime().optional()
-})
+    action: z.enum(['start', 'called', 'follow_up', 'not_interested', 'rescheduled']),
+    callRemark: z.string().max(5000).optional(),
+    call_remark: z.string().max(5000).optional(),
+    /** Explicit history edit (PATCH) — relax assignment transition guards for completed rows */
+    editMode: z.coerce.boolean().optional(),
+    /** API / contract aliases (snake_case) */
+    status_category: z.string().max(64).optional(),
+    status_text: z.string().max(128).optional(),
+    statusText: z.string().max(128).optional(),
+    remark: z.string().max(4000).optional(),
+    statusCategory: z.enum(ALLOWED_STATUS_CATEGORIES).optional(),
+    statusCategoryKey: z.enum(ALLOWED_STATUS_CATEGORIES).optional(),
+    statusLabel: z.string().max(128).optional(),
+    statusCategoryLabel: z.string().max(128).optional(),
+    statusReason: z.string().max(255).optional(),
+    isCustomReason: z.boolean().optional(),
+    nextFollowUpAt: z.string().max(64).optional(),
+    next_follow_up_at: z.string().max(64).optional(),
+    actionAt: z.string().max(64).optional()
+  })
   .passthrough()
-  .refine((value) => {
-  if (value.action === 'rescheduled') {
-    return !!value.nextFollowUpAt;
-  }
-  return true;
-}, {
-  message: 'nextFollowUpAt is required when action is rescheduled',
-  path: ['nextFollowUpAt']
-}).refine((value) => {
-  if (value.action !== 'rescheduled' || !value.nextFollowUpAt) return true;
-  return new Date(value.nextFollowUpAt).getTime() > Date.now();
-}, {
-  message: 'nextFollowUpAt must be a future datetime when action is rescheduled',
-  path: ['nextFollowUpAt']
-}).refine((value) => {
-  const customMode = value.isCustomReason === true || value.statusReason === 'Others';
-  if (!customMode) return true;
-  return !!value.callRemark && value.callRemark.trim().length > 0;
-}, {
-  message: 'Manual reason is required when statusReason is Others or custom mode is used',
-  path: ['callRemark']
-}).refine((value) => {
-  const cat = value.statusCategory || value.statusCategoryKey || value.status_category;
-  if (!cat) return true;
-  return ([
-    'call_connectivity',
-    'lead_validity',
-    'customer_intent',
-    'financial',
-    'competition',
-    'schedule',
-    'other'
-  ] as const).includes(cat as any);
-}, {
-  message: 'Invalid status category value',
-  path: ['statusCategoryKey']
-});
+  .transform((value) => {
+    const nextFollowUpAt =
+      String(value.nextFollowUpAt ?? value.next_follow_up_at ?? '').trim() || undefined;
+    const action =
+      value.action === 'follow_up' && nextFollowUpAt ? 'rescheduled' : value.action;
+    return { ...value, action, nextFollowUpAt };
+  })
+  .superRefine((value, ctx) => {
+    if (value.action === 'rescheduled') {
+      if (!value.nextFollowUpAt) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['nextFollowUpAt'],
+          message: 'nextFollowUpAt is required when action is rescheduled'
+        });
+        return;
+      }
+      const followUpDate = parseFollowUpDate(value.nextFollowUpAt);
+      if (!followUpDate) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['nextFollowUpAt'],
+          message: 'Invalid datetime format'
+        });
+        return;
+      }
+      if (followUpDate.getTime() <= Date.now()) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['nextFollowUpAt'],
+          message: 'nextFollowUpAt must be a future datetime when action is rescheduled'
+        });
+      }
+    }
+
+    const customMode = value.isCustomReason === true || value.statusReason === 'Others';
+    if (customMode) {
+      const remark = String(value.callRemark ?? value.call_remark ?? '').trim();
+      if (!remark) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['callRemark'],
+          message: 'Manual reason is required when statusReason is Others or custom mode is used'
+        });
+      }
+    }
+
+    const cat = value.statusCategory || value.statusCategoryKey || value.status_category;
+    if (cat && !ALLOWED_STATUS_CATEGORIES.includes(cat as (typeof ALLOWED_STATUS_CATEGORIES)[number])) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['statusCategoryKey'],
+        message: 'Invalid status category value'
+      });
+    }
+  });

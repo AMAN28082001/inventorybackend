@@ -332,11 +332,45 @@ const parseTaggedCallRemark = (rawRemark: unknown): { statusCategory: string | n
   return { statusCategory, status, remark };
 };
 
+const truncateVarchar = (value: string | null | undefined, maxLen: number): string | null => {
+  if (!value) return null;
+  const trimmed = String(value).trim();
+  if (!trimmed) return null;
+  return trimmed.length > maxLen ? trimmed.slice(0, maxLen) : trimmed;
+};
+
+const resolveNextFollowUpAtFromRequest = (body: Record<string, unknown>): string | undefined => {
+  const value = String(body.nextFollowUpAt ?? body.next_follow_up_at ?? '').trim();
+  return value || undefined;
+};
+
 const normalizeStatusCategory = (rawCategory: unknown): (typeof ALLOWED_STATUS_CATEGORIES)[number] | null => {
   const clean = String(rawCategory || '').trim();
   if (!clean) return null;
   const mapped = STATUS_CATEGORY_ALIASES[clean] || clean;
   return (ALLOWED_STATUS_CATEGORIES as readonly string[]).includes(mapped) ? (mapped as (typeof ALLOWED_STATUS_CATEGORIES)[number]) : null;
+};
+
+/** Replace tagged remark — never append nested `[category]` chains (§E.2). */
+const buildTaggedCallRemark = (
+  category: string | null,
+  label: string | null,
+  freeText: string | null
+): string | null => {
+  if (!category || !label) return freeText?.trim() || null;
+  const remark = String(freeText || '').trim();
+  return remark ? `[${category}] ${label} | ${remark}` : `[${category}] ${label}`;
+};
+
+const sanitizeTaggedCallRemarkForPersist = (rawRemark: string | null): string | null => {
+  if (!rawRemark) return null;
+  const parsed = parseTaggedCallRemark(rawRemark);
+  const category = normalizeStatusCategory(parsed.statusCategory);
+  const label = String(parsed.status || '')
+    .replace(/^\[[^\]]+\]\s*/g, '')
+    .trim();
+  if (!category || !label) return rawRemark.trim();
+  return buildTaggedCallRemark(category, label, parsed.remark);
 };
 
 const callingActionToApiJson = (row: any) => {
@@ -2441,7 +2475,7 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
 
     const { leadId } = req.params;
     const requestBody = req.body as Record<string, unknown>;
-    const {
+    let {
       action,
       callRemark,
       nextFollowUpAt,
@@ -2477,6 +2511,11 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
       assignedDealerId?: string;
     };
 
+    nextFollowUpAt = nextFollowUpAt || resolveNextFollowUpAtFromRequest(requestBody);
+    if (action === 'follow_up' && nextFollowUpAt) {
+      action = 'rescheduled';
+    }
+
     const allowClaim = shouldAllowClaimOnAction(action, requestBody);
 
     const rawCallRemarkInput =
@@ -2502,10 +2541,9 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
     const effectiveStatusReason =
       (hasParsedTags ? parsed.remark : null) || statusReason || freeRemark || null;
     const legacyCallRemark =
-      rawCallRemarkInput ||
       (effectiveStatusCategory && effectiveStatusLabel
-        ? `[${effectiveStatusCategory}] ${effectiveStatusLabel}${effectiveStatusReason ? ` | ${effectiveStatusReason}` : ''}`
-        : null);
+        ? buildTaggedCallRemark(effectiveStatusCategory, effectiveStatusLabel, effectiveStatusReason)
+        : null) || sanitizeTaggedCallRemarkForPersist(rawCallRemarkInput);
 
     if (effectiveStatusCategory && !(ALLOWED_STATUS_CATEGORIES as readonly string[]).includes(effectiveStatusCategory)) {
       res.status(400).json({
@@ -2633,9 +2671,8 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
       const canEditCompleted = isEditMode && assignment.status === 'completed' && action !== 'start';
 
       const effectiveActionAt = actionDate || new Date();
-      const effectiveCallRemarkForStart =
-        callRemark ?? assignment.callRemark ?? legacyCallRemark ?? null;
-      const effectiveCallRemarkForOutcome = callRemark ?? legacyCallRemark ?? null;
+      const effectiveCallRemarkForStart = legacyCallRemark ?? sanitizeTaggedCallRemarkForPersist(rawCallRemarkInput) ?? null;
+      const effectiveCallRemarkForOutcome = legacyCallRemark;
       const effectiveNextFollowUpAt = action === 'rescheduled' ? followUpDate : null;
 
       const upsertActionHistory = async (opts: {
@@ -2675,8 +2712,8 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
           }),
           callRemark: effectiveCallRemarkForOutcome,
           statusCategory: effectiveStatusCategory,
-          statusLabel: effectiveStatusLabel,
-          statusReason: effectiveStatusReason || null,
+          statusLabel: truncateVarchar(effectiveStatusLabel, 128),
+          statusReason: truncateVarchar(effectiveStatusReason, 255),
           isCustomReason: Boolean(isCustomReason),
           actionAt: effectiveActionAt,
           nextFollowUpAt: effectiveNextFollowUpAt,
@@ -2886,7 +2923,9 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
       });
     }
   } catch (error) {
-    const errorCode = (error as any)?.code;
+    const err = error as any;
+    const errorCode = err?.code;
+    const errorMessage = String(err?.message || err?.parent?.message || '');
     if (errorCode === 'LEAD_004') {
       res.status(403).json({ success: false, error: { code: 'LEAD_004', message: 'Lead not assigned to dealer' } });
       return;
@@ -2897,6 +2936,20 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
     }
     if (errorCode === 'LEAD_005') {
       res.status(409).json({ success: false, error: { code: 'LEAD_005', message: 'Invalid lead action transition' } });
+      return;
+    }
+    if (
+      err?.name === 'SequelizeDatabaseError' &&
+      /value too long|too long for type|truncat/i.test(errorMessage)
+    ) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VAL_001',
+          message: 'Validation error',
+          details: [{ field: 'callRemark', message: 'Remark exceeds allowed column length' }]
+        }
+      });
       return;
     }
     logError('Update dealer calling queue action error', error, {
