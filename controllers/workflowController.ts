@@ -186,13 +186,17 @@ const getWorkflowQueue = async (
       .map((value) => value.trim())
       .filter(Boolean);
     const releaseRequired = extraWhere.installationReadyForInstaller === true;
+    const meteringQueue = extraWhere.meteringQueue === true;
     const where: any = {};
     const installationStatusFilter =
       requestedStatuses.length > 1
         ? { [Op.in]: requestedStatuses }
         : requestedStatuses[0] || targetStatus;
 
-    if (releaseRequired) {
+    if (meteringQueue) {
+      // §L.1 — metering pipeline rows appear without Payment Management release (admin early send).
+      where.installationStatus = installationStatusFilter;
+    } else if (releaseRequired) {
       // Source-of-truth: only rows sent from Payment Management (flag or release timestamp).
       where[Op.and] = [
         ...(where[Op.and] || []),
@@ -205,6 +209,7 @@ const getWorkflowQueue = async (
 
     const sanitizedExtraWhere = { ...extraWhere };
     delete (sanitizedExtraWhere as any).installationReadyForInstaller;
+    delete (sanitizedExtraWhere as any).meteringQueue;
     Object.assign(where, sanitizedExtraWhere);
     const scopedTeamId = getInstallationTeamIdFromRequest(req);
     if (scopedTeamId) {
@@ -478,7 +483,7 @@ export const getMeteringQueue = async (req: Request, res: Response): Promise<voi
     req.query.status = aliasMap[status] as any;
   }
   await getWorkflowQueue(req, res, 'pending_metering,metering_in_progress,metering_approved,mco', {
-    installationReadyForInstaller: true
+    meteringQueue: true
   });
 };
 

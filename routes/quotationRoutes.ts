@@ -24,8 +24,13 @@ import {
   getQuotationDocumentViewUrl,
   getProductCatalog,
   saveQuotationDocuments,
+  saveFinalConfirmationDocuments,
   uploadQuotationDocument
 } from '../controllers/quotationController';
+import {
+  FINAL_CONFIRMATION_DOCUMENT_FIELDS,
+  isFinalConfirmationDocumentField
+} from '../utils/finalConfirmationDocuments';
 import { patchQuotationInstallationTeam } from '../controllers/installationTeamController';
 import {
   getWorkflowHistory,
@@ -42,6 +47,7 @@ import {
   authorizeDealer,
   authorizeDealerAdminOrVisitor,
   authorizeDealerOrAccountManager,
+  authorizeFinalConfirmationUploader,
   authorizeQuotationDocumentsEditor,
   authorizeInstallerOrAdmin,
   authorizeMeteringOrAdmin,
@@ -145,6 +151,58 @@ const DOCUMENT_UPLOAD_FIELDS: multer.Field[] = [
   { name: 'workCompletionWarrantyFile', maxCount: 1 }
 ];
 
+const FINAL_CONFIRMATION_UPLOAD_FIELDS: multer.Field[] = FINAL_CONFIRMATION_DOCUMENT_FIELDS.map(
+  (name) => ({ name, maxCount: 1 })
+);
+
+export const handleFinalConfirmationDocumentsMultipart = (
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+): void => {
+  documentsUpload.fields(FINAL_CONFIRMATION_UPLOAD_FIELDS)(req, res, (err: unknown) => {
+    if (!err) {
+      next();
+      return;
+    }
+    const e = err as MulterError;
+    if (e.code === 'LIMIT_FILE_SIZE') {
+      res.status(413).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'One or more files exceed the 30 MB maximum upload size'
+        }
+      });
+      return;
+    }
+    if (e.code === 'LIMIT_UNEXPECTED_FILE' || e.code === 'LIMIT_FILE_COUNT') {
+      const field = e.field || 'files';
+      const message = isFinalConfirmationDocumentField(field)
+        ? e.message
+        : `Invalid final confirmation field "${field}". Allowed: ${FINAL_CONFIRMATION_DOCUMENT_FIELDS.join(', ')}`;
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message,
+          details: [{ field, message }]
+        }
+      });
+      return;
+    }
+
+    const genericError = err as Error;
+    res.status(400).json({
+      success: false,
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: genericError.message || 'Invalid final confirmation upload payload'
+      }
+    });
+  });
+};
+
 const handleQuotationDocumentsMultipart = (req: express.Request, res: express.Response, next: express.NextFunction): void => {
   documentsUpload.fields(DOCUMENT_UPLOAD_FIELDS)(req, res, (err: unknown) => {
     if (!err) {
@@ -185,7 +243,7 @@ const handleQuotationDocumentsMultipart = (req: express.Request, res: express.Re
   });
 };
 
-const handleSingleQuotationDocumentUpload = (
+export const handleSingleQuotationDocumentUpload = (
   req: express.Request,
   res: express.Response,
   next: express.NextFunction
@@ -834,6 +892,15 @@ router.post(
   authorizeQuotationDocumentsEditor,
   handleSingleQuotationDocumentUpload,
   uploadQuotationDocument
+);
+
+/** §M — final confirmation batch upload (fallback path; preferred: POST /api/admin/…/final-confirmation-documents). */
+router.post(
+  '/:quotationId/final-confirmation-documents',
+  authenticate,
+  authorizeFinalConfirmationUploader,
+  handleFinalConfirmationDocumentsMultipart,
+  saveFinalConfirmationDocuments
 );
 
 /** Same handler as `POST /api/installer/quotations/:id/documents` — quotation-prefixed fallback for gateways/clients. */

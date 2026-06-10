@@ -33,6 +33,8 @@
 | 23 | High | Payment Management → Admin Installation release gate | **Done** | §17 |
 | 24 | High | Inventory — decimal prices + `products.unit` + kg→pieces contract | **Done** | §18 |
 | 25 | Medium | Admin Visitor Reports — `GET /api/admin/visits` | **Done** | §19 |
+| 26 | High | Final confirmation document uploads | **Done** | §20 / §M |
+| 27 | High | Quotations tab → Send to Metering | **Done** | §21 / §L.1 |
 
 **Deploy before QA:**
 
@@ -591,7 +593,9 @@ On multipart routes (quotation documents, visitor/dealer visit complete, meterin
 - **Response:** `resolveQuotationDocumentUrls` — presigned GET URLs for UI “View file”.
 - **Validation:** `phoneNumber`, `emailId`, `electricityKno` when provided; **`VALIDATION_ERROR`** + `details[]` on bad input; S3/DB errors mapped to **400**/**413** where possible.
 
-**File fields:** `aadharFront`, `aadharBack`, `compliantAadharFront`, `compliantAadharBack`, `compliantPanImage`, `compliantBankPassbookImage`, `panImage`, `electricityBillImage`, `bankPassbookImage`, `geotagRoofPhoto`, `customerWithHousePhoto`, `propertyDocumentPdf`, plus final-confirmation files when used.
+**File fields (KYC):** `aadharFront`, `aadharBack`, `compliantAadharFront`, `compliantAadharBack`, `compliantPanImage`, `compliantBankPassbookImage`, `panImage`, `electricityBillImage`, `bankPassbookImage`, `geotagRoofPhoto`, `customerWithHousePhoto`, `propertyDocumentPdf`.
+
+**Final confirmation (use §20 POST — not KYC PATCH):** `customerFinalBillFile`, `panelWarrantyFile`, `inverterWarrantyFile`, `workCompletionWarrantyFile`.
 
 **Text fields:** `isCompliantSenior`, `aadharNumber`, `phoneNumber`, `emailId`, `panNumber`, `electricityKno`, bank block, compliant block, etc.
 
@@ -814,6 +818,7 @@ BOTH: DCR kW + Non-DCR kW. CUSTOMIZE: sum all custom panel rows.
 | **4c** | Reschedule / Decision Pending Submit | **Done** — §4.5.2 / §E.2 |
 | **5** | HR/Admin `GET` calling-actions (`dealerId`, dates, `custom`, aliases) | **Done** — §4.8 |
 | **6** | Quotation create stability | **Done** — §5 |
+| **7** | Quotations tab → Send to Metering | **Done** — §21 / §L.1 |
 
 ### HR/Admin GET example
 
@@ -947,6 +952,53 @@ OR installation_released_at IS NOT NULL
 
 ---
 
+## 21. Quotations tab → Send to Metering (§L.1)
+
+**Status: implemented** — no new route. (Frontend handoff may reference this as **§11**.)
+
+### Symptom → fix
+
+| Issue | Cause | Fix |
+|-------|-------|-----|
+| PATCH returns **403** | Handler required quotation `req.dealer` admin only | Inventory admin JWT allowed via `hasAdminQuotationAccess()` |
+| PATCH **200** but Metering empty | Metering queue required PM release | `getMeteringQueue` — no release gate for metering pipeline rows |
+| Installation still shows row | Wrong filter | `pending_metering` ∉ `INSTALLER_RELEASE_STATUSES` |
+
+### Minimum deliverable
+
+`PATCH /api/admin/quotations/{quotationId}/installation-status`
+
+```json
+{
+  "installationStatus": "pending_metering",
+  "meteringStatus": "pending_metering"
+}
+```
+
+| Item | Detail |
+|------|--------|
+| Auth | Quotation admin **or** inventory `admin` / `super-admin` |
+| Persist | `installation_status = pending_metering` |
+| GET | `meteringStatus` derived on list/detail |
+| Early send | From `pending_installer` OK (no `installer_approved` required) |
+| Idempotent | Re-send → **200** |
+| Photo upload | `installer_approved` only until explicit PATCH |
+
+### Frontend retry order
+
+`lib/api.ts` → `patchOperationalWorkflowStatus` → installation-status / workflow-status / metering-status aliases.
+
+### QA
+
+1. Send while `pending_installer` → **200**.
+2. `GET /api/metering/quotations?status=processing` includes row (without PM release).
+3. Absent from installer queue.
+4. Double Send → **200**.
+
+**Full spec:** `BACKEND_CHANGES_REQUIRED.md` §L.1. **Reference:** `BACKEND_ADMIN_QUOTATION_STATUS.ts` → `patchAdminQuotationInstallationStatus`.
+
+---
+
 ## 18. Inventory — decimal prices, product unit, kg → pieces (June 2025)
 
 **Status: implemented in repo.** **Full spec:** `BACKEND_CHANGES_DECIMAL_PRICE_KG_TO_PIECES.md`
@@ -1076,11 +1128,49 @@ Frontend fallback (works today): same per-quotation GET in a loop — `GET /admi
 
 ---
 
+## 20. Final confirmation document uploads (§M)
+
+**Status: implemented**
+
+### Symptom → cause
+
+Admin **Final Confirmation** tab uploads fail with **400** `Invalid quotation document payload` when the client uses **`PATCH /api/quotations/{id}/documents`** — that route enforces KYC text fields (`phoneNumber`, `emailId`, `electricityKno`) for dealer JWTs.
+
+### Minimum deliverable
+
+| Item | Implementation |
+|------|----------------|
+| **Preferred** | `POST /api/admin/quotations/{id}/final-confirmation-documents` |
+| **Baldev** | `POST /api/baldev/quotations/{id}/final-confirmation-documents` |
+| **Roles** | `admin`, `super-admin`, `super-admin-manager`, `baldev`, `confirmation` |
+| **Fields** | `customerFinalBillFile`, `panelWarrantyFile`, `inverterWarrantyFile`, `workCompletionWarrantyFile` |
+| **Partial** | Any subset per request |
+| **Storage** | S3 + `quotation_documents` columns; GET returns `*FileUrl` presigned aliases |
+| **KYC PATCH** | Unchanged — do **not** use for final confirmation |
+
+### Frontend retry order
+
+1. `POST /api/admin/quotations/{id}/final-confirmation-documents` (batch multipart)
+2. On **404**: `POST /api/admin/quotations/{id}/final-confirmation-documents/upload` (`field` + `file`)
+3. On **404**: `POST /api/quotations/{id}/documents/upload` (`field` = one of four keys + `file`)
+
+### QA
+
+1. Upload one PDF → **200**; `GET /api/admin/quotations/{id}` shows `customerFinalBillFileUrl`.
+2. Upload second slot in separate request → prior slot preserved.
+3. Baldev JWT on `/api/baldev/…/final-confirmation-documents` → **200**.
+4. Wrong field name `finalBill` → **400** (not **500**).
+5. KYC PATCH with only `panelWarrantyFile` + dealer JWT → **200** (skip KYC when final-confirmation-only).
+
+**Full spec:** `BACKEND_CHANGES_REQUIRED.md` §M. **Reference:** `BACKEND_ADMIN_QUOTATION_STATUS.ts` → `postAdminFinalConfirmationDocuments`.
+
+---
+
 ## Related docs
 
 | Doc | Section |
 |-----|---------|
-| `BACKEND_CHANGES_REQUIRED.md` | §7.7–7.8, dealer queue, §J, §X, **§M**, **§N**, **§Z** |
+| `BACKEND_CHANGES_REQUIRED.md` | §7.7–7.8, dealer queue, §J, §X, **§L.1**, **§M**, **§N**, **§Z** |
 | `API_ENDPOINTS_SUMMARY.md` | `GET /admin/visits` |
 | `API_SPECIFICATION.txt` | §K Admin Visitor Reports |
 | `BACKEND_INSTALLATION_RELEASE.md` | Installation release PATCH + GET contract |

@@ -12,8 +12,14 @@ import {
 } from '../controllers/adminController';
 import {
   updateQuotationInstallationRelease,
-  updateQuotationInstallationScheduledAt
+  updateQuotationInstallationScheduledAt,
+  saveFinalConfirmationDocuments,
+  uploadQuotationDocument
 } from '../controllers/quotationController';
+import {
+  handleFinalConfirmationDocumentsMultipart,
+  handleSingleQuotationDocumentUpload
+} from './quotationRoutes';
 import {
   createVisitor,
   getAllVisitors,
@@ -125,6 +131,18 @@ router.post(
   '/quotations/:quotationId/documents/upload',
   handleSingleInstallerUploadMultipart,
   uploadInstallerDocument
+);
+
+/** §M — Final confirmation document uploads (admin / baldev; not KYC PATCH). */
+router.post(
+  '/quotations/:quotationId/final-confirmation-documents',
+  handleFinalConfirmationDocumentsMultipart,
+  saveFinalConfirmationDocuments
+);
+router.post(
+  '/quotations/:quotationId/final-confirmation-documents/upload',
+  handleSingleQuotationDocumentUpload,
+  uploadQuotationDocument
 );
 
 router.patch('/quotations/:quotationId/installation-status', validate(updateInstallationStatusSchema), updateQuotationInstallationStatus);

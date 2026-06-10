@@ -32,6 +32,31 @@ import { persistQuotationSystemKw } from '../utils/persistQuotationSystemKw';
 const sumPhasePaidAmounts = (phases: { paidAmount?: number }[]): number =>
   phases.reduce((sum, p) => sum + Number((p as any).paidAmount || 0), 0);
 
+/** Quotation dealer admin or inventory admin — matches `authorizeAdmin` middleware (§L.1). */
+const hasAdminQuotationAccess = (req: Request): boolean => {
+  const isQuotationAdmin = Boolean(req.dealer && req.dealer.role === 'admin');
+  const isInventoryAdmin = Boolean(
+    req.user &&
+    (req.user.role === 'admin' ||
+      req.user.role === 'super-admin' ||
+      req.user.role === 'super-admin-manager')
+  );
+  return isQuotationAdmin || isInventoryAdmin;
+};
+
+/** Admin Send to Metering — allow early handoff from install pipeline (§L.1). */
+const SEND_TO_METERING_FROM_STATUSES = new Set([
+  'pending_installer',
+  'installer_in_progress',
+  'installer_approved',
+  'installer_rejected',
+  'pending_baldev',
+  'baldev_approved',
+  'baldev_rejected',
+  'pending_metering',
+  'metering_in_progress'
+]);
+
 const remainingAgainstSubtotal = (subtotal: number | null | undefined, totalPaid: number): number => {
   const base = Number(subtotal) || 0;
   const paid = Number(totalPaid);
@@ -560,10 +585,10 @@ export const updateQuotationStatus = async (req: Request, res: Response): Promis
 
 export const updateQuotationInstallationStatus = async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!req.dealer || req.dealer.role !== 'admin') {
-      res.status(401).json({
+    if (!hasAdminQuotationAccess(req)) {
+      res.status(403).json({
         success: false,
-        error: { code: 'AUTH_003', message: 'Admin required' }
+        error: { code: 'AUTH_004', message: 'Insufficient permissions. Admin access required.' }
       });
       return;
     }
@@ -608,10 +633,50 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
     }
 
     const nextStatus = requested;
+    const currentStatus = String(quotation.installationStatus || 'pending_installer').trim();
+
+    if (nextStatus === 'pending_metering') {
+      if (currentStatus === 'pending_metering') {
+        res.json({
+          success: true,
+          data: {
+            id: quotation.id,
+            ...meteringWorkflowApiFields({
+              installationStatus: quotation.installationStatus,
+              meteringApprovedAt: quotation.meteringApprovedAt,
+              mcoAt: quotation.mcoAt,
+              completionAt: quotation.completionAt
+            }),
+            updatedAt: quotation.updatedAt
+          }
+        });
+        return;
+      }
+      if (!SEND_TO_METERING_FROM_STATUSES.has(currentStatus)) {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'VAL_001',
+            message: `Cannot send to metering from installation status "${currentStatus}"`,
+            details: [{
+              field: 'installationStatus',
+              message:
+                'Allowed from pending_installer, installer_*, pending_baldev, baldev_*, or metering_in_progress'
+            }]
+          }
+        });
+        return;
+      }
+    }
+
     const now = new Date();
     const patch: Record<string, unknown> = {
       installationStatus: nextStatus
     };
+
+    if (nextStatus === 'pending_metering') {
+      patch.meteringActionAt = now;
+    }
 
     const preMeteringApproved = new Set([
       'pending_installer',

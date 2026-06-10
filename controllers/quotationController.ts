@@ -43,6 +43,10 @@ import {
   isAllowedInverterBrandForCatalog,
   isAllowedMeterBrandForCatalog
 } from '../utils/quotationProductPdfDisplay';
+import {
+  FINAL_CONFIRMATION_DOCUMENT_FIELDS,
+  isFinalConfirmationDocumentField
+} from '../utils/finalConfirmationDocuments';
 import { isPanelSizeAllowed, normalizeProductCatalog } from '../utils/productCatalogNormalize';
 import { isAllowedDisplayCableSize, isAsPerTheSet } from '../utils/productDisplayValues';
 import {
@@ -3200,6 +3204,200 @@ const resolveQuotationDocumentUrls = async (documents: any) => {
   return json;
 };
 
+const isOperationalDocumentsEditorRole = (role: string | undefined): boolean =>
+  role === 'baldev' ||
+  role === 'confirmation' ||
+  role === 'admin' ||
+  role === 'super-admin' ||
+  role === 'super-admin-manager';
+
+const requestHasUploadedFinalConfirmationFiles = (req: Request): boolean => {
+  const files = (req as any).files;
+  if (!files || typeof files !== 'object') return false;
+  return FINAL_CONFIRMATION_DOCUMENT_FIELDS.some((field) => {
+    const part = files[field];
+    return Array.isArray(part) && part.length > 0;
+  });
+};
+
+/** PATCH KYC route used with only final-confirmation file parts — skip phone/email/kno checks (§M). */
+const requestIsFinalConfirmationOnlyUpload = (req: Request): boolean => {
+  if (!requestHasUploadedFinalConfirmationFiles(req)) return false;
+  const files = (req as any).files || {};
+  const uploadedKeys = Object.keys(files).filter(
+    (key) => Array.isArray(files[key]) && (files[key] as unknown[]).length > 0
+  );
+  if (!uploadedKeys.every((key) => isFinalConfirmationDocumentField(key))) return false;
+
+  const body: Record<string, unknown> = req.body || {};
+  const kycTextFields = [
+    'phoneNumber',
+    'emailId',
+    'electricityKno',
+    'aadharNumber',
+    'panNumber',
+    'bankAccountNumber',
+    'bankIfsc',
+    'compliantContactPhone'
+  ];
+  const hasKycText = kycTextFields.some((field) => {
+    const value = body[field];
+    return value !== undefined && value !== null && String(value).trim() !== '';
+  });
+  return !hasKycText;
+};
+
+const buildFinalConfirmationResponseExtras = (resolved: Record<string, unknown>) => {
+  const extras: Record<string, string | null> = {};
+  for (const field of FINAL_CONFIRMATION_DOCUMENT_FIELDS) {
+    const value = (resolved[field] as string | null | undefined) ?? null;
+    extras[field] = value;
+    extras[`${field}Url`] = value;
+  }
+  return extras;
+};
+
+const upsertFinalConfirmationDocumentFields = async (
+  quotationId: string,
+  fieldUpdates: Partial<Record<(typeof FINAL_CONFIRMATION_DOCUMENT_FIELDS)[number], string | null>>,
+  existing: QuotationDocument | null
+): Promise<QuotationDocument> => {
+  if (existing) {
+    for (const [field, newValue] of Object.entries(fieldUpdates)) {
+      const oldValue = (existing as any)[field];
+      if (newValue && oldValue && newValue !== oldValue) {
+        await deleteFileFromS3IfExists(oldValue);
+      }
+    }
+    return existing.update(fieldUpdates);
+  }
+
+  return QuotationDocument.create({
+    id: uuidv4(),
+    quotationId,
+    isCompliantSenior: false,
+    ...fieldUpdates
+  });
+};
+
+/** POST …/final-confirmation-documents — admin / baldev partial uploads (§M). */
+export const saveFinalConfirmationDocuments = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const role = req.user?.role;
+    if (!isOperationalDocumentsEditorRole(role)) {
+      res.status(403).json({
+        success: false,
+        error: { code: 'AUTH_004', message: 'Insufficient permissions' }
+      });
+      return;
+    }
+
+    const { quotationId } = req.params;
+    const quotation = await Quotation.findByPk(quotationId);
+    if (!quotation) {
+      res.status(404).json({
+        success: false,
+        error: { code: 'RES_001', message: 'Quotation not found' }
+      });
+      return;
+    }
+
+    const body: Record<string, unknown> = req.body || {};
+    const existing = await QuotationDocument.findOne({ where: { quotationId: quotation.id } });
+    const fieldUpdates: Partial<
+      Record<(typeof FINAL_CONFIRMATION_DOCUMENT_FIELDS)[number], string | null>
+    > = {};
+    let anyInput = false;
+
+    for (const field of FINAL_CONFIRMATION_DOCUMENT_FIELDS) {
+      const uploadedUrl = await getUploadedFileUrlSafe(req, field, quotation.id);
+      if (uploadedUrl !== undefined) {
+        const files = (req as any).files?.[field];
+        const file = Array.isArray(files) ? (files[0] as Express.Multer.File) : undefined;
+        if (file) {
+          const fieldValidation = ensureQuotationDocumentUploadFieldIsValid(field, file);
+          if (!fieldValidation.valid) {
+            res.status(400).json({
+              success: false,
+              error: {
+                code: 'VALIDATION_ERROR',
+                message: fieldValidation.message,
+                details: [{ field, message: fieldValidation.message }]
+              }
+            });
+            return;
+          }
+        }
+        anyInput = true;
+        fieldUpdates[field] = normalizeStoredDocumentReference(uploadedUrl) || uploadedUrl;
+        continue;
+      }
+
+      const snakeField = field.replace(/[A-Z]/g, (match) => `_${match.toLowerCase()}`);
+      const bodyValue = body[field] ?? body[`${field}Url`] ?? body[snakeField] ?? body[`${snakeField}_url`];
+      if (bodyValue !== undefined) {
+        anyInput = true;
+        if (bodyValue === '' || bodyValue === null) {
+          fieldUpdates[field] = null;
+        } else {
+          fieldUpdates[field] =
+            normalizeStoredDocumentReference(String(bodyValue)) || ((existing as any)?.[field] ?? null);
+        }
+      }
+    }
+
+    if (!anyInput) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'At least one final confirmation document is required',
+          details: [{
+            field: 'files',
+            message:
+              'Upload one or more of: customerFinalBillFile, panelWarrantyFile, inverterWarrantyFile, workCompletionWarrantyFile'
+          }]
+        }
+      });
+      return;
+    }
+
+    const documents = await upsertFinalConfirmationDocumentFields(quotation.id, fieldUpdates, existing);
+    const resolvedSavedDocuments = await resolveQuotationDocumentUrls(documents);
+
+    res.json({
+      success: true,
+      data: {
+        quotationId: quotation.id,
+        documents: resolvedSavedDocuments,
+        ...buildFinalConfirmationResponseExtras(resolvedSavedDocuments)
+      }
+    });
+  } catch (error: any) {
+    logError('Save final confirmation documents error', error, { quotationId: req.params.quotationId });
+    if (error?.errorPayload) {
+      res.status(error.statusCode || 500).json(error.errorPayload);
+      return;
+    }
+    const message = error instanceof Error ? error.message : String(error || '');
+    if (message.includes('value too long for type character varying')) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Document reference is too long to store',
+          details: [{ field: 'documents', message: 'Use S3 keys or short stored references' }]
+        }
+      });
+      return;
+    }
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
+};
+
 export const uploadQuotationDocument = async (req: Request, res: Response): Promise<void> => {
   try {
     const role = req.user?.role;
@@ -3281,6 +3479,17 @@ export const uploadQuotationDocument = async (req: Request, res: Response): Prom
     const usableUrl = (await resolveDocumentImageUrl(storedValue)) || uploadedReference;
     const urlKey = `${fieldName}Url`;
 
+    let persistedDocuments: Record<string, unknown> | null = null;
+    if (isFinalConfirmationDocumentField(fieldName) && isOperationalDocumentsEditorRole(role)) {
+      const existing = await QuotationDocument.findOne({ where: { quotationId: quotation.id } });
+      const documents = await upsertFinalConfirmationDocumentFields(
+        quotation.id,
+        { [fieldName]: storedValue },
+        existing
+      );
+      persistedDocuments = await resolveQuotationDocumentUrls(documents);
+    }
+
     res.status(200).json({
       success: true,
       data: {
@@ -3289,9 +3498,12 @@ export const uploadQuotationDocument = async (req: Request, res: Response): Prom
         fileUrl: usableUrl,
         storedValue,
         [urlKey]: usableUrl,
-        documents: {
-          [fieldName]: usableUrl
-        }
+        [fieldName]: usableUrl,
+        documents: persistedDocuments ?? {
+          [fieldName]: usableUrl,
+          [urlKey]: usableUrl
+        },
+        ...(persistedDocuments ? buildFinalConfirmationResponseExtras(persistedDocuments) : {})
       }
     });
   } catch (error: any) {
@@ -3565,9 +3777,9 @@ export const saveQuotationDocuments = async (req: Request, res: Response): Promi
     };
 
     // KYC form validation (dealer/account-management upload flow). Final-confirmation-only uploads
-    // by operational roles should remain partial and not require base KYC fields.
+    // should remain partial and not require base KYC fields (use POST …/final-confirmation-documents).
     const isKycEditor = Boolean(req.dealer) || isAccountManager;
-    if (isKycEditor) {
+    if (isKycEditor && !requestIsFinalConfirmationOnlyUpload(req)) {
       const details: Array<{ field: string; message: string }> = [];
       if (!payload.phoneNumber || !String(payload.phoneNumber).trim()) {
         details.push({ field: 'phoneNumber', message: 'phoneNumber is required' });

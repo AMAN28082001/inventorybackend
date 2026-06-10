@@ -182,7 +182,9 @@ if (isTataDcrPackageSet(products)) {
 
 | Priority | Topic | Status |
 |----------|--------|--------|
-| **High** | Payment Management → Installation release | **Done** — §M, HANDOFF §17, `BACKEND_INSTALLATION_RELEASE.md` |
+| **High** | Payment Management → Installation release | **Done** — §M.0, HANDOFF §17, `BACKEND_INSTALLATION_RELEASE.md` |
+| **High** | Final confirmation document uploads | **Done** — §M, HANDOFF §20 |
+| **High** | Quotations tab → Send to Metering (`pending_metering`) | **Done** — §L.1, HANDOFF §21 |
 | **High** | Inventory decimal prices + `products.unit` + kg→pieces | **Done** — §N, HANDOFF §18, `BACKEND_CHANGES_DECIMAL_PRICE_KG_TO_PIECES.md` |
 | **Medium** | Admin Visitor Reports `GET /api/admin/visits` | **Done** — §Z, HANDOFF §19 |
 | **High** | Tata DCR + `tata_530_570` + `VAL_003` fix | **Done** — §X.6, HANDOFF §2.6 |
@@ -362,45 +364,197 @@ Set on create/update from products; return as `systemKw` / `system_kw` on list (
 
 ---
 
-## §M — Payment Management → Admin Installation (June 2026)
+## §L.1 — Quotations tab → Send to Metering (`pending_metering`)
 
-**Handoff:** `BACKEND_CHANGES_HANDOFF.md` §17. **Status: implemented.**
+**Handoff:** `BACKEND_CHANGES_HANDOFF.md` §21 (frontend pack may label §11). **Status: implemented.** **No new route.**
 
-### M.1 — Release endpoint
+### L.1.1 — Endpoint (existing)
 
-`PATCH /api/quotations/{id}/installation-release`
+`PATCH /api/admin/quotations/{quotationId}/installation-status`
+
+Alias: `PATCH /api/admin/quotations/{quotationId}/workflow-status`
+
+**Body (camelCase + snake_case):**
 
 ```json
 {
-  "installationReadyForInstaller": true,
-  "installationReleasedAt": "2026-06-05T10:30:00.000Z"
+  "installationStatus": "pending_metering",
+  "installation_status": "pending_metering",
+  "meteringStatus": "pending_metering",
+  "metering_status": "pending_metering"
 }
 ```
 
-Sets `installation_ready_for_installer`, `installation_released_at`, and `installation_status = pending_installer`.
+Frontend fallback: `lib/api.ts` → `patchOperationalWorkflowStatus` (metering status PATCH aliases).
 
-### M.2 — List fields (all installation list GETs)
+### L.1.2 — Backend requirements
 
-Return on every row: `installationReadyForInstaller`, `installationReleasedAt`, `installationStatus`, plus installation photo URLs after upload.
+| # | Requirement | Implementation |
+|---|-------------|----------------|
+| 1 | Admin JWT can PATCH `pending_metering` | `authorizeAdmin` + `hasAdminQuotationAccess()` (quotation dealer admin **or** inventory admin) |
+| 2 | Persist stage | `quotations.installation_status = pending_metering`; GET derives `meteringStatus` via `deriveMeteringStatus()` |
+| 3 | GET `/admin/quotations` reflects save | `meteringWorkflowApiFields()` on list rows |
+| 4 | GET `/metering/quotations` includes row | `getMeteringQueue` — `?status=processing` → `pending_metering,metering_in_progress`; **no** release gate on metering pipeline |
+| 5 | Leaves Installation lists | `INSTALLER_RELEASE_STATUSES` excludes `pending_metering` |
+| 6 | No auto-advance on photo upload | Installer upload sets `installer_approved` only |
+| 7 | Idempotent re-send | Already `pending_metering` → **200** with current state |
 
-Endpoints: `GET /api/admin/quotations`, `GET /api/quotations?status=approved`, `GET /api/installer/quotations`.
+### L.1.3 — Transition rules (admin Send to Metering)
 
-### M.3 — Installer queue gate
+| From | Allowed |
+|------|---------|
+| `pending_installer`, `installer_in_progress`, `installer_approved` | Yes — early handoff (installer_approved **not** required) |
+| `pending_baldev`, `baldev_*` | Yes |
+| `pending_metering` | Yes — idempotent **200** |
+| `metering_in_progress` | Yes — reset to `pending_metering` |
+| `metering_approved`, `mco`, `completed` | **400** `VAL_001` with clear message |
 
-Row visible only when `installation_ready_for_installer = true` **OR** `installation_released_at` is set. Approved-but-never-released quotations must **not** appear.
+**Quotation `status`:** Admin may send while quotation is still `pending` (no block).
 
-### M.4 — Installation tab semantics
+**Release gate:** Admin override — PATCH does **not** require `installationReadyForInstaller` / `installationReleasedAt`.
 
-| Tab | State |
-|-----|--------|
-| Pending Installation | Released + `pending_installer` / `installer_in_progress` / no photos |
-| Approved Installation | Released + `installer_approved` |
+### L.1.4 — Response (200)
 
-### M.5 — No auto-advance to metering
+```json
+{
+  "success": true,
+  "data": {
+    "id": "…",
+    "installationStatus": "pending_metering",
+    "installation_status": "pending_metering",
+    "meteringStatus": "pending_metering",
+    "metering_status": "pending_metering",
+    "updatedAt": "2026-06-06T12:00:00.000Z"
+  }
+}
+```
 
-Photo upload with `installationStatus=installer_approved` persists **`installer_approved`**. Advance to metering **only** when admin sends `pending_metering` (e.g. `PATCH /api/admin/quotations/{id}/installation-status`).
+### L.1.5 — Errors
 
-`meteringStatus` / `deriveMeteringStatus` must be `null` while still in the installation pipeline — do not derive `pending_metering` from `installer_approved`.
+| Case | Status | Code |
+|------|--------|------|
+| Non-admin JWT | 403 | `AUTH_004` |
+| Invalid transition | 400 | `VAL_001` |
+| Quotation not found | 404 | `RES_001` |
+
+### L.1.6 — QA
+
+1. Admin PATCH from `pending_installer` → **200**; GET admin list shows `pending_metering`.
+2. `GET /api/metering/quotations?status=processing` includes the row (even without PM release).
+3. Row absent from `GET /api/admin/quotations?scope=installer_queue`.
+4. Re-send PATCH → **200**, same state.
+5. Installer photo upload alone → `installer_approved`, not `pending_metering`.
+
+**Code:** `controllers/adminController.ts` → `updateQuotationInstallationStatus`; `controllers/workflowController.ts` → `getMeteringQueue`; `utils/meteringWorkflowApi.ts`.
+
+---
+
+## §M — Final confirmation document uploads (June 2026)
+
+**Handoff:** `BACKEND_CHANGES_HANDOFF.md` §20. **Reference:** `BACKEND_ADMIN_QUOTATION_STATUS.ts` → `postAdminFinalConfirmationDocuments`. **Status: implemented.**
+
+### M.1 — Root cause (do not use KYC PATCH)
+
+`PATCH /api/quotations/{id}/documents` is the **KYC** route. When a dealer JWT is used, missing `phoneNumber` / `emailId` / `electricityKno` returns **400** `Invalid quotation document payload` even if only final-confirmation files are sent.
+
+**Use the dedicated final-confirmation route** (below). KYC PATCH remains unchanged for dealer KYC uploads.
+
+### M.2 — Preferred endpoint
+
+`POST /api/admin/quotations/{quotationId}/final-confirmation-documents`
+
+| Item | Detail |
+|------|--------|
+| Content-Type | `multipart/form-data` |
+| Roles | `admin`, `super-admin`, `super-admin-manager`, `baldev`, `confirmation` |
+| Partial saves | One or more files per request OK |
+
+**Baldev alias:** `POST /api/baldev/quotations/{quotationId}/final-confirmation-documents`
+
+**Shared fallback:** `POST /api/quotations/{quotationId}/final-confirmation-documents`
+
+### M.3 — Multipart field names
+
+| Multipart key | DB column | GET alias |
+|---------------|-----------|-----------|
+| `customerFinalBillFile` | `customerFinalBillFile` | `customerFinalBillFileUrl` |
+| `panelWarrantyFile` | `panelWarrantyFile` | `panelWarrantyFileUrl` |
+| `inverterWarrantyFile` | `inverterWarrantyFile` | `inverterWarrantyFileUrl` |
+| `workCompletionWarrantyFile` | `workCompletionWarrantyFile` | `workCompletionWarrantyFileUrl` |
+
+Image or PDF per file (max **30 MB** each). S3 path: `quotation-documents/{quotationId}/{field}-{timestamp}.{ext}`.
+
+### M.4 — Fallback single-file upload
+
+If batch route missing (**404**), frontend retries:
+
+`POST /api/admin/quotations/{id}/final-confirmation-documents/upload`  
+`POST /api/quotations/{id}/documents/upload`
+
+Body: `field` = one of the four keys above + single `file` part. Persists to `quotation_documents` for operational roles.
+
+### M.5 — Persistence & GET
+
+- Upsert `quotation_documents` row (partial update — other KYC columns untouched).
+- `GET /api/admin/quotations`, `GET /api/quotations/{id}` → `documents` object includes presigned/browsable URLs + `*FileUrl` aliases via `resolveQuotationDocumentUrls()`.
+
+### M.6 — Success response (200)
+
+```json
+{
+  "success": true,
+  "data": {
+    "quotationId": "…",
+    "documents": { "customerFinalBillFile": "https://…", "customerFinalBillFileUrl": "https://…", "…": "…" },
+    "customerFinalBillFile": "https://…",
+    "customerFinalBillFileUrl": "https://…"
+  }
+}
+```
+
+### M.7 — Errors
+
+| Case | Status | Code |
+|------|--------|------|
+| No files in request | 400 | `VALIDATION_ERROR` |
+| Wrong multipart field name | 400 | `VALIDATION_ERROR` |
+| File too large | 413 | `VALIDATION_ERROR` |
+| Quotation not found | 404 | `RES_001` |
+| Wrong role | 403 | `AUTH_004` |
+
+### M.8 — QA (curl sketch)
+
+```bash
+curl -X POST "$API/api/admin/quotations/$QT_ID/final-confirmation-documents" \
+  -H "Authorization: Bearer $ADMIN_JWT" \
+  -F "customerFinalBillFile=@bill.pdf" \
+  -F "panelWarrantyFile=@panel.pdf"
+```
+
+1. Partial upload (one file) → **200**, other slots unchanged on GET.
+2. Second upload adds another slot → **200**.
+3. KYC PATCH with only final-confirmation files + dealer JWT → **200** (no KYC text required) — but prefer dedicated POST.
+4. Baldev JWT on `/api/baldev/…/final-confirmation-documents` → **200**.
+
+**Code:** `controllers/quotationController.ts` → `saveFinalConfirmationDocuments`, `uploadQuotationDocument`; `routes/adminRoutes.ts`, `routes/baldevRoutes.ts`, `utils/finalConfirmationDocuments.ts`.
+
+---
+
+## §M.0 — Payment Management → Admin Installation (June 2026)
+
+**Handoff:** `BACKEND_CHANGES_HANDOFF.md` §17, `BACKEND_INSTALLATION_RELEASE.md`. **Status: implemented.**
+
+### M.0.1 — Release endpoint
+
+`PATCH /api/quotations/{id}/installation-release` — sets `installation_ready_for_installer`, `installation_released_at`, `installation_status = pending_installer`.
+
+### M.0.2 — Installer queue gate
+
+Row visible only when released flag or `installation_released_at` is set.
+
+### M.0.3 — No auto-advance to metering
+
+Photo upload stays `installer_approved` until admin explicitly advances.
 
 ---
 
@@ -716,6 +870,6 @@ Fixes **500** when dealer submits **Connected → Decision Pending → Callback 
 | Doc / code | Topics |
 |------------|--------|
 | `BACKEND_CHANGES_HANDOFF.md` | Sprint checklist, §1 HR counts, §3–§4 calling, **§4.5.1**, §17 installation, §18 products, §19 visits |
-| `BACKEND_CHANGES_REQUIRED.md` | §X PDF, §Y priority, §7.9 dashboard, §M/N/Z, **§E / §E.1 / §E.2** calling queue |
+| `BACKEND_CHANGES_REQUIRED.md` | §X PDF, §Y priority, **§L.1** send to metering, **§M** final confirmation, §M.0 install, §N/Z, **§E** calling queue |
 | `BACKEND_ADMIN_QUOTATION_STATUS.ts` | HR upload reference, `patchDealerCallingQueueAction` |
 | `controllers/callingLeadController.ts` | Calling queue implementation |

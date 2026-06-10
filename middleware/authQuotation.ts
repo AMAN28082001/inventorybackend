@@ -500,6 +500,34 @@ export const authorizeDealerOrAccountManager = (req: Request, res: Response, nex
   });
 };
 
+/** Admin / Baldev final confirmation uploads — §M (not KYC PATCH). */
+export const authorizeFinalConfirmationUploader = (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void => {
+  if (
+    req.user &&
+    (
+      req.user.role === 'baldev' ||
+      req.user.role === 'confirmation' ||
+      req.user.role === 'admin' ||
+      req.user.role === 'super-admin' ||
+      req.user.role === 'super-admin-manager'
+    )
+  ) {
+    next();
+    return;
+  }
+  res.status(403).json({
+    success: false,
+    error: {
+      code: 'AUTH_004',
+      message: 'Insufficient permissions'
+    }
+  });
+};
+
 // Allow quotation-document editors: dealer/admin, account-management/hr, baldev/confirmation.
 export const authorizeQuotationDocumentsEditor = (req: Request, res: Response, next: NextFunction): void => {
   if (req.dealer) {

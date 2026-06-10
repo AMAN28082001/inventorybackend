@@ -747,6 +747,210 @@ function serializeInstallationReleaseFields(row) {
  * Also: PATCH /api/quotations/:id/installation/ready
  *       PATCH /api/admin/quotations/:id/installation-release
  */
+/**
+ * POST /admin/quotations/:quotationId/final-confirmation-documents  (§M)
+ *
+ * multipart/form-data — any subset of:
+ *   customerFinalBillFile, panelWarrantyFile, inverterWarrantyFile, workCompletionWarrantyFile
+ *
+ * Roles: admin, super-admin, super-admin-manager, baldev, confirmation
+ * Do NOT use PATCH /quotations/:id/documents for these files (KYC validation).
+ *
+ * Baldev alias: POST /baldev/quotations/:quotationId/final-confirmation-documents
+ * Single-file fallback: POST …/final-confirmation-documents/upload  (body.field + file)
+ */
+export async function postAdminFinalConfirmationDocuments(req, res) {
+  try {
+    const role = req.user?.role
+    const allowed = ["admin", "super-admin", "super-admin-manager", "baldev", "confirmation"]
+    if (!role || !allowed.includes(role)) {
+      res.status(403).json({ success: false, error: { code: "AUTH_004", message: "Insufficient permissions" } })
+      return
+    }
+
+    const quotationId = req.params.quotationId || req.params.id
+    if (!quotationId) {
+      res.status(400).json({ success: false, error: { code: "VAL_001", message: "Quotation ID required" } })
+      return
+    }
+
+    const ALLOWED_FIELDS = [
+      "customerFinalBillFile",
+      "panelWarrantyFile",
+      "inverterWarrantyFile",
+      "workCompletionWarrantyFile",
+    ]
+
+    const files = req.files || {}
+    const updates = {}
+    let anyFile = false
+
+    for (const field of ALLOWED_FIELDS) {
+      const part = files[field]?.[0]
+      if (!part) continue
+      anyFile = true
+      // Production: upload part to S3 → quotation-documents/{quotationId}/{field}-….
+      updates[field] = `quotation-documents/${quotationId}/${field}-example.pdf`
+    }
+
+    if (!anyFile) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: "VALIDATION_ERROR",
+          message: "At least one final confirmation document is required",
+        },
+      })
+      return
+    }
+
+    // await upsert quotation_documents row (partial)
+    const documents = { ...updates }
+    for (const field of ALLOWED_FIELDS) {
+      if (documents[field]) documents[`${field}Url`] = documents[field]
+    }
+
+    res.json({
+      success: true,
+      data: {
+        quotationId,
+        documents,
+        ...documents,
+      },
+    })
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ success: false, error: { code: "SYS_001", message: "Internal error" } })
+  }
+}
+
+/**
+ * Route registration (Express):
+ *
+ *   router.post(
+ *     "/quotations/:quotationId/final-confirmation-documents",
+ *     handleFinalConfirmationDocumentsMultipart,
+ *     saveFinalConfirmationDocuments
+ *   )
+ *
+ * Implemented in routes/adminRoutes.ts, routes/baldevRoutes.ts, routes/quotationRoutes.ts
+ */
+
+/**
+ * PATCH /admin/quotations/:quotationId/installation-status  (§L.1 — Send to Metering)
+ *
+ * Body: installationStatus / meteringStatus (and snake_case mirrors) = "pending_metering"
+ *
+ * Rules:
+ * - Quotation dealer admin OR inventory admin JWT
+ * - Allow from pending_installer / installer_* / baldev_* (early handoff OK)
+ * - Idempotent when already pending_metering → 200
+ * - Do NOT require Payment Management release for admin send
+ * - meteringStatus on GET is derived from installationStatus (deriveMeteringStatus)
+ * - Reject metering_approved / mco / completed → 400 VAL_001
+ */
+export async function patchAdminQuotationInstallationStatus(req, res) {
+  try {
+    const user = req.admin ?? req.user
+    const dealer = req.dealer
+    const isQuotationAdmin = dealer && dealer.role === "admin"
+    const isInventoryAdmin =
+      user &&
+      ["admin", "super-admin", "super-admin-manager"].includes(user.role)
+    if (!isQuotationAdmin && !isInventoryAdmin) {
+      res.status(403).json({
+        success: false,
+        error: { code: "AUTH_004", message: "Admin access required" },
+      })
+      return
+    }
+
+    const quotationId = req.params.quotationId || req.params.id
+    const body = req.body || {}
+    const nextStatus =
+      body.installationStatus ||
+      body.installation_status ||
+      body.meteringStatus ||
+      body.metering_status ||
+      body.status
+
+    if (!nextStatus || typeof nextStatus !== "string") {
+      res.status(400).json({
+        success: false,
+        error: { code: "VAL_001", message: "installationStatus is required" },
+      })
+      return
+    }
+
+    const quotation = await Quotation.findByPk(quotationId)
+    if (!quotation) {
+      res.status(404).json({
+        success: false,
+        error: { code: "RES_001", message: "Quotation not found" },
+      })
+      return
+    }
+
+    const current = quotation.installationStatus || "pending_installer"
+    if (nextStatus === "pending_metering" && current === "pending_metering") {
+      res.json({
+        success: true,
+        data: {
+          id: quotation.id,
+          installationStatus: "pending_metering",
+          meteringStatus: "pending_metering",
+        },
+      })
+      return
+    }
+
+    const allowedFrom = new Set([
+      "pending_installer",
+      "installer_in_progress",
+      "installer_approved",
+      "installer_rejected",
+      "pending_baldev",
+      "baldev_approved",
+      "baldev_rejected",
+      "pending_metering",
+      "metering_in_progress",
+    ])
+    if (nextStatus === "pending_metering" && !allowedFrom.has(current)) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: "VAL_001",
+          message: `Cannot send to metering from ${current}`,
+        },
+      })
+      return
+    }
+
+    await quotation.update({ installationStatus: nextStatus })
+    await quotation.reload()
+
+    const meteringStatus =
+      ["pending_metering", "metering_in_progress", "metering_approved", "mco"].includes(
+        quotation.installationStatus
+      )
+        ? quotation.installationStatus
+        : null
+
+    res.json({
+      success: true,
+      data: {
+        id: quotation.id,
+        installationStatus: quotation.installationStatus,
+        meteringStatus,
+        updatedAt: quotation.updatedAt,
+      },
+    })
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ success: false, error: { code: "SYS_001", message: "Internal error" } })
+  }
+}
+
 export async function patchQuotationInstallationRelease(req, res) {
   try {
     const quotationId = req.params.quotationId || req.params.id
