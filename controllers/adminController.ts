@@ -9,7 +9,8 @@ import {
   quotationAdminMetadataFields,
   quotationProductEnrichmentFields,
   readStatusHistoryFromRow,
-  serializeInstallationReleaseFields
+  serializeInstallationReleaseFields,
+  quotationProposalDateApiFields
 } from '../utils/quotationApiJson';
 import { emitRealtime, realtimeEvents } from '../utils/realtime';
 import {
@@ -389,7 +390,7 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
             installationPhotoUrls: installationPayload.installationPhotoUrls,
             installation_photo_urls: installationPayload.installationPhotoUrls,
             ...installationPayload.installationFieldUrls,
-            createdAt: q.createdAt
+            ...quotationProposalDateApiFields(q)
           };
         })),
         pagination: {
@@ -401,10 +402,15 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
       }
     });
   } catch (error) {
-    logError('Get all quotations error', error);
+    const errMessage = error instanceof Error ? error.message : String(error);
+    logError('Get all quotations error', error, { message: errMessage });
     res.status(500).json({
       success: false,
-      error: { code: 'SYS_001', message: 'Internal server error' }
+      error: {
+        code: 'SYS_001',
+        message: 'Internal server error',
+        ...(process.env.NODE_ENV === 'development' ? { detail: errMessage } : {})
+      }
     });
   }
 };
