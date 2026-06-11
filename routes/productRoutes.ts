@@ -35,6 +35,31 @@ router.get('/', getAllProducts);
 
 /**
  * @swagger
+ * /api/products/inventory/levels:
+ *   get:
+ *     summary: Get inventory levels
+ *     tags: [Products]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Inventory levels
+ */
+router.get('/inventory/levels', authenticate, getInventoryLevels);
+
+/**
+ * @swagger
+ * /api/products/{id}/serial-numbers:
+ *   get:
+ *     summary: List serial numbers for a product
+ *     tags: [Products]
+ *     security:
+ *       - bearerAuth: []
+ */
+router.get('/:id/serial-numbers', authenticate, getProductSerialNumbers);
+
+/**
+ * @swagger
  * /api/products/{id}:
  *   get:
  *     summary: Get product by ID
@@ -48,32 +73,13 @@ router.get('/', getAllProducts);
  *     responses:
  *       200:
  *         description: Product details
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Product'
  *       404:
  *         description: Product not found
  */
 router.get('/:id', getProductById);
 
-// Protected routes
+// Protected mutation routes
 router.use(authenticate);
-
-/**
- * @swagger
- * /api/products/inventory/levels:
- *   get:
- *     summary: Get inventory levels
- *     tags: [Products]
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       200:
- *         description: Inventory levels
- */
-router.get('/inventory/levels', authenticate, getInventoryLevels);
-router.get('/:id/serial-numbers', getProductSerialNumbers);
 
 /**
  * @swagger

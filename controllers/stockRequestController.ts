@@ -14,6 +14,9 @@ import sequelize from '../config/database';
 import { logError, logInfo } from '../utils/loggerHelper';
 import { Op, Transaction } from 'sequelize';
 
+const isSuperAdminRole = (role: string | undefined): boolean =>
+  role === 'super-admin' || role === 'super-admin-manager';
+
 // Helper function to generate next integer ID for stock requests
 const getNextStockRequestId = async (transaction: Transaction): Promise<string> => {
   const [results] = await sequelize.query(
@@ -144,7 +147,7 @@ export const getAllStockRequests = async (req: Request, res: Response): Promise<
         requested_by_id: userId,
         requested_from: 'super-admin'
       });
-    } else if (userRole === 'super-admin') {
+    } else if (userRole === 'super-admin' || userRole === 'super-admin-manager') {
       // Super-admin sees requests from admins (requested_from = 'super-admin')
       andConditions.push({ requested_from: 'super-admin' });
     } else if (userRole === 'account') {
@@ -211,14 +214,25 @@ export const getStockRequestById = async (req: Request, res: Response): Promise<
     }
 
     const response = request.toJSON() as any;
+    if (Array.isArray(response.items)) {
+      const productIds = response.items
+        .map((item: { product_id?: string | null }) => item.product_id)
+        .filter(Boolean) as string[];
+      const products = productIds.length
+        ? await Product.findAll({ where: { id: { [Op.in]: productIds } } })
+        : [];
+      const centralStockByProduct = new Map(
+        products.map((p) => [p.id, Number(p.quantity)])
+      );
+      response.items = response.items.map((item: any) => ({
+        ...item,
+        central_stock: item.product_id ? centralStockByProduct.get(item.product_id) ?? 0 : null,
+        quantity_available: item.product_id ? centralStockByProduct.get(item.product_id) ?? 0 : null,
+        serial_numbers: item.product_id ? (serialsByProduct[item.product_id] || []) : []
+      }));
+    }
     if (Object.keys(serialsByProduct).length > 0) {
       response.dispatched_serial_numbers = serialsByProduct;
-      if (Array.isArray(response.items)) {
-        response.items = response.items.map((item: any) => ({
-          ...item,
-          serial_numbers: item.product_id ? (serialsByProduct[item.product_id] || []) : []
-        }));
-      }
     }
 
     logInfo('Get stock request by ID', { requestId: id });
@@ -668,7 +682,7 @@ export const dispatchStockRequest = async (req: Request, res: Response): Promise
     let serialNumbersMap: Record<string, string[]> | null = null;
 
     if (serialNumberRangesRaw) {
-      if (req.user.role !== 'super-admin') {
+      if (!isSuperAdminRole(req.user.role)) {
         await transaction.rollback();
         res.status(403).json({ error: 'Only super-admin can specify serial number ranges' });
         return;
@@ -721,7 +735,7 @@ export const dispatchStockRequest = async (req: Request, res: Response): Promise
     //   2. Request is from another admin and they are the source (admin-to-admin transfer)
     //   3. Request is from agent with requested_from="admin" (any admin can dispatch to their agents)
     const canDispatch =
-      req.user.role === 'super-admin' ||
+      isSuperAdminRole(req.user.role) ||
       (req.user.role === 'admin' &&
        (request.requested_from_role === 'super-admin' ||
         (request.requested_from_role === 'admin' && request.requested_from === req.user.id) ||

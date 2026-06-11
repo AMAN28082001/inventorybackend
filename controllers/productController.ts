@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { Product, AdminInventory, ProductSerialNumber, InventoryTransaction } from '../models';
 import { v4 as uuidv4 } from 'uuid';
-import { Op } from 'sequelize';
+import { Op, WhereOptions } from 'sequelize';
 import sequelize from '../config/database';
 import { logError, logInfo } from '../utils/loggerHelper';
 import { deleteFileFromS3IfExists } from '../middleware/upload';
@@ -127,32 +127,36 @@ export const getProductSerialNumbers = async (req: Request, res: Response): Prom
     }
 
     const scope = (req.query.scope as string | undefined)?.trim().toLowerCase();
-    const buildAvailableStatusWhere = (base: Record<string, unknown>): Record<string, unknown> => {
-      const next = { ...base };
+    const isCentralSuperAdmin =
+      req.user?.role === 'super-admin' || req.user?.role === 'super-admin-manager';
+
+    const buildSerialWhere = (base: Record<string, unknown>): WhereOptions => {
+      const conditions: WhereOptions[] = [base];
+
       if (statusFilter === 'available') {
-        next.status = {
-          [Op.notIn]: ['dispatched', 'acknowledged', 'sold']
-        };
+        conditions.push({
+          status: { [Op.notIn]: ['dispatched', 'acknowledged', 'sold'] }
+        });
       } else if (statusFilter) {
-        next.status = statusFilter;
+        conditions.push({ status: statusFilter });
       }
+
       if (scope === 'central') {
-        next[Op.and as any] = [
-          {
-            [Op.or]: [
-              { owner_id: null, owner_type: null },
-              { owner_type: 'super-admin' },
-              ...(req.user?.role === 'super-admin' && req.user.id
-                ? [{ owner_id: req.user.id, owner_type: 'super-admin' }]
-                : [])
-            ]
-          }
-        ];
+        conditions.push({
+          [Op.or]: [
+            { owner_id: null, owner_type: null },
+            { owner_type: 'super-admin' },
+            ...(isCentralSuperAdmin && req.user?.id
+              ? [{ owner_id: req.user.id, owner_type: 'super-admin' as const }]
+              : [])
+          ]
+        });
       }
-      return next;
+
+      return conditions.length === 1 ? conditions[0] : { [Op.and]: conditions };
     };
 
-    const where = buildAvailableStatusWhere({ product_id: id });
+    const where = buildSerialWhere({ product_id: id });
 
     let serials = await ProductSerialNumber.findAll({
       where,
@@ -160,7 +164,7 @@ export const getProductSerialNumbers = async (req: Request, res: Response): Prom
     });
 
     if (serials.length === 0 && product.name) {
-      const byNameWhere = buildAvailableStatusWhere({
+      const byNameWhere = buildSerialWhere({
         product_name: {
           [Op.iLike]: product.name
         }
@@ -176,6 +180,13 @@ export const getProductSerialNumbers = async (req: Request, res: Response): Prom
       deduped.set(serial.id, serial);
     }
     serials = Array.from(deduped.values());
+
+    logInfo('Get product serial numbers', {
+      productId: id,
+      status: statusFilter || 'all',
+      scope: scope || 'all',
+      count: serials.length
+    });
 
     res.json({
       product_id: id,
@@ -991,8 +1002,18 @@ export const getInventoryLevels = async (_req: Request, res: Response): Promise<
       raw: true
     });
 
-    logInfo('Get inventory levels', { count: inventory.length });
-    res.json(inventory);
+    const rows = inventory.map((row) => {
+      const plain = row as unknown as Record<string, unknown>;
+      const centralStock = Number(plain.central_stock ?? 0);
+      return {
+        ...plain,
+        quantity: centralStock,
+        central_stock: centralStock
+      };
+    });
+
+    logInfo('Get inventory levels', { count: rows.length });
+    res.json(rows);
   } catch (error) {
     logError('Get inventory levels error', error);
     res.status(500).json({ error: 'Server error' });

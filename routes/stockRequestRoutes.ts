@@ -123,7 +123,13 @@ router.post('/',
 );
 
 // Dispatch - super-admin and admins can dispatch
-router.post('/:id/dispatch', authorize('super-admin', 'admin'), upload.single('dispatch_image'), uploadToS3('stock-requests'), dispatchStockRequest);
+router.post(
+  '/:id/dispatch',
+  authorize('super-admin', 'super-admin-manager', 'admin'),
+  upload.single('dispatch_image'),
+  uploadToS3('stock-requests'),
+  dispatchStockRequest
+);
 
 // Confirm - requester can confirm
 router.post('/:id/confirm', upload.single('confirmation_image'), uploadToS3('stock-requests'), confirmStockRequest);
