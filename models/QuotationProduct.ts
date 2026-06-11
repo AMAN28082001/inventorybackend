@@ -58,6 +58,7 @@ interface QuotationProductAttributes {
   /** PDF display only — not used for pricing/catalog validation */
   pdfUsePanelSizeRange?: boolean;
   pdfUseInverterBrandOptions?: boolean;
+  pdfCommercialSet?: boolean;
   pdfPanelRangeKey?: string | null;
   pdfDcrPanelRangeKey?: string | null;
   pdfNonDcrPanelRangeKey?: string | null;
@@ -68,7 +69,7 @@ interface QuotationProductAttributes {
   finalAmount?: number | null;     // Final amount (Subtotal - Subsidy, discount NOT applied)
 }
 
-interface QuotationProductCreationAttributes extends Optional<QuotationProductAttributes, 'id' | 'phase' | 'panelBrand' | 'panelSize' | 'panelQuantity' | 'panelPrice' | 'dcrPanelBrand' | 'dcrPanelSize' | 'dcrPanelQuantity' | 'nonDcrPanelBrand' | 'nonDcrPanelSize' | 'nonDcrPanelQuantity' | 'inverterType' | 'inverterBrand' | 'inverterSize' | 'inverterPrice' | 'structureType' | 'structureSize' | 'structurePrice' | 'meterBrand' | 'meterPrice' | 'acCableBrand' | 'acCableSize' | 'acCablePrice' | 'dcCableBrand' | 'dcCableSize' | 'dcCablePrice' | 'acdb' | 'acdbPrice' | 'dcdb' | 'dcdbPrice' | 'hybridInverter' | 'batteryCapacity' | 'batteryPrice' | 'centralSubsidy' | 'stateSubsidy' | 'pdfUsePanelSizeRange' | 'pdfUseInverterBrandOptions' | 'pdfPanelRangeKey' | 'pdfDcrPanelRangeKey' | 'pdfNonDcrPanelRangeKey' | 'finalAmount'> { }
+interface QuotationProductCreationAttributes extends Optional<QuotationProductAttributes, 'id' | 'phase' | 'panelBrand' | 'panelSize' | 'panelQuantity' | 'panelPrice' | 'dcrPanelBrand' | 'dcrPanelSize' | 'dcrPanelQuantity' | 'nonDcrPanelBrand' | 'nonDcrPanelSize' | 'nonDcrPanelQuantity' | 'inverterType' | 'inverterBrand' | 'inverterSize' | 'inverterPrice' | 'structureType' | 'structureSize' | 'structurePrice' | 'meterBrand' | 'meterPrice' | 'acCableBrand' | 'acCableSize' | 'acCablePrice' | 'dcCableBrand' | 'dcCableSize' | 'dcCablePrice' | 'acdb' | 'acdbPrice' | 'dcdb' | 'dcdbPrice' | 'hybridInverter' | 'batteryCapacity' | 'batteryPrice' | 'centralSubsidy' | 'stateSubsidy' | 'pdfUsePanelSizeRange' | 'pdfUseInverterBrandOptions' | 'pdfCommercialSet' | 'pdfPanelRangeKey' | 'pdfDcrPanelRangeKey' | 'pdfNonDcrPanelRangeKey' | 'finalAmount'> { }
 
 class QuotationProduct extends Model<QuotationProductAttributes, QuotationProductCreationAttributes> implements QuotationProductAttributes {
   public id!: string;
@@ -111,6 +112,7 @@ class QuotationProduct extends Model<QuotationProductAttributes, QuotationProduc
   public stateSubsidy!: number;
   public pdfUsePanelSizeRange!: boolean;
   public pdfUseInverterBrandOptions!: boolean;
+  public pdfCommercialSet!: boolean;
   public pdfPanelRangeKey!: string | null;
   public pdfDcrPanelRangeKey!: string | null;
   public pdfNonDcrPanelRangeKey!: string | null;
@@ -280,6 +282,11 @@ QuotationProduct.init(
       defaultValue: false
     },
     pdfUseInverterBrandOptions: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false
+    },
+    pdfCommercialSet: {
       type: DataTypes.BOOLEAN,
       allowNull: false,
       defaultValue: false

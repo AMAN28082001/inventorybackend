@@ -586,13 +586,13 @@ PART 1: APIS USED IN FRONTEND
 
 5.4 POST /api/stock-requests/:id/dispatch
 
-   - Purpose: Approve and dispatch stock request (or reject)
+   - Purpose: Approve and dispatch stock request (or reject). Approvers send final line quantities here — no prior PUT required.
 
    - Used in: components/modals/enhanced-request-approval-modal.tsx
 
    - Headers: Authorization: Bearer <token>
 
-   - Content-Type: multipart/form-data
+   - Content-Type: multipart/form-data (or application/json without image)
 
    - Request Body:
 
@@ -600,13 +600,21 @@ PART 1: APIS USED IN FRONTEND
 
        "rejection_reason": string (optional, if rejecting),
 
-       "dispatch_image": File (optional)
+       "dispatch_image": File (optional),
+
+       "items": [{ "product_id": string, "quantity": number }] (optional JSON string in FormData — approver-reduced qty, 1 ≤ qty ≤ originally requested),
+
+       "serial_numbers": { "<product_id>": string[] } (optional JSON string),
+
+       "serial_number_ranges": { "<product_id>": { "from", "to" } } (optional, super-admin only)
 
      }
 
    - Required Role: super-admin, admin
 
-   - Database Tables: stock_requests, inventory_transactions
+   - Note: PUT /api/stock-requests/:id remains requester-only. See BACKEND_CHANGES_STOCK_REQUEST_DISPATCH.md.
+
+   - Database Tables: stock_requests, stock_request_items, inventory_transactions, product_serial_numbers
 
 5.5 POST /api/stock-requests/:id/confirm
 

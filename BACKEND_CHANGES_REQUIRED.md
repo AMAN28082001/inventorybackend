@@ -87,7 +87,7 @@ Single-file slot uploads also accept `POST /api/quotations/{quotationId}/install
 
 ## §X — Quotation PDF display (panel range keys, May 2026)
 
-**Handoff summary:** `BACKEND_CHANGES_HANDOFF.md` §2, §2.6. **Status: implemented** (incl. Tata DCR `tata_530_570`).
+**Handoff summary:** `BACKEND_CHANGES_HANDOFF.md` §2, §2.5, §2.6, §2.7. **Status: implemented** (incl. Tata DCR `tata_530_570`, commercial PDF flag, proposal PDF dates + refetch-before-download contract). See also **§X.9** (unchanged PDF flags).
 
 ### X.1 — Persist on `quotation_products`
 
@@ -96,6 +96,7 @@ Single-file slot uploads also accept `POST /api/quotations/{quotationId}/install
 | `pdfPanelRangeKey` | Single / DCR / Non-DCR panel line |
 | `pdfDcrPanelRangeKey` | BOTH — DCR |
 | `pdfNonDcrPanelRangeKey` | BOTH — Non-DCR |
+| `pdfCommercialSet` | Commercial set — hide page 3 T&C subsidy rows (Central/State Subsidy, disclaimer, consent; “subsidy” stripped from agreement text). App pricing unchanged. Boolean; snake_case `pdf_commercial_set`. **Implemented** — checkbox persists via GET `products`. |
 
 **Allowed keys** (`PDF_PANEL_RANGE_KEYS`):
 
@@ -110,7 +111,9 @@ Single-file slot uploads also accept `POST /api/quotations/{quotationId}/install
 
 Snake_case: `pdf_panel_range_key`, `pdf_dcr_panel_range_key`, `pdf_non_dcr_panel_range_key`.
 
-**PATCH clear:** send `pdfPanelRangeKey: ""` / `null` — `buildQuotationProductPdfPersistFieldsForUpdate` clears DB values; omitted keys unchanged on partial PATCH.
+**PATCH clear:** send `pdfPanelRangeKey: ""` / `null` — `buildQuotationProductPdfPersistFieldsForUpdate` clears DB values; omitted keys unchanged on partial PATCH. For `pdfCommercialSet`, send `false` or explicit field to clear (defaults `false` on create).
+
+**Migration:** `20260607120000-add-pdf-commercial-set-to-quotation-products.js`.
 
 **Endpoints:** `POST /api/quotations`, `PATCH /api/quotations/{id}/products`, `GET` list/detail — echo camelCase + snake_case via `quotationProductPdfDisplayApiFields`.
 
@@ -170,11 +173,71 @@ if (isTataDcrPackageSet(products)) {
 
 **Legacy:** `pdfUsePanelSizeRange`, `pdfUseInverterBrandOptions` — old rows only.
 
-**validUntil:** `POST /api/quotations` → `createdAt + 7 days`.
-
-**Migration:** `20260521120000-add-pdf-panel-range-keys-to-quotation-products.js`.
+**Migration:** `20260521120000-add-pdf-panel-range-keys-to-quotation-products.js`, `20260607120000-add-pdf-commercial-set-to-quotation-products.js`.
 
 **Code:** `utils/quotationProductPdfDisplay.ts`, `utils/quotationTataDcrValidation.ts`, `controllers/quotationController.ts`.
+
+### X.8 — Proposal PDF dates (`updatedAt`, `validUntil`) (Jun 2026)
+
+**Handoff:** `BACKEND_CHANGES_HANDOFF.md` §2.7. **Status: implemented.**
+
+**Frontend:** `lib/quotation-proposal-document.ts` (`normalizeQuotationTimestamps`, `resolveProposalQuotationDates`), `components/quotation-details-dialog.tsx` (refetches `GET /quotations/{id}` before Download PDF), `components/quotation-proposal-pdf.tsx`.
+
+**Frontend → PDF field mapping** (`PROPOSAL_VALIDITY_DAYS = 7`):
+
+| PDF field | Frontend resolves from |
+|-----------|-------------------------|
+| **Updated** | `updatedAt` → else `createdAt` → else `validUntil − 7 days` |
+| **Valid Until** | Updated date + 7 days |
+
+**Backend must** return accurate timestamps on `GET /api/quotations/{id}` (the download path refetches by id, not list cache).
+
+| Field | When set / returned |
+|-------|---------------------|
+| `createdAt` / `created_at` | Always on GET list, GET by id, create response |
+| `updatedAt` / `updated_at` | GET list + GET by id; bumped on products/pricing/discount PATCH |
+| `validUntil` / `valid_until` | `updatedAt + 7 days` on create and on products/pricing/discount update |
+
+**PATCH handlers that bump `updated_at`:**
+
+| Method | Path |
+|--------|------|
+| `PATCH` | `/api/quotations/{id}/products` |
+| `PATCH` | `/api/quotations/{id}/pricing` |
+| `PATCH` | `/api/quotations/{id}/discount` (if still used) |
+
+Each PATCH response includes the new `updatedAt` (and `validUntil` when recomputed).
+
+**Helpers:** `utils/quotationApiJson.ts` — `QUOTATION_PROPOSAL_VALIDITY_DAYS` (7), `computeQuotationValidUntil`, `quotationProposalDateApiFields`, `touchQuotationProposalValidity`.
+
+**Does not affect:** subsidy amounts, `centralSubsidy` / `stateSubsidy`, or catalog pricing — dates are PDF-display only.
+
+**No new endpoints** — existing quotation routes only.
+
+**Example GET by id** (used immediately before PDF download):
+
+```json
+{
+  "id": "QT-HTIV24",
+  "createdAt": "2026-04-20T10:00:00.000Z",
+  "updatedAt": "2026-04-27T09:30:00.000Z",
+  "validUntil": "2026-05-04T09:30:00.000Z",
+  "products": {
+    "pdfCommercialSet": false,
+    "pdf_commercial_set": false
+  }
+}
+```
+
+### X.9 — Existing PDF flags (unchanged, still required)
+
+| Item | Status |
+|------|--------|
+| `pdfPanelRangeKey`, `pdfDcrPanelRangeKey`, `pdfNonDcrPanelRangeKey` | Persist + GET echo |
+| `PATCH …/products` after `POST` create | Required for PDF keys |
+| Clear range keys on `""` / `null` | `buildQuotationProductPdfPersistFieldsForUpdate` |
+| `dealer` on GET by id | List + detail |
+| Do not strip unknown products keys on partial PATCH | Same as range keys |
 
 ---
 
@@ -188,6 +251,8 @@ if (isTataDcrPackageSet(products)) {
 | **High** | Inventory decimal prices + `products.unit` + kg→pieces | **Done** — §N, HANDOFF §18, `BACKEND_CHANGES_DECIMAL_PRICE_KG_TO_PIECES.md` |
 | **Medium** | Admin Visitor Reports `GET /api/admin/visits` | **Done** — §Z, HANDOFF §19 |
 | **High** | Tata DCR + `tata_530_570` + `VAL_003` fix | **Done** — §X.6, HANDOFF §2.6 |
+| **Medium** | Commercial PDF flag `pdfCommercialSet` | **Done** — §X.1, HANDOFF §2.5 |
+| **Medium** | Proposal PDF dates (`updatedAt`, `validUntil` +7d) | **Done** — §X.8, HANDOFF §2.7 |
 | **High** | Persist/return `pdf_panel_range_key` on GET | **Done** |
 | **High** | HR upload live counts | **Done** — §7.8 |
 | **High** | Calling queue `LEAD_004` + remarks | **Done** — §E |

@@ -364,21 +364,87 @@ const adjustAdminInventory = async (adminId: string, productId: string, quantity
   return record;
 };
 
-const ensureSourceAdminInventory = async (adminId: string, items: NormalizedItem[], transaction: Transaction): Promise<void> => {
+interface DispatchStockValidationDetail {
+  product_id: string;
+  product_name: string;
+  path: string;
+  message: string;
+  requested_quantity: number;
+  central_stock?: number;
+  available_stock?: number;
+}
+
+const validateCentralInventoryForDispatch = async (
+  items: StockRequestItem[],
+  transaction: Transaction
+): Promise<DispatchStockValidationDetail[]> => {
+  const details: DispatchStockValidationDetail[] = [];
+
+  for (const item of items) {
+    if (!item.product_id) continue;
+
+    const product = await Product.findByPk(item.product_id, {
+      transaction,
+      lock: transaction.LOCK.UPDATE
+    });
+    const centralStock = product ? Number(product.quantity) : 0;
+    const requestedQty = Number(item.quantity);
+
+    if (!product || centralStock < requestedQty) {
+      details.push({
+        product_id: item.product_id,
+        product_name: item.product_name,
+        path: `items.${item.product_id}.quantity`,
+        message: `Insufficient stock for product ${item.product_name} in central inventory (available: ${centralStock}, requested: ${requestedQty})`,
+        requested_quantity: requestedQty,
+        central_stock: centralStock
+      });
+    }
+  }
+
+  return details;
+};
+
+const validateSourceAdminInventoryForDispatch = async (
+  adminId: string,
+  items: StockRequestItem[],
+  transaction: Transaction
+): Promise<DispatchStockValidationDetail[]> => {
+  const details: DispatchStockValidationDetail[] = [];
+
   for (const item of items) {
     if (!item.product_id) {
-      throw new Error(`Product ID is required for item ${item.product_name}`);
+      details.push({
+        product_id: item.id,
+        product_name: item.product_name,
+        path: `items.${item.id}`,
+        message: `Product ID is required for item ${item.product_name}`,
+        requested_quantity: Number(item.quantity)
+      });
+      continue;
     }
+
     const inventory = await AdminInventory.findOne({
       where: { admin_id: adminId, product_id: item.product_id },
       transaction,
       lock: transaction.LOCK.UPDATE
     });
+    const availableStock = inventory ? Number(inventory.quantity) : 0;
+    const requestedQty = Number(item.quantity);
 
-    if (!inventory || inventory.quantity < item.quantity) {
-      throw new Error(`Insufficient stock for product ${item.product_name} in source admin inventory`);
+    if (availableStock < requestedQty) {
+      details.push({
+        product_id: item.product_id,
+        product_name: item.product_name,
+        path: `items.${item.product_id}.quantity`,
+        message: `Insufficient stock for product ${item.product_name} in source admin inventory (available: ${availableStock}, requested: ${requestedQty})`,
+        requested_quantity: requestedQty,
+        available_stock: availableStock
+      });
     }
   }
+
+  return details;
 };
 
 const decrementAdminInventory = async (adminId: string, item: NormalizedItem, transaction: Transaction): Promise<void> => {
@@ -413,6 +479,122 @@ interface CreateTransferTransactionsParams {
   userId: string;
   transaction: Transaction;
 }
+
+const parseJsonBodyField = (raw: unknown, fieldName: string): unknown => {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw === 'string') {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      throw new Error(`Invalid ${fieldName} JSON`);
+    }
+  }
+  return raw;
+};
+
+const productHasSerialNumbers = async (
+  productId: string,
+  transaction: Transaction
+): Promise<boolean> => {
+  const count = await ProductSerialNumber.count({
+    where: { product_id: productId },
+    transaction
+  });
+  return count > 0;
+};
+
+/**
+ * Approver may reduce line quantities on dispatch (no prior PUT required).
+ * Each override: 1 ≤ quantity ≤ originally requested for that product_id.
+ */
+const applyDispatchItemQuantityOverrides = async (
+  lineItems: StockRequestItem[],
+  rawItems: unknown,
+  transaction: Transaction
+): Promise<StockRequestItem[]> => {
+  if (rawItems === undefined || rawItems === null) {
+    return lineItems;
+  }
+
+  const parsed = parseJsonBodyField(rawItems, 'items');
+  if (!Array.isArray(parsed)) {
+    throw new Error('items must be a JSON array');
+  }
+
+  if (parsed.length === 0) {
+    return lineItems;
+  }
+
+  const originalQtyByProduct = new Map<string, number>();
+  for (const line of lineItems) {
+    if (!line.product_id) continue;
+    originalQtyByProduct.set(line.product_id, Number(line.quantity));
+  }
+
+  const overrideByProduct = new Map<string, number>();
+  for (const entry of parsed) {
+    const productId = entry?.product_id != null ? String(entry.product_id) : '';
+    const quantity = Number(entry?.quantity);
+    if (!productId) {
+      throw new Error('Each items entry must include product_id');
+    }
+    if (!Number.isFinite(quantity) || quantity < 1) {
+      throw new Error(`Quantity for product ${productId} must be at least 1`);
+    }
+    const original = originalQtyByProduct.get(productId);
+    if (original === undefined) {
+      throw new Error(`Product ${productId} is not on this stock request`);
+    }
+    if (quantity > original) {
+      throw new Error(
+        `Quantity for product ${productId} cannot exceed originally requested quantity (${original})`
+      );
+    }
+    overrideByProduct.set(productId, quantity);
+  }
+
+  for (const line of lineItems) {
+    if (!line.product_id) continue;
+    const overrideQty = overrideByProduct.get(line.product_id);
+    if (overrideQty !== undefined && overrideQty !== Number(line.quantity)) {
+      await line.update({ quantity: overrideQty }, { transaction });
+      line.quantity = overrideQty;
+    }
+  }
+
+  return lineItems;
+};
+
+const validateSerialCountsMatchDispatchQuantity = async (
+  lineItems: StockRequestItem[],
+  serialNumbersMap: Record<string, string[]> | null,
+  serialNumberRanges: Record<string, { from: string; to: string }> | null,
+  transaction: Transaction
+): Promise<void> => {
+  for (const item of lineItems) {
+    if (!item.product_id) continue;
+    const tracked = await productHasSerialNumbers(item.product_id, transaction);
+    if (!tracked) continue;
+
+    const qty = Number(item.quantity);
+    if (serialNumberRanges?.[item.product_id]) {
+      continue;
+    }
+    if (serialNumbersMap?.[item.product_id]) {
+      const serialsList = serialNumbersMap[item.product_id];
+      if (!Array.isArray(serialsList) || serialsList.length !== qty) {
+        throw new Error(
+          `Serial count (${Array.isArray(serialsList) ? serialsList.length : 0}) must match dispatched quantity (${qty}) for product ${item.product_id}`
+        );
+      }
+      continue;
+    }
+
+    throw new Error(
+      `Product ${item.product_name} requires serial numbers matching dispatched quantity (${qty})`
+    );
+  }
+};
 
 const createTransferTransactions = async ({
   sourceRole,
@@ -479,6 +661,7 @@ export const dispatchStockRequest = async (req: Request, res: Response): Promise
 
     const { id } = req.params;
     const { rejection_reason } = req.body;
+    const dispatchItemsRaw = (req.body as any).items;
     const serialNumberRangesRaw = (req.body as any).serial_number_ranges;
     const serialNumbersRaw = (req.body as any).serial_numbers;
     let serialNumberRanges: Record<string, { from: string; to: string }> | null = null;
@@ -491,24 +674,24 @@ export const dispatchStockRequest = async (req: Request, res: Response): Promise
         return;
       }
       try {
-        serialNumberRanges = typeof serialNumberRangesRaw === 'string'
-          ? JSON.parse(serialNumberRangesRaw)
-          : serialNumberRangesRaw;
-      } catch {
+        serialNumberRanges = parseJsonBodyField(serialNumberRangesRaw, 'serial_number_ranges') as
+          | Record<string, { from: string; to: string }>
+          | null;
+      } catch (parseErr: any) {
         await transaction.rollback();
-        res.status(400).json({ error: 'Invalid serial_number_ranges JSON' });
+        res.status(400).json({ error: parseErr.message || 'Invalid serial_number_ranges JSON' });
         return;
       }
     }
 
     if (serialNumbersRaw) {
       try {
-        serialNumbersMap = typeof serialNumbersRaw === 'string'
-          ? JSON.parse(serialNumbersRaw)
-          : serialNumbersRaw;
-      } catch {
+        serialNumbersMap = parseJsonBodyField(serialNumbersRaw, 'serial_numbers') as
+          | Record<string, string[]>
+          | null;
+      } catch (parseErr: any) {
         await transaction.rollback();
-        res.status(400).json({ error: 'Invalid serial_numbers JSON' });
+        res.status(400).json({ error: parseErr.message || 'Invalid serial_numbers JSON' });
         return;
       }
     }
@@ -551,7 +734,7 @@ export const dispatchStockRequest = async (req: Request, res: Response): Promise
     }
 
     // Fetch items separately after locking the request
-    const items = await StockRequestItem.findAll({
+    let items = await StockRequestItem.findAll({
       where: { stock_request_id: id },
       transaction
     });
@@ -576,6 +759,19 @@ export const dispatchStockRequest = async (req: Request, res: Response): Promise
       await transaction.rollback();
       res.status(400).json({ error: 'Stock request has no line items' });
       return;
+    }
+
+    try {
+      items = await applyDispatchItemQuantityOverrides(items, dispatchItemsRaw, transaction);
+    } catch (overrideErr: any) {
+      await transaction.rollback();
+      res.status(400).json({ error: overrideErr.message || 'Invalid dispatch items' });
+      return;
+    }
+
+    const dispatchTotalQuantity = items.reduce((sum, line) => sum + Number(line.quantity), 0);
+    if (dispatchItemsRaw !== undefined && dispatchItemsRaw !== null) {
+      await request.update({ total_quantity: dispatchTotalQuantity }, { transaction });
     }
 
     for (const item of items) {
@@ -609,15 +805,27 @@ export const dispatchStockRequest = async (req: Request, res: Response): Promise
         : (await User.findByPk(request.requested_from, { transaction }))?.name || 'Unknown Admin';
 
     if (request.requested_from_role === 'super-admin') {
-      for (const item of items) {
-        if (!item.product_id) continue;
-        const product = await Product.findByPk(item.product_id, { transaction, lock: transaction.LOCK.UPDATE });
+      const centralStockFailures = await validateCentralInventoryForDispatch(items, transaction);
+      if (centralStockFailures.length > 0) {
+        await transaction.rollback();
+        res.status(400).json({
+          error: 'Insufficient stock',
+          details: centralStockFailures
+        });
+        return;
+      }
 
-        if (!product || product.quantity < item.quantity) {
-          await transaction.rollback();
-          res.status(400).json({ error: `Insufficient stock for product ${item.product_name} in central inventory` });
-          return;
-        }
+      try {
+        await validateSerialCountsMatchDispatchQuantity(
+          items,
+          serialNumbersMap,
+          serialNumberRanges,
+          transaction
+        );
+      } catch (serialErr: any) {
+        await transaction.rollback();
+        res.status(400).json({ error: serialErr.message || 'Serial number validation failed' });
+        return;
       }
 
       for (const item of items) {
@@ -690,6 +898,13 @@ export const dispatchStockRequest = async (req: Request, res: Response): Promise
             res.status(400).json({ error: `serial_numbers for product ${item.product_id} must be a non-empty array` });
             return;
           }
+          if (serialsList.length !== item.quantity) {
+            await transaction.rollback();
+            res.status(400).json({
+              error: `Serial count (${serialsList.length}) must match dispatched quantity (${item.quantity}) for product ${item.product_id}`
+            });
+            return;
+          }
 
           const serialRows = await ProductSerialNumber.findAll({
             where: {
@@ -752,15 +967,19 @@ export const dispatchStockRequest = async (req: Request, res: Response): Promise
         return;
       }
 
-      const normalizedItems: NormalizedItem[] = items.map(item => ({
-        product_id: item.product_id,
-        product_name: item.product_name,
-        model: item.model,
-        quantity: item.quantity
-      }));
-      
-      // Ensure source admin has enough inventory
-      await ensureSourceAdminInventory(actualSourceAdminId, normalizedItems, transaction);
+      const adminStockFailures = await validateSourceAdminInventoryForDispatch(
+        actualSourceAdminId,
+        items,
+        transaction
+      );
+      if (adminStockFailures.length > 0) {
+        await transaction.rollback();
+        res.status(400).json({
+          error: 'Insufficient stock',
+          details: adminStockFailures
+        });
+        return;
+      }
 
       // Decrease source admin's inventory (this is critical for admin-to-agent transfers)
       for (const item of items) {

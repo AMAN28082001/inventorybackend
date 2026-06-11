@@ -16,7 +16,10 @@ import {
   quotationPaymentApiFields,
   quotationAdminMetadataFields,
   quotationProductEnrichmentFields,
-  serializeInstallationReleaseFields
+  serializeInstallationReleaseFields,
+  computeQuotationValidUntil,
+  quotationProposalDateApiFields,
+  touchQuotationProposalValidity
 } from '../utils/quotationApiJson';
 import { persistQuotationSystemKw } from '../utils/persistQuotationSystemKw';
 import {
@@ -990,9 +993,7 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
       quotationId = generateQuotationId();
     }
 
-    // Calculate valid until date (7 days from now)
-    const validUntil = new Date();
-    validUntil.setDate(validUntil.getDate() + 7);
+    const validUntil = computeQuotationValidUntil(new Date());
 
     const normalizedPaidAmount = paidAmount !== undefined && paidAmount !== null
       ? Number(paidAmount)
@@ -1132,8 +1133,7 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
           cablePrice: finalPricing.cablePrice,
           acdbDcdbPrice: finalPricing.acdbDcdbPrice
         },
-        createdAt: quotation.createdAt,
-        validUntil: quotation.validUntil
+        ...quotationProposalDateApiFields(quotation)
       }
     });
   } catch (error) {
@@ -1568,8 +1568,7 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         } : null,
         status: q.status,
         discount: q.discount,
-        createdAt: q.createdAt,
-        validUntil: q.validUntil
+        ...quotationProposalDateApiFields(q)
       };
     }));
 
@@ -1995,8 +1994,7 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
         installments: phaseRows,
         paymentPhases: phaseRows,
         payment_phases: phaseRows,
-        createdAt: quotation.createdAt,
-        validUntil: quotation.validUntil
+        ...quotationProposalDateApiFields(quotation)
       }
     });
   } catch (error) {
@@ -2110,10 +2108,10 @@ export const updateQuotationDiscount = async (req: Request, res: Response): Prom
       discount: discountAmount !== null ? quotation.discount : discount,
       totalAmount: newTotalAmount,
       finalAmount: newFinalAmount,
-      discountAmount: computedDiscountAmount
+      discountAmount: computedDiscountAmount,
+      validUntil: computeQuotationValidUntil(new Date())
     });
 
-    // Refresh quotation to get updated timestamp
     await quotation.reload();
 
     res.json({
@@ -2132,7 +2130,7 @@ export const updateQuotationDiscount = async (req: Request, res: Response): Prom
           centralSubsidy: centralSubsidy,
           stateSubsidy: stateSubsidy
         },
-        updatedAt: quotation.updatedAt
+        ...quotationProposalDateApiFields(quotation)
       }
     });
   } catch (error) {
@@ -2292,6 +2290,9 @@ export const updateQuotationProducts = async (req: Request, res: Response): Prom
       });
     }
 
+    await touchQuotationProposalValidity(quotation);
+    await updatedQuotation?.reload();
+
     const updatedQuotationAny = updatedQuotation as any;
     const productsRow = updatedQuotationAny?.products;
     const customPanelsData = updatedQuotationAny?.customPanels?.map((cp: any) => cp.toJSON()) || [];
@@ -2316,7 +2317,7 @@ export const updateQuotationProducts = async (req: Request, res: Response): Prom
         ...productEnrichment,
         products: mergedProducts,
         quotationProduct: mergedProducts,
-        updatedAt: updatedQuotation?.updatedAt
+        ...quotationProposalDateApiFields(updatedQuotation || quotation)
       }
     });
   } catch (error) {
@@ -2528,7 +2529,8 @@ export const updateQuotationPricing = async (req: Request, res: Response): Promi
       paymentMode: paymentMode !== undefined ? paymentMode : quotation.paymentMode,
       paidAmount: normalizedPaidAmount !== undefined ? normalizedPaidAmount : quotation.paidAmount,
       paymentDate: paymentDate !== undefined ? paymentDate : quotation.paymentDate,
-      paymentStatus: normalizedPaymentStatus !== undefined ? normalizedPaymentStatus : quotation.paymentStatus
+      paymentStatus: normalizedPaymentStatus !== undefined ? normalizedPaymentStatus : quotation.paymentStatus,
+      validUntil: computeQuotationValidUntil(new Date())
     });
 
     // Update products with subsidies if provided
@@ -2582,7 +2584,7 @@ export const updateQuotationPricing = async (req: Request, res: Response): Promi
         subtotal: newSubtotal,
         totalAmount: calculatedTotalAmount,
         finalAmount: finalFinalAmount,
-        updatedAt: quotation.updatedAt
+        ...quotationProposalDateApiFields(quotation)
       }
     });
   } catch (error) {

@@ -1021,3 +1021,60 @@ export async function patchQuotationInstallationRelease(req, res) {
     res.status(500).json({ success: false, error: { code: "SYS_001", message: "Internal error" } })
   }
 }
+
+/**
+ * PATCH /api/quotations/:quotationId/products
+ * (Jun 2026 — commercial PDF flag + proposal validity dates)
+ *
+ * Implemented: controllers/quotationController.ts → updateQuotationProducts
+ * PDF flags: utils/quotationProductPdfDisplay.ts
+ *   - buildQuotationProductPdfPersistFieldsForUpdate (partial PATCH; clear pdfCommercialSet on false)
+ *   - quotationProductPdfDisplayApiFields (GET echo camelCase + snake_case)
+ * Dates: utils/quotationApiJson.ts
+ *   - touchQuotationProposalValidity(quotation) after product save
+ *   - quotationProposalDateApiFields in PATCH + GET responses
+ *
+ * Frontend before Download PDF: GET /quotations/:id (quotation-details-dialog refetch).
+ * PDF Updated = updatedAt → createdAt → validUntil − 7d (resolveProposalQuotationDates).
+ * PDF Valid Until = Updated + 7 days (PROPOSAL_VALIDITY_DAYS).
+ *
+ * Example body (after create or on edit):
+ * {
+ *   "panelBrand": "Premier Energies",
+ *   "pdfPanelRangeKey": "premier_600_625_bifacial_topcon",
+ *   "pdfCommercialSet": true
+ * }
+ */
+function addDays(date, days) {
+  const d = new Date(date)
+  d.setDate(d.getDate() + days)
+  return d
+}
+
+/** Reference sketch — real handler: quotationController.updateQuotationProducts */
+export async function patchQuotationProductsPdfFlagsExample(req, res) {
+  const { quotationId } = req.params
+  const products = req.body?.products ?? req.body
+
+  const quotation = await Quotation.findByPk(quotationId)
+  if (!quotation) {
+    res.status(404).json({ success: false, error: { code: "RES_001", message: "Quotation not found" } })
+    return
+  }
+
+  // merge products + pdfPersistFields (see buildQuotationProductPdfPersistFieldsForUpdate)
+  // await QuotationProduct.update({ ...merged, ...pdfPersistFields }, { where: { quotationId } })
+  const now = new Date()
+  await quotation.update({ validUntil: addDays(now, 7) })
+  await quotation.reload()
+
+  res.json({
+    success: true,
+    data: {
+      id: quotation.id,
+      products,
+      updatedAt: quotation.updatedAt?.toISOString?.() ?? quotation.updatedAt,
+      validUntil: quotation.validUntil?.toISOString?.() ?? quotation.validUntil,
+    },
+  })
+}

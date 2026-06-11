@@ -15,9 +15,13 @@ export const formatProductForApi = (product: Product | Record<string, unknown>) 
       ? roundProductPrice(json.selling_price)
       : null;
 
+  const centralStock = json.quantity != null ? Number(json.quantity) : 0;
+
   return {
     ...json,
-    quantity: json.quantity != null ? Number(json.quantity) : 0,
+    quantity: centralStock,
+    /** Same value as `quantity` — central warehouse stock used by dispatch validation. */
+    central_stock: centralStock,
     unit_price: unitPrice,
     selling_price: sellingPrice,
     unit: (json.unit as string | null | undefined) ?? null

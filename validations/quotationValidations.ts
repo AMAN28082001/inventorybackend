@@ -72,6 +72,8 @@ const productsSchemaObject = z.object({
   pdf_use_panel_size_range: booleanOrString.optional(),
   pdfUseInverterBrandOptions: booleanOrString.optional(),
   pdf_use_inverter_brand_options: booleanOrString.optional(),
+  pdfCommercialSet: booleanOrString.optional(),
+  pdf_commercial_set: booleanOrString.optional(),
   pdfPanelRangeKey: z
     .union([z.enum(PDF_PANEL_RANGE_KEYS), z.literal(''), z.null()])
     .nullish(),

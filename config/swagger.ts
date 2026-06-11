@@ -240,6 +240,16 @@ const swaggerDefinition = {
           batteryPrice: { type: 'number' },
           centralSubsidy: { type: 'number', default: 0 },
           stateSubsidy: { type: 'number', default: 0 },
+          pdfCommercialSet: {
+            type: 'boolean',
+            default: false,
+            description: 'PDF-only: commercial set — hide subsidy lines on proposal PDF'
+          },
+          pdf_commercial_set: {
+            type: 'boolean',
+            default: false,
+            description: 'Snake_case mirror of pdfCommercialSet'
+          },
           pdfPanelRangeKey: {
             type: 'string',
             nullable: true,

@@ -32,6 +32,46 @@ function toIsoStringOrNull(v: unknown): string | null {
   return null;
 }
 
+/** Proposal PDF: Valid Until = updatedAt (or createdAt) + 7 days (§X / HANDOFF §2.7). */
+export const QUOTATION_PROPOSAL_VALIDITY_DAYS = 7;
+
+export const computeQuotationValidUntil = (from: Date = new Date()): Date => {
+  const base = new Date(from);
+  base.setDate(base.getDate() + QUOTATION_PROPOSAL_VALIDITY_DAYS);
+  return base;
+};
+
+/** Echo created/updated/validUntil on GET list, GET by id, and PATCH responses. */
+export const quotationProposalDateApiFields = (q: {
+  createdAt?: Date | string | null;
+  updatedAt?: Date | string | null;
+  validUntil?: Date | string | null;
+}) => {
+  const createdAt = toIsoStringOrNull(q.createdAt);
+  const updatedAt = toIsoStringOrNull(q.updatedAt);
+  const validUntil = toIsoStringOrNull(q.validUntil);
+  return {
+    createdAt,
+    created_at: createdAt,
+    updatedAt,
+    updated_at: updatedAt,
+    validUntil,
+    valid_until: validUntil
+  };
+};
+
+/** Bump quotation.updated_at and recompute validUntil after products/pricing edits. */
+export const touchQuotationProposalValidity = async (quotation: {
+  update: (values: Record<string, unknown>) => Promise<unknown>;
+  reload?: () => Promise<unknown>;
+}): Promise<void> => {
+  const now = new Date();
+  await quotation.update({ validUntil: computeQuotationValidUntil(now) });
+  if (typeof quotation.reload === 'function') {
+    await quotation.reload();
+  }
+};
+
 /** DATEONLY / YYYY-MM-DD for API responses (camelCase + snake_case consumers). */
 export function toDateOnlyStringOrNull(v: unknown): string | null {
   if (v === null || v === undefined) return null;

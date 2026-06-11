@@ -1,6 +1,6 @@
 # Backend changes handoff (May 2026)
 
-**Single handoff doc for the API team.** Full specs: `BACKEND_CHANGES_REQUIRED.md` (§7.8–§7.9, dealer queue **§E.1 / §E.2** / §E–§H, §J, §M–§N, §X, §Y). **Calling queue:** **§4.5.1** / **§E.1** (active lead until Submit); **§4.5.2** / **§E.2** (reschedule / Decision Pending — no 500). Reference contracts: `BACKEND_ADMIN_QUOTATION_STATUS.ts`, `BACKEND_INSTALLATION_RELEASE.md`, `BACKEND_CHANGES_DECIMAL_PRICE_KG_TO_PIECES.md`. Implementation: `controllers/callingLeadController.ts`, `controllers/quotationController.ts`, `controllers/productController.ts`, `controllers/visitController.ts`, `controllers/customerController.ts`, `utils/quotationProductPdfDisplay.ts`, `utils/productUnit.ts`, `utils/s3Service.ts`.
+**Single handoff doc for the API team.** Full specs: `BACKEND_CHANGES_REQUIRED.md` (§7.8–§7.9, dealer queue **§E.1 / §E.2** / §E–§H, §J, §M–§N, §X, §Y). **Quotation PDF (Jun 2026):** **§2.5** (`pdfCommercialSet`), **§2.7** (`updatedAt` / `validUntil` +7d, refetch before Download PDF). **Calling queue:** **§4.5.1** / **§E.1** (active lead until Submit); **§4.5.2** / **§E.2** (reschedule / Decision Pending — no 500). Reference contracts: `BACKEND_ADMIN_QUOTATION_STATUS.ts`, `BACKEND_INSTALLATION_RELEASE.md`, `BACKEND_CHANGES_DECIMAL_PRICE_KG_TO_PIECES.md`. Implementation: `controllers/callingLeadController.ts`, `controllers/quotationController.ts`, `controllers/productController.ts`, `controllers/visitController.ts`, `controllers/customerController.ts`, `utils/quotationProductPdfDisplay.ts`, `utils/quotationApiJson.ts`, `utils/productUnit.ts`, `utils/s3Service.ts`.
 
 ## Sprint checklist (copy for tracking)
 
@@ -29,7 +29,9 @@
 | 19 | Medium | Admin dealers `includeInactive` + pagination | **Done** | §10 |
 | 20 | Medium | Payment Management list fields (dealer, phases, dates) | **Done** | §12 |
 | 21 | Medium | Admin Overview kW — `products` + `systemKw` on list | **Done** | §13 |
-| 22 | Medium | `GET /api/quotations/pricing-tables` (June 2026 defaults) | **Done** | §2.5 |
+| 22 | Medium | `GET /api/quotations/pricing-tables` (June 2026 defaults) | **Done** | §2 |
+| 22b | Medium | Commercial PDF flag `pdfCommercialSet` | **Done** | §2.5 |
+| 22c | Medium | Proposal PDF dates (`updatedAt`, `validUntil` +7d) | **Done** | §2.7 |
 | 23 | High | Payment Management → Admin Installation release gate | **Done** | §17 |
 | 24 | High | Inventory — decimal prices + `products.unit` + kg→pieces contract | **Done** | §18 |
 | 25 | Medium | Admin Visitor Reports — `GET /api/admin/visits` | **Done** | §19 |
@@ -144,7 +146,7 @@ Optional: `TZ=Asia/Kolkata` if weekly HR reports must match SPA Mon–Sun in IST
 - `inverterBrand` catalog check allows **`Vsole/Xwatt/Saatvik`** and **`Vsole/Xwatt`** in addition to catalog brands.
 - `meterBrand` catalog check allows **`L&T/HPL/Genus/Secure`** in addition to catalog brands.
 - Range keys are **not** passed into `validateProductSelection` or `calculatePricing`.
-- **`validUntil`** on create defaults to **`createdAt + 7 days`** (was 5).
+- **`validUntil`** on create defaults to **`createdAt + 7 days`** (was 5). Recomputed on products/pricing PATCH — see **§2.7**.
 
 **Server PDFs:** use `utils/quotationProductPdfDisplay.ts` (`PDF_PANEL_RANGE_KEYS`, `extractPdfPanelRangeKeysFromProducts`).
 
@@ -153,6 +155,77 @@ Optional: `TZ=Asia/Kolkata` if weekly HR reports must match SPA Mon–Sun in IST
 **Pricing tables:** `GET /api/quotations/pricing-tables` (alias of `GET /api/config/pricing`). When DB `dcr` is empty, API returns June 2026 defaults: Adani 555W, Adani Topcon 620W, Waaree 540W, Premier Energies, **Tata DCR** (`utils/defaultPricingTables.ts`).
 
 **New quotes:** frontend is **DCR-only**; legacy rows may remain `non-dcr` / `both`. **GET is source of truth** for `pdf_panel_range_key` after save (not browser `localStorage`).
+
+### 2.5 Commercial PDF flag — `pdfCommercialSet` (Jun 2026)
+
+**Status: implemented** — migration `20260607120000-add-pdf-commercial-set-to-quotation-products.js`. Checkbox state **persists after reload** when GET returns the flag on `products`.
+
+**What changes:** When **Commercial project** is checked, subsidy content is omitted from the proposal PDF **Terms & Conditions (page 3)** only. **Pricing in the app is unchanged** — `centralSubsidy` / `stateSubsidy` stay in DB; this is PDF display only.
+
+**Hidden on PDF when `pdfCommercialSet: true`:**
+
+| PDF section | Hidden content |
+|-------------|----------------|
+| Terms & Conditions (page 3) | Central Subsidy row |
+| | State Subsidy row |
+| | Subsidy disclaimer row |
+| | Consent line (bottom) |
+| | The word “subsidy” removed from agreement text |
+
+**Not hidden (by design):** Page 2 **Panel Technology Note** may still say “subsidy-eligible” for DCR panels. Optional frontend follow-up: commercial wording on page 2 when Commercial is checked (no backend change).
+
+**Frontend flows:**
+
+| Flow | Steps |
+|------|--------|
+| **Create** | Configure DCR set → check Commercial project → continue → generate/download PDF. Flag saved as `pdfCommercialSet: true` via `PATCH …/products`. |
+| **Edit** | Open quotation → Edit System Configuration → check Commercial → Save → download PDF. Checkbox restored from `products.pdfCommercialSet` on GET. |
+
+**Frontend code:**
+
+| Piece | Role |
+|-------|------|
+| Checkbox | `formData.pdfCommercialSet` (`product-selection-form.tsx`) |
+| PDF gate | `shouldShowSubsidyTermsInPdf()` → `false` when `isPdfCommercialSet(products)` |
+| PDF build | Subsidy T&C rows skipped in `buildTermsRows()` (`quotation-proposal-document.ts`) |
+
+| Field | Type | Purpose |
+|-------|------|---------|
+| `pdfCommercialSet` | boolean | Commercial project — hide subsidy T&C on proposal PDF page 3 |
+| `pdf_commercial_set` | boolean | snake_case mirror |
+
+**Endpoints (no new routes):**
+
+| Method | Path | Behavior |
+|--------|------|----------|
+| `PATCH` | `/api/quotations/{id}/products` | Persist flag (after create and on edit save) |
+| `GET` | `/api/quotations`, `/api/quotations/{id}` | Echo flag on `products` so checkbox survives reload |
+
+**Rules:**
+
+- PDF-only — does **not** change pricing or `centralSubsidy` / `stateSubsidy` in DB.
+- On uncheck: accept `false` and clear stored value (`buildQuotationProductPdfPersistFieldsForUpdate`).
+- Do **not** strip unknown PDF keys on partial PATCH (same as `pdfPanelRangeKey`).
+
+**Required GET/PATCH shape** (`products`):
+
+```json
+{
+  "panelBrand": "Premier Energies",
+  "pdfPanelRangeKey": "premier_600_625_bifacial_topcon",
+  "pdfCommercialSet": true,
+  "pdf_commercial_set": true
+}
+```
+
+**Checklist:**
+
+- [x] Persist `pdfCommercialSet` / `pdf_commercial_set` on `quotation_products`
+- [x] Clear commercial flag on `false`
+- [x] Return on GET list + GET by id (`quotationProductPdfDisplayApiFields`)
+- [x] `dealer` on GET quotation (list + detail — unchanged)
+
+**Code:** `utils/quotationProductPdfDisplay.ts`, `validations/quotationValidations.ts`, `controllers/quotationController.ts` → `updateQuotationProducts`.
 
 ### 2.6 Tata DCR package sets — `VAL_003` fix (**implemented**)
 
@@ -201,6 +274,71 @@ Optional: `TZ=Asia/Kolkata` if weekly HR reports must match SPA Mon–Sun in IST
 - [x] `As per the set` / `As per Set` on panel, inverter, cables
 - [x] Structure `3.1kW` / `5.1kW`
 - [x] (Optional) Tata DCR rows in `GET /api/quotations/pricing-tables` defaults
+
+### 2.7 Proposal PDF dates — `updatedAt` and `validUntil` (Jun 2026)
+
+**Status: implemented**
+
+**Frontend:** `lib/quotation-proposal-document.ts` (`normalizeQuotationTimestamps`, `resolveProposalQuotationDates`), `components/quotation-details-dialog.tsx` (**refetches `GET /api/quotations/{id}` before Download PDF**), `components/quotation-proposal-pdf.tsx`.
+
+**PDF download flow:** The details dialog does **not** trust list-cache timestamps. On **Download PDF** it calls `GET /api/quotations/{id}` first, then builds the PDF from the fresh payload (including `products.pdfCommercialSet` and date fields).
+
+**Frontend date resolution** (`resolveProposalQuotationDates`, `PROPOSAL_VALIDITY_DAYS = 7`):
+
+| PDF field | Frontend source |
+|-----------|-----------------|
+| **Updated** | `updatedAt` → else `createdAt` → else `validUntil − 7 days` |
+| **Valid Until** | Updated date **+ 7 days** |
+
+Backend should keep `validUntil ≈ updatedAt + 7 days` so the third fallback is rarely needed (legacy rows only).
+
+**Database** (`quotations` table — already present):
+
+| Column | Notes |
+|--------|--------|
+| `updated_at` | `TIMESTAMP`, Sequelize `updatedAt`; bumped on quotation row save |
+| `valid_until` | `TIMESTAMP NULL`; recommended — set on create and products/pricing updates |
+
+**Backend contract:**
+
+| Requirement | Implementation |
+|-------------|----------------|
+| GET list + GET by id | Return `createdAt`, `updatedAt`, `validUntil` on **every** quotation (camelCase + snake_case) |
+| PATCH responses | Include fresh `updatedAt` / `validUntil` on `…/products`, `…/pricing`, `…/discount` |
+| Bump `updated_at` | `PATCH /api/quotations/{id}/products`, `…/pricing`, `…/discount` |
+| `validUntil` | `updatedAt + 7 days` on create (not 5) and on products/pricing/discount update |
+
+**Endpoints that bump validity (no new routes):**
+
+| Method | Path | Implementation |
+|--------|------|----------------|
+| `PATCH` | `/api/quotations/{id}/products` | `touchQuotationProposalValidity(quotation)` after product save |
+| `PATCH` | `/api/quotations/{id}/pricing` | `validUntil: computeQuotationValidUntil(now)` on quotation update |
+| `PATCH` | `/api/quotations/{id}/discount` | same as pricing (if still used) |
+
+**Example GET response** (minimum for PDF dates to work):
+
+```json
+{
+  "id": "QT-HTIV24",
+  "createdAt": "2026-04-20T10:00:00.000Z",
+  "created_at": "2026-04-20T10:00:00.000Z",
+  "updatedAt": "2026-04-27T09:30:00.000Z",
+  "updated_at": "2026-04-27T09:30:00.000Z",
+  "validUntil": "2026-05-04T09:30:00.000Z",
+  "valid_until": "2026-05-04T09:30:00.000Z"
+}
+```
+
+**Checklist:**
+
+- [x] Return `updatedAt` on GET list + GET by id
+- [x] Bump `updated_at` on products/pricing/discount PATCH; return `updatedAt` in PATCH response
+- [x] `validUntil` = `updatedAt + 7 days` on create and on products/pricing update
+- [x] Return `dealer` on GET quotation (list + detail)
+- [x] Existing PDF panel range keys + PATCH-after-create (§2, unchanged)
+
+**Code:** `utils/quotationApiJson.ts` (`QUOTATION_PROPOSAL_VALIDITY_DAYS`, `computeQuotationValidUntil`, `quotationProposalDateApiFields`, `touchQuotationProposalValidity`), `controllers/quotationController.ts`.
 
 ---
 

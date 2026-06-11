@@ -126,16 +126,33 @@ export const getProductSerialNumbers = async (req: Request, res: Response): Prom
       return;
     }
 
-    const where: any = { product_id: id };
-    if (statusFilter) {
+    const scope = (req.query.scope as string | undefined)?.trim().toLowerCase();
+    const buildAvailableStatusWhere = (base: Record<string, unknown>): Record<string, unknown> => {
+      const next = { ...base };
       if (statusFilter === 'available') {
-        where.status = {
+        next.status = {
           [Op.notIn]: ['dispatched', 'acknowledged', 'sold']
         };
-      } else {
-        where.status = statusFilter;
+      } else if (statusFilter) {
+        next.status = statusFilter;
       }
-    }
+      if (scope === 'central') {
+        next[Op.and as any] = [
+          {
+            [Op.or]: [
+              { owner_id: null, owner_type: null },
+              { owner_type: 'super-admin' },
+              ...(req.user?.role === 'super-admin' && req.user.id
+                ? [{ owner_id: req.user.id, owner_type: 'super-admin' }]
+                : [])
+            ]
+          }
+        ];
+      }
+      return next;
+    };
+
+    const where = buildAvailableStatusWhere({ product_id: id });
 
     let serials = await ProductSerialNumber.findAll({
       where,
@@ -143,29 +160,27 @@ export const getProductSerialNumbers = async (req: Request, res: Response): Prom
     });
 
     if (serials.length === 0 && product.name) {
-      const byNameWhere: any = {
+      const byNameWhere = buildAvailableStatusWhere({
         product_name: {
           [Op.iLike]: product.name
         }
-      };
-      if (statusFilter) {
-        if (statusFilter === 'available') {
-          byNameWhere.status = {
-            [Op.notIn]: ['dispatched', 'acknowledged', 'sold']
-          };
-        } else {
-          byNameWhere.status = statusFilter;
-        }
-      }
+      });
       serials = await ProductSerialNumber.findAll({
         where: byNameWhere,
         order: [['created_at', 'DESC']]
       });
     }
 
+    const deduped = new Map<string, typeof serials[number]>();
+    for (const serial of serials) {
+      deduped.set(serial.id, serial);
+    }
+    serials = Array.from(deduped.values());
+
     res.json({
       product_id: id,
       total_serial_numbers: serials.length,
+      available_count: statusFilter === 'available' ? serials.length : undefined,
       serial_numbers: serials.map((s) => {
         const resolvedCost = s.cost_price !== undefined && s.cost_price !== null
           ? Number(s.cost_price)

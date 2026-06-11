@@ -36,6 +36,8 @@ export const EXTRA_METER_BRAND_LABELS = ['L&T/HPL/Genus/Secure'] as const;
 export type PdfDisplayFlags = {
   pdfUsePanelSizeRange: boolean;
   pdfUseInverterBrandOptions: boolean;
+  /** Commercial set — hide subsidy lines on proposal PDF */
+  pdfCommercialSet: boolean;
 };
 
 export type PdfPanelRangeKeys = {
@@ -84,8 +86,12 @@ export const extractPdfDisplayFlagsFromProducts = (
   const inverter =
     parsePdfDisplayFlag(products.pdfUseInverterBrandOptions) ??
     parsePdfDisplayFlag(products.pdf_use_inverter_brand_options);
+  const commercialSet =
+    parsePdfDisplayFlag(products.pdfCommercialSet) ??
+    parsePdfDisplayFlag(products.pdf_commercial_set);
   if (panel !== undefined) out.pdfUsePanelSizeRange = panel;
   if (inverter !== undefined) out.pdfUseInverterBrandOptions = inverter;
+  if (commercialSet !== undefined) out.pdfCommercialSet = commercialSet;
   return out;
 };
 
@@ -104,6 +110,7 @@ export const buildQuotationProductPdfPersistFields = (
   return {
     pdfUsePanelSizeRange: flags.pdfUsePanelSizeRange ?? false,
     pdfUseInverterBrandOptions: flags.pdfUseInverterBrandOptions ?? false,
+    pdfCommercialSet: flags.pdfCommercialSet ?? false,
     pdfPanelRangeKey: rangeKeys.pdfPanelRangeKey,
     pdfDcrPanelRangeKey: rangeKeys.pdfDcrPanelRangeKey,
     pdfNonDcrPanelRangeKey: rangeKeys.pdfNonDcrPanelRangeKey
@@ -130,6 +137,12 @@ export const buildQuotationProductPdfPersistFieldsForUpdate = (
     out.pdfUseInverterBrandOptions =
       parsePdfDisplayFlag(products.pdfUseInverterBrandOptions) ??
       parsePdfDisplayFlag(products.pdf_use_inverter_brand_options) ??
+      false;
+  }
+  if (pdfFieldWasSent(products, 'pdfCommercialSet', 'pdf_commercial_set')) {
+    out.pdfCommercialSet =
+      parsePdfDisplayFlag(products.pdfCommercialSet) ??
+      parsePdfDisplayFlag(products.pdf_commercial_set) ??
       false;
   }
   if (pdfFieldWasSent(products, 'pdfPanelRangeKey', 'pdf_panel_range_key')) {
@@ -290,12 +303,17 @@ export const quotationProductPdfDisplayApiFields = (
   const inverter = Boolean(
     products.pdfUseInverterBrandOptions ?? products.pdf_use_inverter_brand_options ?? false
   );
+  const commercialSet = Boolean(
+    products.pdfCommercialSet ?? products.pdf_commercial_set ?? false
+  );
   const rangeKeys = extractPdfPanelRangeKeysFromProducts(products);
   return {
     pdfUsePanelSizeRange: panel,
     pdf_use_panel_size_range: panel,
     pdfUseInverterBrandOptions: inverter,
     pdf_use_inverter_brand_options: inverter,
+    pdfCommercialSet: commercialSet,
+    pdf_commercial_set: commercialSet,
     pdfPanelRangeKey: rangeKeys.pdfPanelRangeKey,
     pdf_panel_range_key: rangeKeys.pdfPanelRangeKey,
     pdfDcrPanelRangeKey: rangeKeys.pdfDcrPanelRangeKey,
