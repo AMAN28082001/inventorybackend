@@ -57,6 +57,16 @@ const serializeSale = (sale: any) => {
   };
 };
 
+const normalizePhone = (value: unknown): string | null => {
+  const digits = String(value ?? '').replace(/\D/g, '');
+  if (!digits) return null;
+  if (digits.length === 10) return digits;
+  if (digits.length === 11 && digits.startsWith('0')) return digits.slice(1);
+  if (digits.length === 12 && digits.startsWith('91')) return digits.slice(2);
+  if (digits.length > 10) return digits.slice(-10);
+  return null;
+};
+
 interface NormalizedSaleItem {
   product_id: string | null;
   product_name: string;
@@ -356,6 +366,76 @@ export const getSaleById = async (req: Request, res: Response): Promise<void> =>
     res.json(serializeSale(sale));
   } catch (error) {
     logError('Get sale by ID error', error, { saleId: req.params.id });
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+// Lookup customer prefill payload from recent sales by phone
+export const getCustomerByPhone = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const normalizedPhone = normalizePhone(req.query.phone);
+    if (!normalizedPhone) {
+      res.status(400).json({ error: 'Valid phone query is required' });
+      return;
+    }
+
+    // Pull a recent window and normalize in-memory to handle stored format variants.
+    const candidates = await Sale.findAll({
+      where: {
+        customer_phone: {
+          [Op.and]: [
+            { [Op.ne]: null },
+            { [Op.iLike]: `%${normalizedPhone.slice(-6)}%` }
+          ]
+        }
+      },
+      include: buildSaleIncludes(),
+      order: [['sale_date', 'DESC']],
+      limit: 50
+    });
+
+    const matches = candidates.filter((sale) => normalizePhone((sale as any).customer_phone) === normalizedPhone);
+    if (!matches.length) {
+      res.status(404).json({ error: 'Customer not found for this phone' });
+      return;
+    }
+
+    const latest = serializeSale(matches[0] as any);
+    const recentSales = matches.slice(0, 5).map((sale) => {
+      const row = serializeSale(sale as any) as any;
+      return {
+        id: row.id,
+        type: row.type,
+        sale_date: row.sale_date,
+        customer_name: row.customer_name,
+        customer_phone: row.customer_phone,
+        customer_email: row.customer_email,
+        company_name: row.company_name,
+        gst_number: row.gst_number,
+        contact_person: row.contact_person
+      };
+    });
+
+    res.json({
+      customer: {
+        customer_name: latest.customer_name || null,
+        customer_phone: latest.customer_phone || null,
+        customer_email: latest.customer_email || null,
+        type: latest.type || null,
+        company_name: latest.company_name || null,
+        gst_number: latest.gst_number || null,
+        contact_person: latest.contact_person || null,
+        billing_address: latest.billingAddress || null,
+        delivery_address: latest.deliveryAddress || null,
+        delivery_matches_billing: latest.delivery_matches_billing ?? null,
+        delivery_instructions: latest.delivery_instructions || null,
+        notes: latest.notes || null
+      },
+      latest_sale: latest,
+      recent_sales: recentSales
+    });
+  } catch (error) {
+    logError('Get customer by phone error', error, { phone: req.query.phone as string | undefined });
     res.status(500).json({ error: 'Server error' });
   }
 };

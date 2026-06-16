@@ -2,6 +2,7 @@ import express, { Router } from 'express';
 import {
   getAllSales,
   getSaleById,
+  getCustomerByPhone,
   createSale,
   updateSale,
   confirmB2BBill,
@@ -56,6 +57,7 @@ router.get('/', getAllSales);
  *         description: Sales summary
  */
 router.get('/summary', getSalesSummary);
+router.get('/customer-by-phone', getCustomerByPhone);
 
 /**
  * @swagger

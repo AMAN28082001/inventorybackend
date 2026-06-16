@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { Product, AdminInventory, ProductSerialNumber, InventoryTransaction } from '../models';
 import { v4 as uuidv4 } from 'uuid';
-import { Op, WhereOptions } from 'sequelize';
+import { Op } from 'sequelize';
 import sequelize from '../config/database';
 import { logError, logInfo } from '../utils/loggerHelper';
 import { deleteFileFromS3IfExists } from '../middleware/upload';
@@ -11,6 +11,10 @@ import path from 'path';
 import XLSX from 'xlsx';
 import { formatProductForApi } from '../utils/productApiFormat';
 import { normalizeProductUnit, roundProductPrice } from '../utils/productUnit';
+import {
+  findProductSerialNumbers,
+  productRequiresSerialOnDispatch
+} from '../utils/productSerialLookup';
 
 const logProductInventoryTransaction = async ({
   productId,
@@ -126,60 +130,29 @@ export const getProductSerialNumbers = async (req: Request, res: Response): Prom
       return;
     }
 
-    const scope = (req.query.scope as string | undefined)?.trim().toLowerCase();
-    const isCentralSuperAdmin =
-      req.user?.role === 'super-admin' || req.user?.role === 'super-admin-manager';
+    const scope = (req.query.scope as string | undefined)?.trim().toLowerCase() as
+      | 'central'
+      | 'all'
+      | undefined;
 
-    const buildSerialWhere = (base: Record<string, unknown>): WhereOptions => {
-      const conditions: WhereOptions[] = [base];
+    if (!productRequiresSerialOnDispatch(product.category)) {
+      res.json({
+        product_id: id,
+        total_serial_numbers: 0,
+        available_count: statusFilter === 'available' ? 0 : undefined,
+        serial_numbers: []
+      });
+      return;
+    }
 
-      if (statusFilter === 'available') {
-        conditions.push({
-          status: { [Op.notIn]: ['dispatched', 'acknowledged', 'sold'] }
-        });
-      } else if (statusFilter) {
-        conditions.push({ status: statusFilter });
-      }
-
-      if (scope === 'central') {
-        conditions.push({
-          [Op.or]: [
-            { owner_id: null, owner_type: null },
-            { owner_type: 'super-admin' },
-            ...(isCentralSuperAdmin && req.user?.id
-              ? [{ owner_id: req.user.id, owner_type: 'super-admin' as const }]
-              : [])
-          ]
-        });
-      }
-
-      return conditions.length === 1 ? conditions[0] : { [Op.and]: conditions };
-    };
-
-    const where = buildSerialWhere({ product_id: id });
-
-    let serials = await ProductSerialNumber.findAll({
-      where,
-      order: [['created_at', 'DESC']]
+    const serials = await findProductSerialNumbers({
+      productId: id,
+      productName: product.name,
+      status: statusFilter === 'available' ? 'available' : statusFilter,
+      scope: scope === 'central' ? 'central' : 'all',
+      userId: req.user?.id,
+      userRole: req.user?.role
     });
-
-    if (serials.length === 0 && product.name) {
-      const byNameWhere = buildSerialWhere({
-        product_name: {
-          [Op.iLike]: product.name
-        }
-      });
-      serials = await ProductSerialNumber.findAll({
-        where: byNameWhere,
-        order: [['created_at', 'DESC']]
-      });
-    }
-
-    const deduped = new Map<string, typeof serials[number]>();
-    for (const serial of serials) {
-      deduped.set(serial.id, serial);
-    }
-    serials = Array.from(deduped.values());
 
     logInfo('Get product serial numbers', {
       productId: id,
@@ -978,6 +951,7 @@ export const getInventoryLevels = async (_req: Request, res: Response): Promise<
         'model',
         'category',
         'wattage',
+        'unit',
         'unit_price',
         [sequelize.col('products.quantity'), 'central_stock'],
         [sequelize.fn('COALESCE', sequelize.fn('SUM', sequelize.col('admin_inventory.quantity')), 0), 'distributed_stock'],
@@ -995,6 +969,7 @@ export const getInventoryLevels = async (_req: Request, res: Response): Promise<
         'products.model',
         'products.category',
         'products.wattage',
+        'products.unit',
         'products.unit_price',
         'products.quantity'
       ],
