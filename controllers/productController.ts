@@ -13,7 +13,7 @@ import { formatProductForApi } from '../utils/productApiFormat';
 import { normalizeProductUnit, roundProductPrice } from '../utils/productUnit';
 import {
   findProductSerialNumbers,
-  productRequiresSerialOnDispatch
+  requiresSerialNumbers
 } from '../utils/productSerialLookup';
 
 const logProductInventoryTransaction = async ({
@@ -135,7 +135,7 @@ export const getProductSerialNumbers = async (req: Request, res: Response): Prom
       | 'all'
       | undefined;
 
-    if (!productRequiresSerialOnDispatch(product.category)) {
+    if (!requiresSerialNumbers(product.category, product.name)) {
       res.json({
         product_id: id,
         total_serial_numbers: 0,
@@ -318,8 +318,7 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
       created_by: req.user.id
     });
 
-    const normalizedCategory = category ? String(category).toLowerCase() : '';
-    const requiresSerials = ['panels', 'panel', 'inverters', 'inverter', 'meter', 'meters'].includes(normalizedCategory);
+    const requiresSerials = requiresSerialNumbers(category, name);
     const hasQuantity = quantity !== undefined && Number(quantity) > 0;
 
     let createdSerials: string[] = [];
@@ -414,7 +413,7 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
     }
 
     if (requiresSerials && hasQuantity && createdSerials.length === 0) {
-      res.status(400).json({ error: 'Serial numbers are required for this category' });
+      res.status(400).json({ error: 'Serial numbers are required for Panels and Inverters.' });
       return;
     }
 
@@ -665,8 +664,9 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
       }
     }
 
-    const effectiveCategory = (category || product.category || '').toString().toLowerCase();
-    const requiresSerials = ['panels', 'panel', 'inverters', 'inverter', 'meter', 'meters'].includes(effectiveCategory);
+    const effectiveName = (name || product.name || '').toString();
+    const effectiveCategory = (category || product.category || '').toString();
+    const requiresSerials = requiresSerialNumbers(effectiveCategory, effectiveName);
     const baseQuantityBeforeUpdate = Number(product.quantity || 0);
     const plannedAbsoluteQuantity = updates.quantity !== undefined ? Number(updates.quantity) : undefined;
 
@@ -726,7 +726,7 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
 
         if (finalSerials.length === 0) {
           if (requiresSerials && stockToAdd > 0) {
-            throw new Error('Serial numbers are required for this category');
+            throw new Error('Serial numbers are required for Panels and Inverters.');
           }
           if (stockToAdd > 0) {
             await product.increment('quantity', { by: stockToAdd, transaction });

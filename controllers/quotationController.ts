@@ -56,6 +56,7 @@ import {
   isTataDcrPackageSet,
   validateTataDcrProductSelection
 } from '../utils/quotationTataDcrValidation';
+import { validateSubsidyForSystemType } from '../validations/quotationValidations';
 import {
   isAllowedStandardImageOrPdfUpload,
   isAllowedStandardImageUpload,
@@ -2200,6 +2201,33 @@ export const updateQuotationProducts = async (req: Request, res: Response): Prom
       return;
     }
 
+    const quotationAny = quotation as any;
+    const existingProduct = quotationAny.products as { centralSubsidy?: number; stateSubsidy?: number; systemType?: string } | null;
+    const effectiveSystemTypeForSubsidy =
+      products.systemType || existingProduct?.systemType || quotation.systemType;
+    const subsidyFieldsTouched =
+      products.systemType !== undefined ||
+      products.centralSubsidy !== undefined ||
+      products.stateSubsidy !== undefined;
+    if (subsidyFieldsTouched) {
+      const subsidyCheck = validateSubsidyForSystemType(
+        effectiveSystemTypeForSubsidy,
+        Number(products.centralSubsidy ?? existingProduct?.centralSubsidy ?? quotation.centralSubsidy ?? 0),
+        Number(products.stateSubsidy ?? existingProduct?.stateSubsidy ?? quotation.stateSubsidy ?? 0)
+      );
+      if (!subsidyCheck.valid) {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'VAL_001',
+            message: 'Validation error',
+            details: subsidyCheck.details
+          }
+        });
+        return;
+      }
+    }
+
     const productPayload = pickQuotationProductPersistPayload(products);
     const pdfPersistFields = buildQuotationProductPdfPersistFieldsForUpdate(products);
 
@@ -2209,8 +2237,7 @@ export const updateQuotationProducts = async (req: Request, res: Response): Prom
     }
 
     // Get or create quotation products record
-    const quotationAny = quotation as any;
-    let quotationProduct = quotationAny.products || await QuotationProduct.findOne({ 
+    let quotationProduct = quotationAny.products || await QuotationProduct.findOne({
       where: { quotationId: quotation.id } 
     });
 

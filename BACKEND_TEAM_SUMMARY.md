@@ -168,3 +168,47 @@ Authorization: Bearer <dealer-jwt>
 - Do **not** enforce unique phone in sales creation.
 - Current sales model has no unique index on `customer_phone`; repeated B2B/B2C sales for same phone are valid.
 - Prefill endpoint uses latest sale as default while preserving historical records.
+
+---
+
+## Priority 0.6 — Meter serial numbers optional
+
+**Full spec:** [`BACKEND_CHANGES_METER_SERIAL_OPTIONAL.md`](./BACKEND_CHANGES_METER_SERIAL_OPTIONAL.md)
+
+### Rule
+
+| Category | Serials |
+|----------|---------|
+| Panels / Inverters | **Required** on create, add stock, dispatch |
+| Meters | **Never** |
+| Others (cables, etc.) | Optional |
+
+### Endpoints
+
+| Endpoint | Meter behavior |
+|----------|----------------|
+| `POST /api/products` | `quantity > 0`, no `serial_numbers` → **201** |
+| `PUT /api/products/:id` | Metadata-only edit → **200** (no serial re-validation) |
+| `PUT /api/products/:id` | `stock_to_add` without serials → qty only |
+| `POST /api/stock-requests/:id/dispatch` | Omit meter from `serial_numbers` map |
+
+**Helper:** `utils/productSerialLookup.ts` → `requiresSerialNumbers(category, productName)`
+
+**Frontend:** Already aligned; deploy backend to clear `Serial numbers are required for this category` on Meter edit/create.
+
+---
+
+## Priority 1.1 — Calling Scheduled tab (multi-device sync)
+
+**Full spec:** [`BACKEND_CHANGES_HANDOFF.md` §4](./BACKEND_CHANGES_HANDOFF.md#4-dealer-calling-queue--remarks) · [`BACKEND_CHANGES_REQUIRED.md` §E](./BACKEND_CHANGES_REQUIRED.md#e--dealer-calling-queue-remarks-tabs-lead_004)
+
+### Must-have
+
+| # | Endpoint | Behavior |
+|---|----------|----------|
+| 1 | `GET /dealers/me/calling-queue/next` & `/current` | `scheduledLeads` — deduped, includes `nextFollowUpAt`, `call_remark`, `statusCategory`, `statusText`, `remark` |
+| 2 | `PATCH …/calling-queue/:leadId/action` | `rescheduled` / `follow_up` + `nextFollowUpAt` → persist remark fields, `status: rescheduled` |
+| 3 | Tab arrays | Scheduled rows excluded from `dialledActions` / `connectedActions` / `notConnectedActions` |
+| 4 | `GET /dealers/me/calling-actions?limit=2000` | Dealer-scoped action history (same shape as HR) |
+
+**Note:** `upcomingFollowUps` and `rescheduledLeads` return `[]` — canonical list is `scheduledLeads` only.

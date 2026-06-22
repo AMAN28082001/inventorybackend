@@ -23,7 +23,11 @@ const ALLOWED_STATUS_CATEGORIES = [
   'financial',
   'competition',
   'schedule',
-  'other'
+  'other',
+  'part_1_call_and_lead',
+  'part_2_interest_and_qualification',
+  'part_3_follow_up_and_sales',
+  'part_4_rejection_lost'
 ] as const;
 
 const parseFollowUpDate = (raw: unknown): Date | null => {

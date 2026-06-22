@@ -1,140 +1,168 @@
-# Backend Changes: Stock Request Dispatch (Permission Fix)
+# Backend Changes: Stock Request Dispatch
 
 **Date:** June 2026  
 **Frontend:** `components/modals/enhanced-request-approval-modal.tsx`, `lib/api.ts`  
 **Status:** Implemented
 
----
-
-## 1. Permission fix
-
-Super Admin saw **"You do not have permission to update this request"** because the frontend called **`PUT /api/stock-requests/:id`** before dispatch. That endpoint is **requester-only** (`requested_by_id === current user`).
-
-| Method | Path | Who |
-|--------|------|-----|
-| `PUT` | `/api/stock-requests/:id` | **Requester only** |
-| `POST` | `/api/stock-requests/:id/dispatch` | **super-admin**, **admin** |
-
-**Fix:** Send final line quantities on **`POST /api/stock-requests/:id/dispatch`** via optional `items` — **no prior PUT required**.
+**Quick ref:** [`BACKEND_TEAM_SUMMARY.md`](./BACKEND_TEAM_SUMMARY.md) (Priority 0) · [`BACKEND_SERIAL_NUMBERS_DISPATCH_FIX.md`](./BACKEND_SERIAL_NUMBERS_DISPATCH_FIX.md) (serial GET vs dispatch)
 
 ---
 
-## 1.2 Insufficient central stock error
+## Critical fix — dispatch quantity per line
 
-After the permission fix, dispatch may return:
+```text
+dispatch_qty = serial_numbers[product_id]?.length ?? request_line.quantity
+
+if (central_stock < dispatch_qty) return 400 { error, details[] }   // BEFORE any UPDATE
+
+central_stock -= dispatch_qty    // NOT requested_qty
+```
+
+**One line deducting `requested_qty` instead of serial count fails the whole dispatch** → PostgreSQL `products_quantity_check` (raw DB error). Validate every line against **`dispatch_qty`** before decrement.
+
+### Multi-item request (partial per line)
+
+| Line | Requested | Serials sent | Must deduct |
+|------|-----------|--------------|-------------|
+| 6KWP | 2 | 1 | **1** (not 2) |
+| 8KWP | 3 | 3 | **3** |
+| 10KWP | 2 | 2 | **2** |
+
+Each line is independent in **one transaction** — partial on 6KWP must not block full dispatch on 8KWP/10KWP.
+
+### Dispatch payload example
 
 ```json
 {
-  "error": "Insufficient stock",
-  "details": [
-    {
-      "product_id": "INV-001",
-      "product_name": "3.6KWP-GTI-1PH-XWATT",
-      "path": "items.INV-001.quantity",
-      "message": "Insufficient stock for product 3.6KWP-GTI-1PH-XWATT in central inventory (available: 5, requested: 10)",
-      "requested_quantity": 10,
-      "central_stock": 5
-    }
-  ]
+  "serial_numbers": "{\"prod-6kw\":[\"XWS0326L06202N\"],\"prod-8kw\":[\"SN1\",\"SN2\",\"SN3\"],\"prod-10kw\":[\"SN-A\",\"SN-B\"]}"
 }
 ```
 
-| Rule | Behavior |
-|------|----------|
-| Valid error | `central_stock < requested quantity` for any line |
-| Multi-line | **All** failing lines returned in `details[]` (not only the first product) |
-| Admin source | Same shape with `available_stock` instead of `central_stock` |
-| Atomic | Stock check → serial validation → deduction in **one transaction** (rollback on any failure) |
-
-**Dispatch order (recommended — implemented):**
-
-1. Resolve final quantity per line (`items` override or request line quantity).
-2. **Check stock** for every line (central or source-admin inventory).
-3. **Validate serials** (meter / serial-tracked products).
-4. **Deduct** inventory and mark request `dispatched`.
+No `items` field — frontend sends `serial_numbers` only.
 
 ---
 
-## 2. Stock API alignment
+## All backend issues (checklist)
 
-`GET /api/products` and `GET /api/products/:id` must expose stock that matches dispatch validation.
+| # | Error / issue | Fix | Status |
+|---|----------------|-----|--------|
+| 1 | Permission to update | No `PUT` before dispatch — Super Admin uses **`POST …/dispatch`** only | [x] |
+| 2 | `products_quantity_check` | Deduct **`dispatch_qty`** only; validate before `UPDATE` | [x] |
+| 3 | Insufficient stock on partial | Validate against **serial count**, not `requested_qty` | [x] |
+| 4 | cannot exceed originally requested | Allow `dispatch_qty < requested`; **no `items`** field | [x] |
+| 5 | Invalid serial | Same lookup on GET and POST — `utils/productSerialLookup.ts` | [x] |
+| 6 | Multi-item partial | Each line independent in one transaction | [x] |
+| 7 | Serials on meters | **Panels & Inverters only** — meters by line qty | [x] |
+| 8 | Raw DB errors | Return `{ error, details[] }` with `product_name` | [x] |
+| 9 | `serial_numbers` parse | `JSON.parse()` string in JSON body or multipart | [x] |
 
-| Field | Source | Used by |
-|-------|--------|---------|
-| `quantity` | `products.quantity` | Central warehouse on-hand |
-| `central_stock` | Same as `quantity` | Dispatch modal display (explicit alias) |
+### Frontend (until backend deploys)
 
-Dispatch checks **`products.quantity`** for super-admin (`requested_from_role === 'super-admin'`). If the modal shows **50** but dispatch fails, the API was reading a different field — both `quantity` and `central_stock` now mirror `products.quantity` via `formatProductForApi`.
+Frontend may **block partial dispatch in the UI** (e.g. 1 of 2 on 6KWP). After backend fix is deployed, partial dispatch works **without** sending `items`.
+
+---
+
+## Handler pseudocode
+
+```text
+POST /api/stock-requests/:id/dispatch
+  parse serial_numbers (JSON.parse if string)
+  snapshot requested_qty per line
+
+  for each product_id in serial_numbers (Panels/Inverters only):
+    dispatch_qty = serial_numbers[product_id].length
+    assert 1 <= dispatch_qty <= requested_qty
+    update stock_request_items.quantity = dispatch_qty
+
+  for each line without serial_numbers entry:
+    dispatch_qty = line.quantity   // meters, cables, etc.
+
+  for each line:
+    if central_stock < dispatch_qty → collect details[], return 400
+
+  for each Panels/Inverters line:
+    validate serials (shared productSerialLookup)
+    transfer serials
+
+  for each line:
+    products.quantity -= dispatch_qty
+    admin_inventory += dispatch_qty (if admin destination)
+
+  status = dispatched
+  return updated request + serials
+```
+
+**Order matters:** apply serial counts → validate stock → validate serials → decrement (single transaction).
+
+---
+
+## 1. Serial numbers — Panels & Inverters only
+
+| Category | Serial required? | `serial_numbers` in body? |
+|----------|------------------|---------------------------|
+| **Panels** | ✅ | Yes |
+| **Inverters** | ✅ | Yes |
+| **Meters** | ❌ | Omitted — line qty |
+| Cables, etc. | ❌ | Omitted |
+
+---
+
+## 2. Permissions
+
+| Role | `PUT …/:id` | `POST …/:id/dispatch` |
+|------|-------------|------------------------|
+| Requester (admin) | ✅ | ✅ |
+| Super Admin / Manager | ❌ | ✅ |
 
 ---
 
 ## 3. `POST /api/stock-requests/:id/dispatch`
 
-**Content-Type:** `multipart/form-data` (when `dispatch_image` present) or `application/json`
-
-| Field | Type | Required | Notes |
-|-------|------|----------|-------|
-| `rejection_reason` | string | No | If set → reject (no dispatch) |
-| `dispatch_image` | file | No | Stored in S3 |
-| `items` | JSON array **or** string | No | `[{ "product_id", "quantity" }]` — approver-reduced qty |
-| `serial_numbers` | JSON object **or** string | No | `{ "<product_id>": ["SN1", …] }` |
-| `serial_number_ranges` | JSON object **or** string | No | Super-admin only |
-
-**Multipart:** `items`, `serial_numbers`, `serial_number_ranges` arrive as **JSON strings** when using FormData.
-
-**Example:**
-
-```http
-POST /api/stock-requests/42/dispatch
-Content-Type: multipart/form-data
-
-items=[{"product_id":"PANEL-001","quantity":8}]
-serial_numbers={"PANEL-001":["SN1001","SN1002"]}
-```
-
-### Line quantity validation (`items`)
-
-| Rule | Error |
-|------|-------|
-| `items` is JSON array when sent | `items must be a JSON array` |
-| Each entry has `product_id` | `Each items entry must include product_id` |
-| `quantity >= 1` | `Quantity for product … must be at least 1` |
-| `product_id` on request | `Product … is not on this stock request` |
-| `quantity <=` originally requested | `cannot exceed originally requested quantity` |
-| Omitted lines | Keep original requested quantity |
-
-Persisted on `stock_request_items` in the same transaction as dispatch.
+| Field | Required | Notes |
+|-------|----------|-------|
+| `serial_numbers` | Panels/Inverters | JSON object or **stringified** JSON |
+| `serial_number_ranges` | No | Super-admin only |
+| `rejection_reason` | No | Reject path |
+| `dispatch_image` | No | Multipart |
+| `items` | **No** | Legacy — do not send |
 
 ---
 
-## 4. Serial numbers (still required for meter products)
+## 4. Errors
 
-Meter / serial-tracked products require serial selection on super-admin dispatch.
+### Insufficient stock
 
-| Requirement | Endpoint / rule |
-|-------------|-----------------|
-| List available central serials | `GET /api/products/:id/serial-numbers?status=available&scope=central` |
-| Serial count = dispatched qty | Per line when `serial_numbers` or `serial_number_ranges` sent |
-| Tracked products | Any row in `product_serial_numbers` for `product_id` |
+```json
+{
+  "error": "Insufficient stock in central inventory",
+  "details": [{
+    "product_id": "prod-6kw",
+    "product_name": "6KWP-GTI-1PH",
+    "dispatch_qty": 1,
+    "requested_qty": 2,
+    "available": 0,
+    "short_by": 1,
+    "message": "Insufficient stock for product 6KWP-GTI-1PH in central inventory"
+  }]
+}
+```
 
-See **`BACKEND_SERIAL_NUMBERS_DISPATCH_FIX.md`**.
+### Serial errors
+
+| Case | HTTP | Message |
+|------|------|---------|
+| Missing serials | 400 | `Serial numbers required for {name}` |
+| Bad serial | 400 | `Serial number {sn} is not available` + `details[]` |
 
 ---
 
-## 5. Error responses
+## 5. APIs
 
-| HTTP | When | Body |
-|------|------|------|
-| **200** | Success | Updated stock request + optional `serial_numbers` |
-| **400** | Validation / insufficient stock / serial mismatch | `{ "error": "…" }` or `{ "error": "Insufficient stock", "details": […] }` |
-| **403** | Not allowed to dispatch / update | `{ "error": "…" }` |
-| **404** | Request not found | `{ "error": "…" }` |
-
-**Single-line insufficient stock (legacy message still in `details[0].message`):**
-
-```text
-Insufficient stock for product 3.6KWP-GTI-1PH-XWATT in central inventory (available: 5, requested: 10)
-```
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /api/products/:id/serial-numbers?status=available&scope=central` | Serial picker (Panels/Inverters) |
+| `GET /api/stock-requests/:id` | `dispatch_qty`, `requested_qty`, serials |
+| `GET /api/admin-inventory/admin/:adminId` | `[]` when admin not found |
 
 ---
 
@@ -142,39 +170,35 @@ Insufficient stock for product 3.6KWP-GTI-1PH-XWATT in central inventory (availa
 
 | Area | File |
 |------|------|
-| Dispatch + `items` + stock `details[]` | `controllers/stockRequestController.ts` |
-| `quantity` / `central_stock` alignment | `utils/productApiFormat.ts` → `formatProductForApi` |
-| Central serial list | `controllers/productController.ts` → `getProductSerialNumbers` |
-| Route + auth | `routes/stockRequestRoutes.ts` |
+| Partial qty from serials | `applyDispatchQuantityFromSerialNumbers` |
+| Stock `details[]` | `validateCentralInventoryForDispatch` |
+| Shared serial lookup | `utils/productSerialLookup.ts` |
+| Stringified JSON | `parseJsonBodyField` |
+| Dispatch handler | `controllers/stockRequestController.ts` |
 
 ---
 
-## 7. Backend checklist
+## 7. Test plan (14 cases)
 
-- [x] Super Admin dispatch without prior `PUT`
-- [x] Optional `items` on `POST …/dispatch`
-- [x] Central stock check before serial validation and deduction
-- [x] Atomic transaction (rollback on failure)
-- [x] Multi-item `details[]` for insufficient stock
-- [x] `GET /api/products` returns `quantity` + `central_stock` (same source as dispatch)
-- [x] Serial numbers for meter products (`scope=central`)
-- [ ] QA: insufficient stock single-line + multi-line failure cases in staging
-
----
-
-## 8. Test plan
-
-1. **Dispatch without PUT** — Super Admin reduces qty → `POST …/dispatch` with `items` → 200.
-2. **Insufficient stock (one line)** — Request 10, central has 5 → 400, `details` length 1, `central_stock: 5`.
-3. **Insufficient stock (multi-line)** — Two products short → 400, `details` length 2 (both lines).
-4. **Stock alignment** — `GET /products/:id` `central_stock` equals value used in dispatch error.
-5. **Serial count** — 8 serials for qty 8 → OK; mismatch → 400.
-6. **Reject** — `rejection_reason` only → `rejected`, no inventory change.
-7. **Serial picker** — `GET …/serial-numbers?status=available&scope=central` > 0 when central stock exists.
+1. **Partial 6KWP** — Requested 2, 1 serial → **200**; deduct **1**; line qty 1.
+2. **`products_quantity_check`** — Insufficient stock returns **400 + details[]**, not raw PostgreSQL text.
+3. **Multi-item partial** — 6KWP (1 of 2) + 8KWP (3 of 3) + 10KWP (2 of 2) → deduct 1, 3, 2 in one transaction.
+4. **Allow partial** — `dispatch_qty < requested` succeeds; no `items` field; no “cannot exceed” error.
+5. **Stock vs serial count** — Central stock 1, requested 3, 1 serial → **200** (not fail on 3).
+6. **Meter qty** — No `serial_numbers` for meter → full line qty, no serial error.
+7. **Mixed request** — Inverters + meter omitted from `serial_numbers`.
+8. **Missing serials** — Panel/Inverter without serials → 400 `Serial numbers required for {name}`.
+9. **Bad serial** — 400 with product **name** in `details[]`.
+10. **Insufficient one line** — `details[]` with `dispatch_qty`, `requested_qty`, `short_by`.
+11. **Multi-line stock fail** — Two products short → `details` length 2.
+12. **Serial parse** — JSON body `{ "serial_numbers": "{\"prod-id\":[...]}" }` → parses.
+13. **Multipart** — `dispatch_image` + stringified `serial_numbers`.
+14. **GET = dispatch** — Serial in picker must succeed on dispatch (`productSerialLookup`).
 
 ---
 
 ## Related
 
-- `BACKEND_SERIAL_NUMBERS_DISPATCH_FIX.md`
+- [`BACKEND_TEAM_SUMMARY.md`](./BACKEND_TEAM_SUMMARY.md)
+- [`BACKEND_SERIAL_NUMBERS_DISPATCH_FIX.md`](./BACKEND_SERIAL_NUMBERS_DISPATCH_FIX.md)
 - `API_DOCUMENTATION.md` §5.4

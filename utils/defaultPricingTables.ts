@@ -109,6 +109,69 @@ export const JUNE_2026_DCR_PRICING_DEFAULTS = [
   }
 ];
 
+/** Non-DCR system pricing defaults (no central subsidy on frontend). */
+export const JUNE_2026_NON_DCR_PRICING_DEFAULTS = [
+  {
+    systemSize: '3kW',
+    phase: '1-Phase' as const,
+    inverterSize: '3kW',
+    panelType: 'Adani 555W',
+    price: 200000
+  },
+  {
+    systemSize: '5kW',
+    phase: '1-Phase' as const,
+    inverterSize: '5kW',
+    panelType: 'Adani 555W',
+    price: 245000
+  },
+  {
+    systemSize: '3kW',
+    phase: '1-Phase' as const,
+    inverterSize: '3kW',
+    panelType: 'Waaree 540W',
+    price: 195000
+  },
+  {
+    systemSize: '5kW',
+    phase: '1-Phase' as const,
+    inverterSize: '5kW',
+    panelType: 'Waaree 540W',
+    price: 280000
+  }
+];
+
+/** BOTH (DCR + non-DCR split) pricing defaults. */
+export const JUNE_2026_BOTH_PRICING_DEFAULTS = [
+  {
+    systemSize: '5kW',
+    phase: '1-Phase' as const,
+    inverterSize: '5kW',
+    dcrCapacity: '3kW',
+    nonDcrCapacity: '2kW',
+    panelType: 'Adani 555W',
+    price: 260000
+  },
+  {
+    systemSize: '6kW',
+    phase: '1-Phase' as const,
+    inverterSize: '6kW',
+    dcrCapacity: '3kW',
+    nonDcrCapacity: '3kW',
+    panelType: 'Adani 555W',
+    price: 295000
+  },
+  {
+    systemSize: '5kW',
+    phase: '3-Phase' as const,
+    inverterSize: '5kW',
+    dcrCapacity: '3kW',
+    nonDcrCapacity: '2kW',
+    panelType: 'Adani 555W',
+    price: 270000
+  }
+];
+
 export const JUNE_2026_SYSTEM_CONFIG_DEFAULTS = [
   {
     systemType: 'dcr' as const,
@@ -131,6 +194,44 @@ export const JUNE_2026_SYSTEM_CONFIG_DEFAULTS = [
   },
   {
     systemType: 'dcr' as const,
+    systemSize: '5kW',
+    phase: '1-Phase' as const,
+    panelBrand: 'Adani',
+    panelSize: '555W',
+    inverterBrand: 'Vsole/Xwatt',
+    inverterSize: '5kW',
+    inverterType: 'String Inverter',
+    structureType: 'GI Structure',
+    structureSize: '5kW',
+    meterBrand: 'L&T',
+    acCableBrand: 'Polycab',
+    acCableSize: 'As per Set',
+    dcCableBrand: 'Polycab',
+    dcCableSize: 'As per Set',
+    acdb: 'Havells (1-Phase)',
+    dcdb: 'Havells (1-Phase)'
+  },
+  {
+    systemType: 'non-dcr' as const,
+    systemSize: '5kW',
+    phase: '1-Phase' as const,
+    panelBrand: 'Adani',
+    panelSize: '555W',
+    inverterBrand: 'Vsole/Xwatt',
+    inverterSize: '5kW',
+    inverterType: 'String Inverter',
+    structureType: 'GI Structure',
+    structureSize: '5kW',
+    meterBrand: 'L&T',
+    acCableBrand: 'Polycab',
+    acCableSize: 'As per Set',
+    dcCableBrand: 'Polycab',
+    dcCableSize: 'As per Set',
+    acdb: 'Havells (1-Phase)',
+    dcdb: 'Havells (1-Phase)'
+  },
+  {
+    systemType: 'both' as const,
     systemSize: '5kW',
     phase: '1-Phase' as const,
     panelBrand: 'Adani',
@@ -227,6 +328,8 @@ export const JUNE_2026_SYSTEM_CONFIG_DEFAULTS = [
 ];
 
 type DcrRow = (typeof JUNE_2026_DCR_PRICING_DEFAULTS)[number];
+type NonDcrRow = (typeof JUNE_2026_NON_DCR_PRICING_DEFAULTS)[number];
+type BothRow = (typeof JUNE_2026_BOTH_PRICING_DEFAULTS)[number];
 type SystemConfigRow = (typeof JUNE_2026_SYSTEM_CONFIG_DEFAULTS)[number];
 
 const dcrRowKey = (row: { systemSize: string; phase: string; panelType: string }) =>
@@ -252,6 +355,42 @@ export function mergeDefaultDcrPricing(stored: unknown): DcrRow[] {
   }
   for (const row of JUNE_2026_DCR_PRICING_DEFAULTS) {
     map.set(dcrRowKey(row), row);
+  }
+  return Array.from(map.values());
+}
+
+export function mergeDefaultNonDcrPricing(stored: unknown): NonDcrRow[] {
+  if (!Array.isArray(stored) || stored.length === 0) {
+    return [...JUNE_2026_NON_DCR_PRICING_DEFAULTS];
+  }
+  const map = new Map<string, NonDcrRow>();
+  for (const row of stored) {
+    if (!row || typeof row !== 'object') continue;
+    const typed = row as NonDcrRow;
+    if (!typed.systemSize || !typed.phase || !typed.panelType) continue;
+    map.set(dcrRowKey(typed), typed);
+  }
+  for (const row of JUNE_2026_NON_DCR_PRICING_DEFAULTS) {
+    map.set(dcrRowKey(row), row);
+  }
+  return Array.from(map.values());
+}
+
+export function mergeDefaultBothPricing(stored: unknown): BothRow[] {
+  if (!Array.isArray(stored) || stored.length === 0) {
+    return [...JUNE_2026_BOTH_PRICING_DEFAULTS];
+  }
+  const map = new Map<string, BothRow>();
+  const bothRowKey = (row: BothRow) =>
+    `${row.systemSize}|${row.phase}|${row.panelType}|${row.dcrCapacity}|${row.nonDcrCapacity}`;
+  for (const row of stored) {
+    if (!row || typeof row !== 'object') continue;
+    const typed = row as BothRow;
+    if (!typed.systemSize || !typed.phase || !typed.panelType) continue;
+    map.set(bothRowKey(typed), typed);
+  }
+  for (const row of JUNE_2026_BOTH_PRICING_DEFAULTS) {
+    map.set(bothRowKey(row), row);
   }
   return Array.from(map.values());
 }

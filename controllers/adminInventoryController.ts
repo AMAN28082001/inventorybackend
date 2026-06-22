@@ -4,6 +4,29 @@ import { v4 as uuidv4 } from 'uuid';
 import { logError, logInfo } from '../utils/loggerHelper';
 import { Op } from 'sequelize';
 
+const ADMIN_INVENTORY_PRODUCT_ATTRIBUTES = ['id', 'name', 'model', 'category', 'wattage', 'unit'] as const;
+
+const formatAdminInventoryItem = (item: AdminInventory) => {
+  const itemAny = item as any;
+  const product = itemAny.product as Product | undefined;
+  const unit = (product as any)?.unit ?? null;
+
+  return {
+    ...item.toJSON(),
+    product_name: product ? product.name : null,
+    model: product ? product.model : null,
+    wattage: product ? product.wattage : null,
+    category_name: product ? product.category : null,
+    unit,
+    product: product
+      ? {
+          ...(product as any).toJSON?.() || product,
+          unit
+        }
+      : null
+  };
+};
+
 // Get all admin inventory
 export const getAllAdminInventory = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -25,7 +48,7 @@ export const getAllAdminInventory = async (req: Request, res: Response): Promise
         {
           model: Product,
           as: 'product',
-          attributes: ['id', 'name', 'model', 'category', 'wattage']
+          attributes: [...ADMIN_INVENTORY_PRODUCT_ATTRIBUTES]
         }
       ],
       order: [
@@ -35,15 +58,11 @@ export const getAllAdminInventory = async (req: Request, res: Response): Promise
     });
 
     // Format response
-    const formattedInventory = inventory.map(item => {
+    const formattedInventory = inventory.map((item) => {
       const itemAny = item as any;
       return {
-        ...item.toJSON(),
-        admin_name: itemAny.admin ? (itemAny.admin as User).name : null,
-        product_name: itemAny.product ? (itemAny.product as Product).name : null,
-        model: itemAny.product ? (itemAny.product as Product).model : null,
-        wattage: itemAny.product ? (itemAny.product as Product).wattage : null,
-        category_name: itemAny.product ? (itemAny.product as Product).category : null
+        ...formatAdminInventoryItem(item),
+        admin_name: itemAny.admin ? (itemAny.admin as User).name : null
       };
     });
 
@@ -70,7 +89,7 @@ export const getAdminInventoryById = async (req: Request, res: Response): Promis
         {
           model: Product,
           as: 'product',
-          attributes: ['id', 'name', 'model', 'category', 'wattage']
+          attributes: [...ADMIN_INVENTORY_PRODUCT_ATTRIBUTES]
         }
       ]
     });
@@ -82,12 +101,8 @@ export const getAdminInventoryById = async (req: Request, res: Response): Promis
 
     const inventoryAny = inventory as any;
     const formatted = {
-      ...inventory.toJSON(),
-      admin_name: inventoryAny.admin ? (inventoryAny.admin as User).name : null,
-      product_name: inventoryAny.product ? (inventoryAny.product as Product).name : null,
-      model: inventoryAny.product ? (inventoryAny.product as Product).model : null,
-      wattage: inventoryAny.product ? (inventoryAny.product as Product).wattage : null,
-      category_name: inventoryAny.product ? (inventoryAny.product as Product).category : null
+      ...formatAdminInventoryItem(inventory),
+      admin_name: inventoryAny.admin ? (inventoryAny.admin as User).name : null
     };
 
     logInfo('Get admin inventory by ID', { inventoryId: id });
@@ -110,7 +125,8 @@ export const getAdminInventoryByAdminId = async (req: Request, res: Response): P
     });
 
     if (!admin) {
-      res.status(404).json({ error: 'Admin not found' });
+      logInfo('Get admin inventory by admin ID — no admin row, returning empty list', { adminId });
+      res.json([]);
       return;
     }
 
@@ -119,21 +135,12 @@ export const getAdminInventoryByAdminId = async (req: Request, res: Response): P
       include: [{
         model: Product,
         as: 'product',
-        attributes: ['id', 'name', 'model', 'category', 'wattage']
+        attributes: [...ADMIN_INVENTORY_PRODUCT_ATTRIBUTES]
       }],
       order: [[{ model: Product, as: 'product' }, 'name', 'ASC']]
     });
 
-    const formatted = inventory.map(item => {
-      const itemAny = item as any;
-      return {
-        ...item.toJSON(),
-        product_name: itemAny.product ? (itemAny.product as Product).name : null,
-        model: itemAny.product ? (itemAny.product as Product).model : null,
-        wattage: itemAny.product ? (itemAny.product as Product).wattage : null,
-        category_name: itemAny.product ? (itemAny.product as Product).category : null
-      };
-    });
+    const formatted = inventory.map((item) => formatAdminInventoryItem(item));
 
     logInfo('Get admin inventory by admin ID', { adminId, count: formatted.length });
     res.json(formatted);
@@ -255,7 +262,7 @@ export const upsertAdminInventory = async (req: Request, res: Response): Promise
           {
             model: Product,
             as: 'product',
-            attributes: ['id', 'name', 'model', 'category']
+            attributes: [...ADMIN_INVENTORY_PRODUCT_ATTRIBUTES]
           }
         ]
       });
@@ -267,11 +274,8 @@ export const upsertAdminInventory = async (req: Request, res: Response): Promise
 
       const updatedAny = updated as any;
       const formatted = {
-        ...updated.toJSON(),
-        admin_name: updatedAny.admin ? (updatedAny.admin as User).name : null,
-        product_name: updatedAny.product ? (updatedAny.product as Product).name : null,
-        model: updatedAny.product ? (updatedAny.product as Product).model : null,
-        category_name: updatedAny.product ? (updatedAny.product as Product).category : null
+        ...formatAdminInventoryItem(updated),
+        admin_name: updatedAny.admin ? (updatedAny.admin as User).name : null
       };
 
       logInfo('Admin inventory updated', { inventoryId: existing.id, adminId: admin_id, productId: product_id, quantity, updatedBy: req.user?.id });
@@ -296,7 +300,7 @@ export const upsertAdminInventory = async (req: Request, res: Response): Promise
           {
             model: Product,
             as: 'product',
-            attributes: ['id', 'name', 'model', 'category']
+            attributes: [...ADMIN_INVENTORY_PRODUCT_ATTRIBUTES]
           }
         ]
       });
@@ -308,11 +312,8 @@ export const upsertAdminInventory = async (req: Request, res: Response): Promise
 
       const createdAny = created as any;
       const formatted = {
-        ...created.toJSON(),
-        admin_name: createdAny.admin ? (createdAny.admin as User).name : null,
-        product_name: createdAny.product ? (createdAny.product as Product).name : null,
-        model: createdAny.product ? (createdAny.product as Product).model : null,
-        category_name: createdAny.product ? (createdAny.product as Product).category : null
+        ...formatAdminInventoryItem(created),
+        admin_name: createdAny.admin ? (createdAny.admin as User).name : null
       };
 
       logInfo('Admin inventory created', { inventoryId: created.id, adminId: admin_id, productId: product_id, quantity, createdBy: req.user?.id });
@@ -358,7 +359,7 @@ export const updateAdminInventory = async (req: Request, res: Response): Promise
         {
           model: Product,
           as: 'product',
-          attributes: ['id', 'name', 'model', 'category']
+          attributes: [...ADMIN_INVENTORY_PRODUCT_ATTRIBUTES]
         }
       ]
     });
@@ -370,11 +371,8 @@ export const updateAdminInventory = async (req: Request, res: Response): Promise
 
     const updatedAny = updated as any;
     const formatted = {
-      ...updated.toJSON(),
-      admin_name: updatedAny.admin ? (updatedAny.admin as User).name : null,
-      product_name: updatedAny.product ? (updatedAny.product as Product).name : null,
-      model: updatedAny.product ? (updatedAny.product as Product).model : null,
-      category_name: updatedAny.product ? (updatedAny.product as Product).category : null
+      ...formatAdminInventoryItem(updated),
+      admin_name: updatedAny.admin ? (updatedAny.admin as User).name : null
     };
 
     logInfo('Admin inventory updated', { inventoryId: id, quantity, updatedBy: req.user?.id });

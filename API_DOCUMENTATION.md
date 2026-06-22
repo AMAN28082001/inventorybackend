@@ -586,7 +586,7 @@ PART 1: APIS USED IN FRONTEND
 
 5.4 POST /api/stock-requests/:id/dispatch
 
-   - Purpose: Approve and dispatch stock request (or reject). Approvers send final line quantities here — no prior PUT required.
+   - Purpose: Approve and dispatch stock request (or reject). Partial dispatch: send serial_numbers only — line qty = serial_numbers[product_id].length (no prior PUT, no items field).
 
    - Used in: components/modals/enhanced-request-approval-modal.tsx
 
@@ -602,15 +602,15 @@ PART 1: APIS USED IN FRONTEND
 
        "dispatch_image": File (optional),
 
-       "items": [{ "product_id": string, "quantity": number }] (optional JSON string in FormData — approver-reduced qty, 1 ≤ qty ≤ originally requested),
+       "serial_numbers": { "<product_id>": string[] } (primary — dispatch qty = array length per product; JSON string in FormData),
 
-       "serial_numbers": { "<product_id>": string[] } (optional JSON string),
+       "serial_number_ranges": { "<product_id>": { "from", "to" } } (optional, super-admin only),
 
-       "serial_number_ranges": { "<product_id>": { "from", "to" } } (optional, super-admin only)
+       "items": [{ "product_id", "quantity" }] (legacy optional — frontend does not send)
 
      }
 
-   - Required Role: super-admin, admin
+   - Required Role: super-admin, super-admin-manager, admin
 
    - Note: PUT /api/stock-requests/:id remains requester-only. See BACKEND_CHANGES_STOCK_REQUEST_DISPATCH.md.
 

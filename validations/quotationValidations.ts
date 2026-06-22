@@ -66,6 +66,8 @@ const productsSchemaObject = z.object({
   hybridInverter: z.string().nullish(),
   batteryCapacity: z.string().nullish(),
   batteryPrice: z.number().nonnegative().nullish(),
+  systemPrice: z.number().nonnegative().nullish(),
+  system_price: z.number().nonnegative().nullish(),
   centralSubsidy: z.number().nonnegative().default(0),
   stateSubsidy: z.number().nonnegative().default(0),
   pdfUsePanelSizeRange: booleanOrString.optional(),
@@ -103,6 +105,42 @@ const productsSchemaObject = z.object({
 
 type ProductsSchemaInput = z.infer<typeof productsSchemaObject>;
 
+const refineProductsSubsidy = (
+  val: Partial<ProductsSchemaInput> & Record<string, unknown>,
+  ctx: z.RefinementCtx
+): void => {
+  const systemType = String(val.systemType || '').trim().toLowerCase();
+  if (!systemType) return;
+  const centralSubsidy = Number(val.centralSubsidy ?? 0);
+  const stateSubsidy = Number(val.stateSubsidy ?? 0);
+  if (systemType === 'non-dcr') {
+    if (centralSubsidy !== 0) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'centralSubsidy must be 0 for non-dcr system type',
+        path: ['centralSubsidy']
+      });
+    }
+    if (stateSubsidy !== 0) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'stateSubsidy must be 0 for non-dcr system type',
+        path: ['stateSubsidy']
+      });
+    }
+    return;
+  }
+  if (systemType === 'dcr' || systemType === 'both') {
+    if (centralSubsidy <= 0) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'centralSubsidy is required for dcr and both system types',
+        path: ['centralSubsidy']
+      });
+    }
+  }
+};
+
 const refineProductsPanelQuantity = (
   val: Partial<ProductsSchemaInput> & Record<string, unknown>,
   ctx: z.RefinementCtx
@@ -115,6 +153,22 @@ const refineProductsPanelQuantity = (
     return qty === undefined || qty === null || Number(qty) <= 0;
   };
   if (val.systemType === 'both') {
+    const missingBrand = (brand: unknown) =>
+      brand === undefined || brand === null || String(brand).trim() === '';
+    if (missingBrand(val.dcrPanelBrand)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'dcrPanelBrand is required for both system type',
+        path: ['dcrPanelBrand']
+      });
+    }
+    if (missingBrand(val.nonDcrPanelBrand)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'nonDcrPanelBrand is required for both system type',
+        path: ['nonDcrPanelBrand']
+      });
+    }
     if (missingQty(val.dcrPanelSize, val.dcrPanelQuantity)) {
       ctx.addIssue({
         code: 'custom',
@@ -141,10 +195,18 @@ const refineProductsPanelQuantity = (
   }
 };
 
-const productsSchema = productsSchemaObject.superRefine(refineProductsPanelQuantity);
+const applyProductRefinements = (
+  val: Partial<ProductsSchemaInput> & Record<string, unknown>,
+  ctx: z.RefinementCtx
+): void => {
+  refineProductsPanelQuantity(val, ctx);
+  refineProductsSubsidy(val, ctx);
+};
+
+const productsSchema = productsSchemaObject.superRefine(applyProductRefinements);
 
 /** PATCH products — partial fields; apply refinements after `.partial()` on the base object. */
-const productsPartialSchema = productsSchemaObject.partial().superRefine(refineProductsPanelQuantity);
+const productsPartialSchema = productsSchemaObject.partial().superRefine(applyProductRefinements);
 
 const paymentModeEnum = z.enum(
   ['cash', 'upi', 'loan', 'netbanking', 'bank_transfer', 'cheque', 'card', 'mix'],
@@ -488,6 +550,32 @@ const panSchema = z
   .min(1)
   .transform((val) => val.toUpperCase())
   .refine((val) => panRegex.test(val), { message: 'PAN must be in format ABCDE1234F' });
+
+/** Subsidy rules for create/update when effective system type is known (partial PATCH). */
+export const validateSubsidyForSystemType = (
+  systemType: string,
+  centralSubsidy: number,
+  stateSubsidy: number
+): { valid: boolean; details: Array<{ field: string; message: string }> } => {
+  const normalized = String(systemType || '').trim().toLowerCase();
+  const details: Array<{ field: string; message: string }> = [];
+  if (normalized === 'non-dcr') {
+    if (centralSubsidy !== 0) {
+      details.push({ field: 'centralSubsidy', message: 'centralSubsidy must be 0 for non-dcr system type' });
+    }
+    if (stateSubsidy !== 0) {
+      details.push({ field: 'stateSubsidy', message: 'stateSubsidy must be 0 for non-dcr system type' });
+    }
+  } else if (normalized === 'dcr' || normalized === 'both') {
+    if (centralSubsidy <= 0) {
+      details.push({
+        field: 'centralSubsidy',
+        message: 'centralSubsidy is required for dcr and both system types'
+      });
+    }
+  }
+  return { valid: details.length === 0, details };
+};
 
 export const quotationDocumentsSchema = z.object({
   aadharNumber: z.string().min(1).optional().refine((val) => !val || aadharRegex.test(val), {

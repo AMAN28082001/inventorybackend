@@ -641,6 +641,22 @@ Photo upload stays `installer_approved` until admin explicitly advances.
 
 ---
 
+## §6 — Meter products — serial numbers optional (June 2026)
+
+**Full spec:** [`BACKEND_CHANGES_METER_SERIAL_OPTIONAL.md`](./BACKEND_CHANGES_METER_SERIAL_OPTIONAL.md). **Status: implemented.**
+
+| Topic | Rule |
+|-------|------|
+| Panels / Inverters | Serials required on create (qty > 0), add stock, dispatch |
+| Meters | Never require serials — create, edit, add stock, dispatch by quantity |
+| Others | Serials optional |
+| Helper | `requiresSerialNumbers(category, productName)` in `utils/productSerialLookup.ts` |
+| Error copy | `Serial numbers are required for Panels and Inverters.` |
+
+**Dispatch:** Omit meter lines from `serial_numbers` map — see [`BACKEND_CHANGES_STOCK_REQUEST_DISPATCH.md`](./BACKEND_CHANGES_STOCK_REQUEST_DISPATCH.md) §5.
+
+---
+
 ## §Z — Admin Visitor Reports (`GET /api/admin/visits`)
 
 **Handoff:** `BACKEND_CHANGES_HANDOFF.md` §19. **Status: implemented.**
@@ -754,14 +770,30 @@ Default `page=1`, `limit=20`, max `limit=2000`. Frontend loads `limit=2000&statu
 
 ## §E — Dealer calling queue (remarks, tabs, LEAD_004)
 
-**Handoff:** `BACKEND_CHANGES_HANDOFF.md` §3–§4, §4.8. **Status: implemented.**
+**Handoff:** `BACKEND_CHANGES_HANDOFF.md` §3–§4, §4.8. **Quick ref:** `BACKEND_TEAM_SUMMARY.md` (Priority 1). **Status: implemented.**
+
+### Problem
+
+Dealer sees lead from `GET /dealers/me/calling-queue/next` but `PATCH …/action` returned **403 `LEAD_004`** when `assigned_dealer_id` was null, pool sentinel, or another dealer. Frontend may hide the error; **reports still need a real DB assignment**.
+
+### Required fix (Option A — primary)
+
+| `action` | Backend |
+|----------|---------|
+| `start` | Pool/unassigned + dealer in HR `dealerIds` → assignee = JWT dealer, `in_progress` |
+| Outcomes | Auto-claim if needed → persist remark → close → `nextLead` |
+| Any | Another dealer’s lead → **403 `LEAD_004`** |
+
+Also: Option B (`POST …/claim`, `POST …/assign`, `PATCH …/:leadId`) · Option C (promote on `GET …/next`).
 
 | Area | Endpoints | Notes |
 |------|-----------|--------|
 | Claim / assign | `POST …/claim`, `POST …/assign`, `PATCH …/:leadId` | Pool lead → dealer assignment; **LEAD_004** when owned by another dealer |
-| Action PATCH | `PATCH …/calling-queue/{leadId}/action` | `start`, outcomes, tagged remarks — see `lib/calling-remark-payload.ts` |
-| Queue GET | `GET …/calling-queue/current`, `GET …/calling-queue/next` | Tab buckets: `scheduledLeads`, `dialledActions`, `connectedActions`, etc. |
-| HR / Admin history | `GET /api/hr/calling-actions`, `GET /api/admin/calling-actions` | `dealerId`, `range`, `startDate`/`endDate` — see `lib/api.ts` |
+| Action PATCH | `PATCH …/calling-queue/{leadId}/action` | `start`, outcomes, tagged remarks — `part_1_call_and_lead` → `call_connectivity` |
+| Queue GET | `GET …/calling-queue/current`, `GET …/calling-queue/next` | Don’t return leads this dealer can’t PATCH; `assignedDealerName` on every row |
+| HR / Admin history | `GET /api/hr/calling-actions`, `GET /api/admin/calling-actions` | `dealerId`, `range`, `startDate`/`endDate` |
+
+**Lead fields:** `assignedDealerId` = calling assignee · `dealerId` = null on queue (HR/uploader only).
 
 **Reference:** `BACKEND_ADMIN_QUOTATION_STATUS.ts` (`patchDealerCallingQueueAction`, `callingActionToApiJson`).
 
@@ -935,6 +967,7 @@ Fixes **500** when dealer submits **Connected → Decision Pending → Callback 
 | Doc / code | Topics |
 |------------|--------|
 | `BACKEND_CHANGES_HANDOFF.md` | Sprint checklist, §1 HR counts, §3–§4 calling, **§4.5.1**, §17 installation, §18 products, §19 visits |
-| `BACKEND_CHANGES_REQUIRED.md` | §X PDF, §Y priority, **§L.1** send to metering, **§M** final confirmation, §M.0 install, §N/Z, **§E** calling queue |
+| `BACKEND_CHANGES_REQUIRED.md` | §X PDF, §Y priority, **§L.1** send to metering, **§M** final confirmation, §M.0 install, §N/**§6** meter serials, §Z, **§E** calling queue |
+| `BACKEND_CHANGES_METER_SERIAL_OPTIONAL.md` | Meter create/edit/add-stock; `requiresSerialNumbers()` |
 | `BACKEND_ADMIN_QUOTATION_STATUS.ts` | HR upload reference, `patchDealerCallingQueueAction` |
 | `controllers/callingLeadController.ts` | Calling queue implementation |

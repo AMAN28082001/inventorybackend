@@ -387,12 +387,43 @@ Assign/claim endpoints reject a different dealer’s `assignedDealerId`; **`PATC
 - Pool lead + eligible batch → create assignment for this dealer
 - Outcome actions (`called`, `follow_up`, …) also auto-claim when needed so saves persist after Start Call
 
+### Submit payload (Not Connected → Call Unanswered)
+
+```http
+PATCH /api/dealers/me/calling-queue/{leadId}/action
+Authorization: Bearer <dealer-jwt>
+```
+
+```json
+{
+  "action": "not_interested",
+  "actionAt": "2026-06-05T10:30:00.000Z",
+  "callRemark": "[part_1_call_and_lead] Call Unanswered",
+  "call_remark": "[part_1_call_and_lead] Call Unanswered",
+  "statusCategory": "part_1_call_and_lead",
+  "status_category": "part_1_call_and_lead",
+  "statusText": "Call Unanswered",
+  "status_text": "Call Unanswered"
+}
+```
+
+**200 must:** `assigned_dealer_id` = current dealer (if was pool) · persist remark fields · `status = completed` · return `nextLead`.
+
+### Pool / unassigned assignees
+
+Treat as unassigned: `null`, `unassigned`, `pool`, `open`, `none`, etc. (`isPoolOrUnassignedAssigneeId`). Claimed on `GET …/next` promote and on `PATCH …/action` `start`/submit.
+
 ### QA
 
-1. Dealer A → current lead → **Start Call** → **200**, `in_progress`
-2. Submit **called** / follow-up → **200**, persisted
-3. Dealer B does not get A’s in-progress lead from `/next`
-4. `POST …/assign` with `{ assignedDealerId, status: "assigned" }` → **200** (frontend retry path)
+1. HR uploads CSV with dealer pool (e.g. includes sanju shekhawat)
+2. Dealer opens Calling Data → sees lead (e.g. DEEPA KANWAR)
+3. **Start Call** → **200**, `in_progress`, no `LEAD_004`
+4. Submit (Not Connected → Call Unanswered) → **200**, remark saved, `nextLead` returned
+5. Admin → Calling Reports shows action with correct dealer name
+6. Second dealer cannot claim same `in_progress` lead (`LEAD_004`)
+7. `POST …/assign` with `{ assignedDealerId, status: "assigned" }` → **200** (frontend retry path)
+
+**Quick ref:** `BACKEND_TEAM_SUMMARY.md` (Priority 1).
 
 ---
 
@@ -429,7 +460,8 @@ Accepts: `callRemark` / `call_remark`, `statusCategory` / `status_category`, `st
 
 | Key | Tab |
 |-----|-----|
-| `scheduledLeads`, `upcomingFollowUps`, `rescheduledLeads` | Scheduled (future `nextFollowUpAt`) |
+| `scheduledLeads` | Scheduled (future **or overdue** `nextFollowUpAt`; one row per lead) |
+| `upcomingFollowUps`, `rescheduledLeads` | Empty aliases — use `scheduledLeads` only (no duplicate rows) |
 | `dialledActions` | Dialled (excludes future scheduled follow-ups) |
 | `connectedActions` / `notConnectedActions` | Connected / Not connected subsets |
 | `recentActions` / `actionHistory` | Analytics / history |
@@ -967,6 +999,28 @@ GET /api/hr/calling-actions?limit=2000&dealerId={uuid}&range=weekly&startDate=20
 When both `startDate` and `endDate` are sent, filtering uses that window on `action_at` (legacy rows may fall back to `created_at`). `range=weekly` without dates uses **Mon–Sun** in server local TZ.
 
 **Assignee rule:** `assignedDealerId` = who is calling; `dealerId` on lead = uploader/CRM only.
+
+---
+
+## 15A. Latest consolidated handoff (Must-have vs Optional)
+
+### Must-have (blocking)
+
+| Area | Requirement |
+|------|-------------|
+| Calling queue auth stability | Dealer JWT must be accepted on `GET /api/dealers/me/calling-queue/next` (and `/current` if kept). If no lead exists, return **200** with empty queue payload, not 401/403. |
+| Calling submit + assignment | `PATCH /api/dealers/me/calling-queue/:leadId/action` supports `action`, `callRemark`/`call_remark`, `statusCategory`/`status_category`, `statusText`/`status_text`, `nextFollowUpAt`, `actionAt`; auto-assign pool/unassigned rows on `start`/submit to prevent valid-flow `LEAD_004`. |
+| Calling remarks persistence | Persist `call_remark` in DB and echo it in queue responses (`next`/`current`) and history arrays (`recentActions`, `dialledActions`, `connectedActions`, `notConnectedActions`, etc.). Frontend local storage remains fallback only. |
+| Quotation system types | Support `systemType: dcr | non-dcr | both` on create/update/read, and ensure `GET /api/quotations/pricing-tables` includes pricing for all three system types. |
+| PDF/commercial metadata | Persist and return `pdfCommercialSet`; return `updatedAt` and (optional) `validUntil` for PDF workflows. |
+| Admin quotations endpoint | Keep `GET /api/admin/quotations` working and properly role-authorized for dashboard flows. |
+
+### Optional / recommended
+
+| Area | Recommendation |
+|------|----------------|
+| Admin dashboard counters | Add/keep `GET /api/admin/statistics` with counters (`overview.totalQuotations`, `thisMonth.quotations`). |
+| Calling queue response contract | Keep compatibility aliases in both camelCase and snake_case on action/queue payloads to avoid client regressions. |
 
 ---
 

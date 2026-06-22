@@ -5,6 +5,8 @@ import { pricingTablesSchema } from '../validations/pricingValidations';
 import {
   JUNE_2026_PRICING_META,
   mergeDefaultDcrPricing,
+  mergeDefaultNonDcrPricing,
+  mergeDefaultBothPricing,
   mergeDefaultSystemConfigs
 } from '../utils/defaultPricingTables';
 import { normalizeProductCatalog } from '../utils/productCatalogNormalize';
@@ -228,6 +230,7 @@ export const getIndianStates = async (_req: Request, res: Response): Promise<voi
 
 // Helper function to normalize pricing tables data
 const normalizePricingTables = (pricing: any): any => {
+  const systemConfigs = mergeDefaultSystemConfigs(pricing?.systemConfigs);
   return {
     panels: Array.isArray(pricing?.panels) ? pricing.panels : [],
     inverters: Array.isArray(pricing?.inverters) ? pricing.inverters : [],
@@ -237,9 +240,10 @@ const normalizePricingTables = (pricing: any): any => {
     acdb: Array.isArray(pricing?.acdb) ? pricing.acdb : [],
     dcdb: Array.isArray(pricing?.dcdb) ? pricing.dcdb : [],
     dcr: mergeDefaultDcrPricing(pricing?.dcr),
-    nonDcr: Array.isArray(pricing?.nonDcr) ? pricing.nonDcr : [],
-    both: Array.isArray(pricing?.both) ? pricing.both : [],
-    systemConfigs: mergeDefaultSystemConfigs(pricing?.systemConfigs),
+    nonDcr: mergeDefaultNonDcrPricing(pricing?.nonDcr),
+    both: mergeDefaultBothPricing(pricing?.both),
+    systemConfigs,
+    systemConfigurations: systemConfigs,
     effectiveFrom: pricing?.effectiveFrom ?? JUNE_2026_PRICING_META.effectiveFrom,
     effectiveTo: pricing?.effectiveTo ?? JUNE_2026_PRICING_META.effectiveTo,
     effective_from: pricing?.effective_from ?? JUNE_2026_PRICING_META.effectiveFrom,

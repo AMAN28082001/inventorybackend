@@ -38,13 +38,17 @@ const ALLOWED_STATUS_CATEGORIES = [
   'financial',
   'competition',
   'schedule',
-  'other'
+  'other',
+  'part_1_call_and_lead',
+  'part_2_interest_and_qualification',
+  'part_3_follow_up_and_sales',
+  'part_4_rejection_lost'
 ] as const;
 const STATUS_CATEGORY_ALIASES: Record<string, (typeof ALLOWED_STATUS_CATEGORIES)[number]> = {
-  'Part 1 — Call & lead quality': 'call_connectivity',
-  'Part 2 — Interest & qualification': 'customer_intent',
-  'Part 3 — Follow-up & sales': 'schedule',
-  'Part 4 — Rejection / lost': 'competition',
+  'Part 1 — Call & lead quality': 'part_1_call_and_lead',
+  'Part 2 — Interest & qualification': 'part_2_interest_and_qualification',
+  'Part 3 — Follow-up & sales': 'part_3_follow_up_and_sales',
+  'Part 4 — Rejection / lost': 'part_4_rejection_lost',
   call_connectivity: 'call_connectivity',
   lead_validity: 'lead_validity',
   customer_intent: 'customer_intent',
@@ -98,6 +102,18 @@ export const isValidHrCallingAssigneeDealerId = (dealerId: string | null | undef
   const trimmed = String(dealerId).trim();
   if (!trimmed) return false;
   return !HR_UPLOAD_UNASSIGNED_DEALER_SENTINELS.has(trimmed.toLowerCase());
+};
+
+export const isPoolOrUnassignedAssigneeId = (dealerId: string | null | undefined): boolean =>
+  !isValidHrCallingAssigneeDealerId(dealerId);
+
+const poolAssigneeDealerIdClause = () => {
+  const sentinels = Array.from(HR_UPLOAD_UNASSIGNED_DEALER_SENTINELS)
+    .map((value) => `'${value.replace(/'/g, "''")}'`)
+    .join(', ');
+  return Sequelize.literal(`
+    LOWER(TRIM("DealerLeadAssignment"."dealerId")) IN (${sentinels})
+  `);
 };
 
 /**
@@ -347,8 +363,13 @@ const resolveNextFollowUpAtFromRequest = (body: Record<string, unknown>): string
 const normalizeStatusCategory = (rawCategory: unknown): (typeof ALLOWED_STATUS_CATEGORIES)[number] | null => {
   const clean = String(rawCategory || '').trim();
   if (!clean) return null;
-  const mapped = STATUS_CATEGORY_ALIASES[clean] || clean;
-  return (ALLOWED_STATUS_CATEGORIES as readonly string[]).includes(mapped) ? (mapped as (typeof ALLOWED_STATUS_CATEGORIES)[number]) : null;
+  if ((ALLOWED_STATUS_CATEGORIES as readonly string[]).includes(clean)) {
+    return clean as (typeof ALLOWED_STATUS_CATEGORIES)[number];
+  }
+  const mapped = STATUS_CATEGORY_ALIASES[clean];
+  return mapped && (ALLOWED_STATUS_CATEGORIES as readonly string[]).includes(mapped)
+    ? mapped
+    : null;
 };
 
 /** Replace tagged remark — never append nested `[category]` chains (§E.2). */
@@ -365,12 +386,37 @@ const buildTaggedCallRemark = (
 const sanitizeTaggedCallRemarkForPersist = (rawRemark: string | null): string | null => {
   if (!rawRemark) return null;
   const parsed = parseTaggedCallRemark(rawRemark);
-  const category = normalizeStatusCategory(parsed.statusCategory);
+  const category =
+    normalizeStatusCategory(parsed.statusCategory) ||
+    (parsed.statusCategory?.trim() || null);
   const label = String(parsed.status || '')
     .replace(/^\[[^\]]+\]\s*/g, '')
     .trim();
   if (!category || !label) return rawRemark.trim();
   return buildTaggedCallRemark(category, label, parsed.remark);
+};
+
+/** Echo camelCase + snake_case remark/status fields on queue rows (§E). */
+const withCallingRemarkApiAliases = <T extends Record<string, unknown>>(row: T): T & {
+  call_remark: unknown;
+  status_category: unknown;
+  status_text: unknown;
+  statusText: unknown;
+  action_at: unknown;
+  next_follow_up_at: unknown;
+} => {
+  const statusText = row.statusText ?? row.statusLabel ?? null;
+  const actionAt = row.actionAt ?? null;
+  const nextFollowUpAt = row.nextFollowUpAt ?? null;
+  return {
+    ...row,
+    call_remark: row.call_remark ?? row.callRemark ?? null,
+    status_category: row.status_category ?? row.statusCategory ?? row.statusCategoryKey ?? null,
+    status_text: row.status_text ?? statusText,
+    statusText,
+    action_at: row.action_at ?? actionAt,
+    next_follow_up_at: row.next_follow_up_at ?? nextFollowUpAt
+  };
 };
 
 const callingActionToApiJson = (row: any) => {
@@ -411,25 +457,27 @@ const callingActionToApiJson = (row: any) => {
   };
 };
 
-const isFutureScheduledFollowUp = (row: { nextFollowUpAt?: string | Date | null }, nowMs = Date.now()): boolean => {
+/** Rows that belong on the Scheduled tab — not Dialled / Connected / Not Connected. */
+const isScheduledActionRow = (row: { action?: unknown; nextFollowUpAt?: string | Date | null }): boolean => {
   if (!row.nextFollowUpAt) return false;
-  const at = new Date(row.nextFollowUpAt).getTime();
-  return Number.isFinite(at) && at > nowMs;
+  const actionName = String(row.action || '');
+  if (actionName === 'rescheduled') return true;
+  if (actionName === 'follow_up') {
+    const at = new Date(row.nextFollowUpAt).getTime();
+    return Number.isFinite(at);
+  }
+  return false;
 };
 
-const filterDialledActions = (recentActions: any[]) => {
-  const nowMs = Date.now();
-  return recentActions.filter((row: any) => {
+const filterDialledActions = (recentActions: any[]) =>
+  recentActions.filter((row: any) => {
     const actionName = String(row.action || '');
     if (!['called', 'follow_up', 'not_interested', 'rescheduled'].includes(actionName)) {
       return false;
     }
-    if (actionName === 'rescheduled' && isFutureScheduledFollowUp(row, nowMs)) {
-      return false;
-    }
+    if (isScheduledActionRow(row)) return false;
     return true;
   });
-};
 
 const buildQueueCountsPayload = (counts: Awaited<ReturnType<typeof buildDealerQueueCounts>>) => ({
   pendingCount: counts.pendingCount,
@@ -947,6 +995,37 @@ const promoteQueuedLeadIfSlotAvailable = async (
   });
 
   if (!queued) {
+    // Pool / sentinel assignee (unassigned, pool, open, …) — claim for this dealer when batch-eligible.
+    const poolAssignment = await DealerLeadAssignment.findOne({
+      where: {
+        [Op.and]: [
+          { status: { [Op.in]: ['queued', 'assigned', 'active'] } },
+          LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE,
+          poolAssigneeDealerIdClause(),
+          dealerBatchEligibilityClause(dealerId)
+        ]
+      },
+      order: [['assignedAt', 'ASC'], ['createdAt', 'ASC']],
+      transaction,
+      lock: transaction.LOCK.UPDATE
+    });
+
+    if (poolAssignment) {
+      await poolAssignment.update(
+        {
+          dealerId,
+          status: 'assigned',
+          assignedAt: new Date(),
+          action: null,
+          callRemark: null,
+          nextFollowUpAt: null,
+          actionAt: null
+        },
+        { transaction }
+      );
+      return;
+    }
+
     // If this dealer has capacity but no dealer-specific queue, claim one oldest unassigned
     // lead from a batch where this dealer is explicitly eligible.
     const unassignedLead = await CallingLead.findOne({
@@ -1163,6 +1242,28 @@ const claimCallingLeadForDealer = async (
     if (latest.dealerId === dealerId) {
       return latest;
     }
+    if (isPoolOrUnassignedAssigneeId(latest.dealerId)) {
+      const eligible = await isLeadEligibleForDealerPool(leadId, dealerId, transaction);
+      if (!eligible) {
+        const error: any = new Error('LEAD_NOT_ASSIGNED');
+        error.code = 'LEAD_004';
+        throw error;
+      }
+      await latest.update(
+        {
+          dealerId,
+          status: 'assigned',
+          assignedAt: new Date(),
+          action: null,
+          callRemark: null,
+          nextFollowUpAt: null,
+          actionAt: null
+        },
+        { transaction }
+      );
+      await latest.reload({ transaction });
+      return latest;
+    }
     const reassigned = await tryReassignLatestAssignmentToDealer(leadId, dealerId, transaction);
     if (reassigned) {
       return reassigned;
@@ -1268,8 +1369,11 @@ const buildCallingLeadQueuePayload = async (
   const assignedDealerName = dealer
     ? `${dealer.firstName || ''} ${dealer.lastName || ''}`.trim()
     : null;
+  const parsedRemark = parseTaggedCallRemark(assignment.callRemark);
+  const statusCategory = normalizeStatusCategory(parsedRemark.statusCategory);
+  const statusText = parsedRemark.status;
 
-  return {
+  return withCallingRemarkApiAliases({
     leadId: assignment.leadId,
     id: assignment.leadId,
     name: lead?.name || '',
@@ -1289,11 +1393,12 @@ const buildCallingLeadQueuePayload = async (
     status: assignment.status,
     assignmentStatus: assignment.status,
     callRemark: assignment.callRemark,
-    call_remark: assignment.callRemark,
+    statusCategory,
+    statusLabel: statusText,
     nextFollowUpAt: toIsoStringOrNull(assignment.nextFollowUpAt),
     actionAt: toIsoStringOrNull(assignment.actionAt),
     customer_note: lead?.customerNote || null
-  };
+  });
 };
 
 const patchDealerCallingLeadCustomerNote = async (req: Request, res: Response): Promise<void> => {
@@ -1856,13 +1961,29 @@ const buildCallableQueue = async (dealerId: string, limit = 500) => {
 
   const leadIds = rows.map((row: any) => String(row.leadId)).filter(Boolean);
   const latestStatusMap = await buildLatestStatusMetaMap(dealerId, leadIds);
+  const assigneeDealerIds = Array.from(
+    new Set(rows.map((row: any) => String(row.dealerId)).filter((id) => isValidHrCallingAssigneeDealerId(id)))
+  );
+  const assigneeDealers = assigneeDealerIds.length
+    ? await Dealer.findAll({
+      where: { id: { [Op.in]: assigneeDealerIds } },
+      attributes: ['id', 'firstName', 'lastName']
+    })
+    : [];
+  const assigneeNameById = new Map(
+    assigneeDealers.map((dealer) => [
+      dealer.id,
+      `${dealer.firstName || ''} ${dealer.lastName || ''}`.trim()
+    ])
+  );
 
   return rows
     .map((row: any) => {
       const lead = row.lead;
       if (!lead) return null;
       const latestStatus = latestStatusMap.get(String(row.leadId));
-      return {
+      const assignedDealerName = assigneeNameById.get(String(row.dealerId)) || null;
+      return withCallingRemarkApiAliases({
         id: lead.id,
         leadId: lead.id,
         name: lead.name,
@@ -1873,9 +1994,13 @@ const buildCallableQueue = async (dealerId: string, limit = 500) => {
         city: lead.city,
         state: lead.state,
         customerNote: lead.customerNote,
+        // CRM / HR uploader only — not the calling assignee.
+        dealerId: null,
         // Explicit calling assignee (this queue is scoped to `dealerId`; do not infer from lead.uploader fields).
         assignedDealerId: row.dealerId,
         assigned_dealer_id: row.dealerId,
+        assignedDealerName,
+        assigned_dealer_name: assignedDealerName,
         assignedToDealerId: row.dealerId,
         assigned_to_dealer_id: row.dealerId,
         status: row.status,
@@ -1888,7 +2013,7 @@ const buildCallableQueue = async (dealerId: string, limit = 500) => {
         statusCategoryLabel: latestStatus?.statusLabel || null,
         nextFollowUpAt: row.nextFollowUpAt,
         actionAt: row.actionAt
-      };
+      });
     })
     .filter(Boolean) as any[];
 };
@@ -1927,28 +2052,20 @@ const buildDealerQueueCounts = async (dealerId: string) => {
   return { pendingCount, queuedCount, scheduledCount, completedCount };
 };
 
-const buildScheduledLeads = async (dealerId: string) => {
-  const now = new Date();
-  const rows = await DealerLeadAssignment.findAll({
-    where: {
-      [Op.and]: [
-        {
-          dealerId,
-          status: 'rescheduled',
-          nextFollowUpAt: { [Op.gt]: now }
-        },
-        LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE,
-        dealerBatchEligibilityClause(dealerId)
-      ]
-    },
-    include: [{ model: CallingLead, as: 'lead' }],
-    order: [['nextFollowUpAt', 'ASC'], ['assignedAt', 'ASC']],
-    limit: 100
-  });
-  const leadIds = rows.map((row: any) => String(row.leadId)).filter(Boolean);
-  const latestStatusMap = await buildLatestStatusMetaMap(dealerId, leadIds);
+const mapAssignmentToScheduledLead = (
+  row: any,
+  latestStatusMap: Map<string, LeadStatusMeta>
+) => {
+  const parsed = parseTaggedCallRemark(row.callRemark);
+  const meta = latestStatusMap.get(String(row.leadId));
+  const statusCategory =
+    meta?.statusCategory ||
+    normalizeStatusCategory(parsed.statusCategory) ||
+    null;
+  const statusText = meta?.statusLabel || parsed.status || null;
+  const remark = meta?.statusReason || parsed.remark || null;
 
-  return rows.map((row: any) => ({
+  return withCallingRemarkApiAliases({
     leadId: row.leadId,
     id: row.leadId,
     name: row.lead?.name || '',
@@ -1964,17 +2081,54 @@ const buildScheduledLeads = async (dealerId: string) => {
     assignedToDealerId: row.dealerId,
     assigned_to_dealer_id: row.dealerId,
     action: row.action,
-    actionAt: row.actionAt,
+    actionAt: toIsoStringOrNull(row.actionAt),
     callRemark: row.callRemark,
-    statusCategory: latestStatusMap.get(String(row.leadId))?.statusCategory || null,
-    statusLabel: latestStatusMap.get(String(row.leadId))?.statusLabel || null,
-    statusReason: latestStatusMap.get(String(row.leadId))?.statusReason || null,
-    isCustomReason: latestStatusMap.get(String(row.leadId))?.isCustomReason || false,
-    statusCategoryKey: latestStatusMap.get(String(row.leadId))?.statusCategory || null,
-    statusCategoryLabel: latestStatusMap.get(String(row.leadId))?.statusLabel || null,
-    nextFollowUpAt: row.nextFollowUpAt,
-    status: row.status
-  }));
+    statusCategory,
+    statusLabel: statusText,
+    statusText,
+    statusReason: remark,
+    remark,
+    isCustomReason: meta?.isCustomReason || false,
+    statusCategoryKey: statusCategory,
+    statusCategoryLabel: statusText,
+    nextFollowUpAt: toIsoStringOrNull(row.nextFollowUpAt),
+    status: 'rescheduled'
+  });
+};
+
+const dedupeScheduledLeadsByLeadId = (rows: any[]) => {
+  const byLeadId = new Map<string, any>();
+  for (const row of rows) {
+    const leadId = String(row.leadId || row.id || '');
+    if (!leadId || byLeadId.has(leadId)) continue;
+    byLeadId.set(leadId, row);
+  }
+  return Array.from(byLeadId.values());
+};
+
+const buildScheduledLeads = async (dealerId: string) => {
+  const rows = await DealerLeadAssignment.findAll({
+    where: {
+      [Op.and]: [
+        {
+          dealerId,
+          status: 'rescheduled',
+          nextFollowUpAt: { [Op.ne]: null }
+        },
+        LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE,
+        dealerBatchEligibilityClause(dealerId)
+      ]
+    },
+    include: [{ model: CallingLead, as: 'lead' }],
+    order: [['nextFollowUpAt', 'ASC'], ['assignedAt', 'ASC'], ['id', 'ASC']],
+    limit: 200
+  });
+  const leadIds = rows.map((row: any) => String(row.leadId)).filter(Boolean);
+  const latestStatusMap = await buildLatestStatusMetaMap(dealerId, leadIds);
+
+  return dedupeScheduledLeadsByLeadId(
+    rows.map((row: any) => mapAssignmentToScheduledLead(row, latestStatusMap))
+  );
 };
 
 const getPaginationFromQuery = (req: Request, defaultLimit = 20, maxLimit = 100) => {
@@ -2062,23 +2216,9 @@ export const getDealerScheduledQueue = async (req: Request, res: Response): Prom
     });
     const leadIds = rows.rows.map((row: any) => String(row.leadId)).filter(Boolean);
     const latestStatusMap = await buildLatestStatusMetaMap(dealerId, leadIds);
-    const items = rows.rows.map((row: any) => ({
-      leadId: row.leadId,
-      id: row.leadId,
-      name: row.lead?.name || '',
-      mobile: row.lead?.mobile || '',
-      kNumber: row.lead?.kNumber || null,
-      address: row.lead?.address || null,
-      city: row.lead?.city || null,
-      state: row.lead?.state || null,
-      nextFollowUpAt: row.nextFollowUpAt,
-      actionAt: row.actionAt,
-      status: row.status,
-      callRemark: row.callRemark,
-      statusCategory: latestStatusMap.get(String(row.leadId))?.statusCategory || null,
-      statusLabel: latestStatusMap.get(String(row.leadId))?.statusLabel || null,
-      statusReason: latestStatusMap.get(String(row.leadId))?.statusReason || null
-    }));
+    const items = dedupeScheduledLeadsByLeadId(
+      rows.rows.map((row: any) => mapAssignmentToScheduledLead(row, latestStatusMap))
+    );
 
     applyNoCacheHeaders(res);
     res.json({
@@ -2090,6 +2230,32 @@ export const getDealerScheduledQueue = async (req: Request, res: Response): Prom
     });
   } catch (error) {
     logError('Get dealer scheduled queue error', error, { dealerId: req.dealer?.id });
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
+};
+
+export const getDealerCallingActions = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const dealerId = await resolveDealerIdForQueue(req);
+    if (!dealerId) {
+      res.status(401).json({
+        success: false,
+        error: { code: 'AUTH_003', message: 'User not authenticated' }
+      });
+      return;
+    }
+
+    const scopedReq = Object.assign(req, {
+      query: { ...req.query, dealerId }
+    });
+    const data = await buildCallingActionsResponse(scopedReq);
+    applyNoCacheHeaders(res);
+    res.json({ success: true, data });
+  } catch (error) {
+    logError('Get dealer calling actions error', error, { dealerId: req.dealer?.id });
     res.status(500).json({
       success: false,
       error: { code: 'SYS_001', message: 'Internal server error' }
@@ -2125,7 +2291,7 @@ export const getDealerDialledActions = async (req: Request, res: Response): Prom
       offset
     });
 
-    const items = rows.rows.map((row: any) => callingActionToApiJson(row));
+    const items = filterDialledActions(rows.rows.map((row: any) => callingActionToApiJson(row)));
     applyNoCacheHeaders(res);
     res.json({
       success: true,
@@ -2195,7 +2361,9 @@ export const getDealerConnectedActions = async (req: Request, res: Response): Pr
       limit,
       offset
     });
-    const items = rows.rows.map((row: any) => callingActionToApiJson(row));
+    const items = filterDialledActions(rows.rows.map((row: any) => callingActionToApiJson(row))).filter(
+      (row: any) => classifyActionStage(row) === 'connected'
+    );
 
     applyNoCacheHeaders(res);
     res.json({
@@ -2251,7 +2419,9 @@ export const getDealerNotConnectedActions = async (req: Request, res: Response):
       limit,
       offset
     });
-    const items = rows.rows.map((row: any) => callingActionToApiJson(row));
+    const items = filterDialledActions(rows.rows.map((row: any) => callingActionToApiJson(row))).filter(
+      (row: any) => classifyActionStage(row) === 'not_connected'
+    );
 
     applyNoCacheHeaders(res);
     res.json({
@@ -2338,8 +2508,8 @@ const buildDealerQueueSnapshot = async (dealerId: string, recentActionsLimit = 1
       completed: counts.completedCount
     },
     scheduledLeads,
-    upcomingFollowUps: scheduledLeads,
-    rescheduledLeads: scheduledLeads,
+    upcomingFollowUps: [],
+    rescheduledLeads: [],
     recentActions,
     dialledActions,
     connectedActions,
@@ -2767,15 +2937,15 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
         const historyAction = action as CallingActionType;
         await upsertActionHistory({ isEditLatest: true, historyAction });
         await assignment.reload({ transaction });
-        updatedData = {
+        updatedData = withCallingRemarkApiAliases({
           leadId: assignment.leadId,
           status: historyAction,
           assignmentStatus: assignment.status,
           action: assignment.action,
           callRemark: assignment.callRemark,
-          nextFollowUpAt: assignment.nextFollowUpAt,
-          actionAt: assignment.actionAt
-        };
+          nextFollowUpAt: toIsoStringOrNull(assignment.nextFollowUpAt),
+          actionAt: toIsoStringOrNull(assignment.actionAt)
+        });
         return;
       }
 
@@ -2880,15 +3050,19 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
         await promoteQueuedLeadIfSlotAvailable(dealerId, DEFAULT_ACTIVE_LIMIT_PER_DEALER, transaction);
       }
 
-      updatedData = {
+      updatedData = withCallingRemarkApiAliases({
         leadId: assignment.leadId,
         status: action,
         assignmentStatus: assignment.status,
         action: assignment.action,
         callRemark: assignment.callRemark,
-        nextFollowUpAt: assignment.nextFollowUpAt,
-        actionAt: assignment.actionAt
-      };
+        statusCategory: effectiveStatusCategory,
+        statusLabel: effectiveStatusLabel,
+        statusText: effectiveStatusLabel,
+        remark: effectiveStatusReason,
+        nextFollowUpAt: toIsoStringOrNull(assignment.nextFollowUpAt),
+        actionAt: toIsoStringOrNull(assignment.actionAt)
+      });
     });
 
     applyNoCacheHeaders(res);
