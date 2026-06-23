@@ -41,16 +41,20 @@ import { extractS3KeyOrStoredPath } from '../utils/s3Service';
 import {
   buildQuotationProductPdfPersistFields,
   buildQuotationProductPdfPersistFieldsForUpdate,
+  buildQuotationProductInaPersistFields,
+  buildQuotationProductInaPersistFieldsForUpdate,
+  normalizeInaPackageProductFields,
   pickQuotationProductPersistPayload,
   hasPdfPanelRangeKey,
   isAllowedInverterBrandForCatalog,
-  isAllowedMeterBrandForCatalog
+  isAllowedMeterBrandForCatalog,
+  isPdfPanelRangeDisplaySize
 } from '../utils/quotationProductPdfDisplay';
 import {
   FINAL_CONFIRMATION_DOCUMENT_FIELDS,
   isFinalConfirmationDocumentField
 } from '../utils/finalConfirmationDocuments';
-import { isPanelSizeAllowed, normalizeProductCatalog } from '../utils/productCatalogNormalize';
+import { isPanelSizeAllowed, isAllowedPanelBrandForCatalog, normalizeProductCatalog } from '../utils/productCatalogNormalize';
 import { isAllowedDisplayCableSize, isAsPerTheSet } from '../utils/productDisplayValues';
 import {
   isTataDcrPackageSet,
@@ -72,7 +76,7 @@ const getProductCatalogData = async (): Promise<any> => {
   try {
     const config = await SystemConfig.findByPk('product_catalog');
     if (!config) {
-      return null;
+      return normalizeProductCatalog(null);
     }
     const catalog = typeof config.configValue === 'string' 
       ? JSON.parse(config.configValue) 
@@ -80,8 +84,36 @@ const getProductCatalogData = async (): Promise<any> => {
     return normalizeProductCatalog(catalog);
   } catch (error) {
     logError('Failed to get product catalog', error);
-    return null;
+    return normalizeProductCatalog(null);
   }
+};
+
+/** PATCH may send partial products — merge DB row so PDF keys / brands validate correctly. */
+const mergeProductsForValidation = (
+  incoming: Record<string, unknown>,
+  existing: unknown
+): Record<string, unknown> => {
+  if (!existing || typeof existing !== 'object') return incoming;
+  const plain =
+    typeof (existing as { toJSON?: () => Record<string, unknown> }).toJSON === 'function'
+      ? (existing as { toJSON: () => Record<string, unknown> }).toJSON()
+      : (existing as Record<string, unknown>);
+  return { ...plain, ...incoming };
+};
+
+const shouldSkipPanelSizeCatalogCheck = (
+  products: Record<string, unknown>,
+  pdfRangeActive: boolean,
+  panelSize: unknown
+): boolean => {
+  if (pdfRangeActive) return true;
+  if (isAsPerTheSet(panelSize)) return true;
+  if (isPdfPanelRangeDisplaySize(panelSize)) return true;
+  const brand = String(products.panelBrand ?? products.panel_brand ?? '').trim().toLowerCase();
+  if (brand === 'ina' && Boolean(products.pdfUsePanelSizeRange ?? products.pdf_use_panel_size_range)) {
+    return true;
+  }
+  return false;
 };
 
 // Get product catalog for product selection
@@ -129,13 +161,16 @@ const validateProductSelection = (products: any, catalog: any): { isValid: boole
   const pdfRangeActive = hasPdfPanelRangeKey(products);
 
   // Validate panel selection
-  if (products.panelBrand && catalog.panels?.brands && !catalog.panels.brands.includes(products.panelBrand)) {
+  if (
+    products.panelBrand &&
+    catalog.panels?.brands &&
+    !isAllowedPanelBrandForCatalog(products.panelBrand, catalog.panels.brands)
+  ) {
     errors.push(`Invalid panel brand: ${products.panelBrand}`);
   }
   if (
-    !pdfRangeActive &&
     products.panelSize &&
-    !isAsPerTheSet(products.panelSize) &&
+    !shouldSkipPanelSizeCatalogCheck(products, pdfRangeActive, products.panelSize) &&
     catalog.panels?.sizes &&
     !isPanelSizeAllowed(products.panelSize, catalog.panels.sizes)
   ) {
@@ -143,13 +178,16 @@ const validateProductSelection = (products: any, catalog: any): { isValid: boole
   }
 
   // Validate DCR panel selection
-  if (products.dcrPanelBrand && catalog.panels?.brands && !catalog.panels.brands.includes(products.dcrPanelBrand)) {
+  if (
+    products.dcrPanelBrand &&
+    catalog.panels?.brands &&
+    !isAllowedPanelBrandForCatalog(products.dcrPanelBrand, catalog.panels.brands)
+  ) {
     errors.push(`Invalid DCR panel brand: ${products.dcrPanelBrand}`);
   }
   if (
-    !pdfRangeActive &&
     products.dcrPanelSize &&
-    !isAsPerTheSet(products.dcrPanelSize) &&
+    !shouldSkipPanelSizeCatalogCheck(products, pdfRangeActive, products.dcrPanelSize) &&
     catalog.panels?.sizes &&
     !isPanelSizeAllowed(products.dcrPanelSize, catalog.panels.sizes)
   ) {
@@ -157,13 +195,16 @@ const validateProductSelection = (products: any, catalog: any): { isValid: boole
   }
 
   // Validate non-DCR panel selection
-  if (products.nonDcrPanelBrand && catalog.panels?.brands && !catalog.panels.brands.includes(products.nonDcrPanelBrand)) {
+  if (
+    products.nonDcrPanelBrand &&
+    catalog.panels?.brands &&
+    !isAllowedPanelBrandForCatalog(products.nonDcrPanelBrand, catalog.panels.brands)
+  ) {
     errors.push(`Invalid non-DCR panel brand: ${products.nonDcrPanelBrand}`);
   }
   if (
-    !pdfRangeActive &&
     products.nonDcrPanelSize &&
-    !isAsPerTheSet(products.nonDcrPanelSize) &&
+    !shouldSkipPanelSizeCatalogCheck(products, pdfRangeActive, products.nonDcrPanelSize) &&
     catalog.panels?.sizes &&
     !isPanelSizeAllowed(products.nonDcrPanelSize, catalog.panels.sizes)
   ) {
@@ -190,7 +231,11 @@ const validateProductSelection = (products: any, catalog: any): { isValid: boole
   // }
 
   // Validate structure selection
-  if (products.structureType && catalog.structures?.types && !catalog.structures.types.includes(products.structureType)) {
+  if (
+    products.structureType &&
+    catalog.structures?.types?.length > 0 &&
+    !catalog.structures.types.includes(products.structureType)
+  ) {
     errors.push(`Invalid structure type: ${products.structureType}`);
   }
   // Allow custom structure sizes even if not in catalog
@@ -209,7 +254,11 @@ const validateProductSelection = (products: any, catalog: any): { isValid: boole
   }
 
   // Validate AC cable selection
-  if (products.acCableBrand && catalog.cables?.brands && !catalog.cables.brands.includes(products.acCableBrand)) {
+  if (
+    products.acCableBrand &&
+    catalog.cables?.brands?.length > 0 &&
+    !catalog.cables.brands.includes(products.acCableBrand)
+  ) {
     errors.push(`Invalid AC cable brand: ${products.acCableBrand}`);
   }
   if (
@@ -221,7 +270,11 @@ const validateProductSelection = (products: any, catalog: any): { isValid: boole
   }
 
   // Validate DC cable selection
-  if (products.dcCableBrand && catalog.cables?.brands && !catalog.cables.brands.includes(products.dcCableBrand)) {
+  if (
+    products.dcCableBrand &&
+    catalog.cables?.brands?.length > 0 &&
+    !catalog.cables.brands.includes(products.dcCableBrand)
+  ) {
     errors.push(`Invalid DC cable brand: ${products.dcCableBrand}`);
   }
   if (
@@ -233,19 +286,27 @@ const validateProductSelection = (products: any, catalog: any): { isValid: boole
   }
 
   // Validate ACDB selection
-  if (products.acdb && catalog.acdb?.options && !catalog.acdb.options.includes(products.acdb)) {
+  if (
+    products.acdb &&
+    catalog.acdb?.options?.length > 0 &&
+    !catalog.acdb.options.includes(products.acdb)
+  ) {
     errors.push(`Invalid ACDB option: ${products.acdb}`);
   }
 
   // Validate DCDB selection
-  if (products.dcdb && catalog.dcdb?.options && !catalog.dcdb.options.includes(products.dcdb)) {
+  if (
+    products.dcdb &&
+    catalog.dcdb?.options?.length > 0 &&
+    !catalog.dcdb.options.includes(products.dcdb)
+  ) {
     errors.push(`Invalid DCDB option: ${products.dcdb}`);
   }
 
   // Validate custom panels if systemType is 'customize'
   if (products.systemType === 'customize' && products.customPanels) {
     for (const panel of products.customPanels) {
-      if (panel.brand && catalog.panels?.brands && !catalog.panels.brands.includes(panel.brand)) {
+      if (panel.brand && catalog.panels?.brands && !isAllowedPanelBrandForCatalog(panel.brand, catalog.panels.brands)) {
         errors.push(`Invalid custom panel brand: ${panel.brand}`);
       }
       if (panel.size && catalog.panels?.sizes && !isPanelSizeAllowed(panel.size, catalog.panels.sizes)) {
@@ -1033,7 +1094,12 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
       quotationId: quotation.id,
       phase: normalizedPhase
     });
-    const pdfPersistFields = buildQuotationProductPdfPersistFields(products);
+    const pdfPersistFields = buildQuotationProductPdfPersistFields(
+      normalizeInaPackageProductFields(products as Record<string, unknown>)
+    );
+    const inaPersistFields = buildQuotationProductInaPersistFields(
+      normalizeInaPackageProductFields(products as Record<string, unknown>)
+    );
 
     await QuotationProduct.create({
       id: uuidv4(),
@@ -1041,6 +1107,7 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
       systemType: products.systemType,
       phase: normalizedPhase,
       ...pdfPersistFields,
+      ...inaPersistFields,
       panelBrand: products.panelBrand,
       panelSize: products.panelSize,
       panelQuantity: products.panelQuantity,
@@ -2186,9 +2253,15 @@ export const updateQuotationProducts = async (req: Request, res: Response): Prom
       return;
     }
 
-    // Validate product selection against catalog
+    const quotationAny = quotation as any;
+
+    // Validate product selection against catalog (merge saved row + PATCH body)
     const catalog = await getProductCatalogData();
-    const validation = validateProductSelection(products, catalog);
+    const productsForValidation = mergeProductsForValidation(
+      products as Record<string, unknown>,
+      quotationAny.products
+    );
+    const validation = validateProductSelection(productsForValidation, catalog);
     if (!validation.isValid) {
       res.status(400).json({
         success: false,
@@ -2201,7 +2274,6 @@ export const updateQuotationProducts = async (req: Request, res: Response): Prom
       return;
     }
 
-    const quotationAny = quotation as any;
     const existingProduct = quotationAny.products as { centralSubsidy?: number; stateSubsidy?: number; systemType?: string } | null;
     const effectiveSystemTypeForSubsidy =
       products.systemType || existingProduct?.systemType || quotation.systemType;
@@ -2228,8 +2300,13 @@ export const updateQuotationProducts = async (req: Request, res: Response): Prom
       }
     }
 
-    const productPayload = pickQuotationProductPersistPayload(products);
-    const pdfPersistFields = buildQuotationProductPdfPersistFieldsForUpdate(products);
+    const normalizedProducts = normalizeInaPackageProductFields(products as Record<string, unknown>);
+    const productPayload = pickQuotationProductPersistPayload(normalizedProducts);
+    const pdfPersistFields = buildQuotationProductPdfPersistFieldsForUpdate(normalizedProducts);
+    const inaPersistFields = {
+      ...buildQuotationProductInaPersistFields(normalizedProducts),
+      ...buildQuotationProductInaPersistFieldsForUpdate(normalizedProducts)
+    };
 
     // Update quotation system type if provided
     if (products.systemType) {
@@ -2255,7 +2332,8 @@ export const updateQuotationProducts = async (req: Request, res: Response): Prom
         subtotal: Number(quotation.subtotal || 0),
         totalAmount: Number(quotation.totalAmount || 0),
         ...productPayload,
-        ...buildQuotationProductPdfPersistFields(products),
+        ...buildQuotationProductPdfPersistFields(normalizedProducts),
+        ...buildQuotationProductInaPersistFields(normalizedProducts),
         phase: phaseToSave
       });
     } else {
@@ -2266,6 +2344,7 @@ export const updateQuotationProducts = async (req: Request, res: Response): Prom
       await quotationProduct.update({
         ...productPayload,
         ...pdfPersistFields,
+        ...inaPersistFields,
         phase: products.phase || quotationProduct.phase || '1-Phase'
       });
     }

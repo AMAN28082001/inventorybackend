@@ -94,6 +94,10 @@ const productsSchemaObject = z.object({
   pdf_non_dcr_panel_range_key: z
     .union([z.enum(PDF_PANEL_RANGE_KEYS), z.literal(''), z.null()])
     .nullish(),
+  panelType: z.string().max(64).nullish(),
+  panel_type: z.string().max(64).nullish(),
+  inaDcrPackage: booleanOrString.optional(),
+  ina_dcr_package: booleanOrString.optional(),
   customPanels: z.array(z.object({
     brand: z.string().min(1),
     size: z.string().min(1),

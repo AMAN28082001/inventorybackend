@@ -308,6 +308,7 @@ router.get('/me/calling-queue/next', getDealerCallingQueueNext);
 router.get('/me/calling-queue/current', getDealerCallingQueueCurrent);
 router.get('/me/calling-queue/scheduled', getDealerScheduledQueue);
 router.get('/me/calling-actions', getDealerCallingActions);
+router.get('/me/calling-queue/actions', getDealerCallingActions);
 router.get('/me/calling-actions/dialled', getDealerDialledActions);
 router.get('/me/calling-actions/connected', getDealerConnectedActions);
 router.get('/me/calling-actions/not-connected', getDealerNotConnectedActions);

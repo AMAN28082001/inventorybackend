@@ -43,7 +43,9 @@ export const isPackageSetPanelComplete = (products: Record<string, unknown>): bo
   const brand = String(products.panelBrand ?? products.panel_brand ?? '').trim();
   if (!brand) return false;
   const rangeKeys = extractPdfPanelRangeKeysFromProducts(products);
-  if (rangeKeys.pdfPanelRangeKey) return true;
+  if (rangeKeys.pdfPanelRangeKey || rangeKeys.pdfDcrPanelRangeKey || rangeKeys.pdfNonDcrPanelRangeKey) {
+    return true;
+  }
   if (isAsPerTheSet(products.panelSize ?? products.panel_size)) return true;
   const size = String(products.panelSize ?? products.panel_size ?? '').trim();
   if (size) return true;

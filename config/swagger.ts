@@ -261,7 +261,8 @@ const swaggerDefinition = {
               'adani_540_580_bifacial',
               'adani_610_625_bifacial_topcon',
               'premier_600_625_bifacial_topcon',
-              'tata_530_570'
+              'tata_530_570',
+              'ina_500_600_bifacial'
             ]
           },
           pdfDcrPanelRangeKey: { type: 'string', nullable: true },

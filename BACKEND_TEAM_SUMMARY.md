@@ -198,6 +198,28 @@ Authorization: Bearer <dealer-jwt>
 
 ---
 
+## Priority 2.1 — INA DCR quotations
+
+**Full spec:** [`BACKEND_CHANGES_HANDOFF.md` §2.6](./BACKEND_CHANGES_HANDOFF.md#261-ina-dcr--catalog--pdf-range--pricing-implemented)
+
+| Fix | Detail |
+|-----|--------|
+| Catalog | `INA` in `panels.brands`; 500W–600W sizes |
+| Pricing | `dcrMatrix[].ina` + `dcr[].panelType: "INA"` |
+| Products JSON | `panelType`, `inaDcrPackage`, `ina_500_600_bifacial` persist + GET echo |
+| Migration | `yarn migrate` — `20260622120000-add-ina-package-fields-to-quotation-products.js` |
+
+## Priority 1.1 — Dealer calling reports
+
+**Full spec:** [`BACKEND_CHANGES_HANDOFF.md` §2.6.3](./BACKEND_CHANGES_HANDOFF.md#263-dealer-calling-reports--reschedule-remarks-june-2026-implemented)
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /dealers/me/calling-actions` | Dealer-scoped history (same as admin) |
+| `GET /dealers/me/calling-queue/actions` | Alias |
+
+---
+
 ## Priority 1.1 — Calling Scheduled tab (multi-device sync)
 
 **Full spec:** [`BACKEND_CHANGES_HANDOFF.md` §4](./BACKEND_CHANGES_HANDOFF.md#4-dealer-calling-queue--remarks) · [`BACKEND_CHANGES_REQUIRED.md` §E](./BACKEND_CHANGES_REQUIRED.md#e--dealer-calling-queue-remarks-tabs-lead_004)

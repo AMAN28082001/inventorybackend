@@ -73,6 +73,27 @@ export const JUNE_2026_DCR_PRICING_DEFAULTS = [
     price: 268000
   },
   {
+    systemSize: '3kW',
+    phase: '1-Phase' as const,
+    inverterSize: '3kW',
+    panelType: 'INA',
+    price: 182000
+  },
+  {
+    systemSize: '5kW',
+    phase: '1-Phase' as const,
+    inverterSize: '5kW',
+    panelType: 'INA',
+    price: 268000
+  },
+  {
+    systemSize: '4kW',
+    phase: '1-Phase' as const,
+    inverterSize: '4kW',
+    panelType: 'INA',
+    price: 215000
+  },
+  {
     systemSize: '3.1kW',
     phase: '1-Phase' as const,
     inverterSize: '3kW',
@@ -308,6 +329,63 @@ export const JUNE_2026_SYSTEM_CONFIG_DEFAULTS = [
   },
   {
     systemType: 'dcr' as const,
+    systemSize: '3kW',
+    phase: '1-Phase' as const,
+    panelBrand: 'INA',
+    panelSize: '500W',
+    inverterBrand: 'Vsole/Xwatt',
+    inverterSize: '3kW',
+    inverterType: 'String Inverter',
+    structureType: 'GI Structure',
+    structureSize: '3kW',
+    meterBrand: 'L&T',
+    acCableBrand: 'Polycab',
+    acCableSize: 'As per Set',
+    dcCableBrand: 'Polycab',
+    dcCableSize: 'As per Set',
+    acdb: 'Havells (1-Phase)',
+    dcdb: 'Havells (1-Phase)'
+  },
+  {
+    systemType: 'dcr' as const,
+    systemSize: '5kW',
+    phase: '1-Phase' as const,
+    panelBrand: 'INA',
+    panelSize: '500W',
+    inverterBrand: 'Vsole/Xwatt',
+    inverterSize: '5kW',
+    inverterType: 'String Inverter',
+    structureType: 'GI Structure',
+    structureSize: '5kW',
+    meterBrand: 'L&T',
+    acCableBrand: 'Polycab',
+    acCableSize: 'As per Set',
+    dcCableBrand: 'Polycab',
+    dcCableSize: 'As per Set',
+    acdb: 'Havells (1-Phase)',
+    dcdb: 'Havells (1-Phase)'
+  },
+  {
+    systemType: 'dcr' as const,
+    systemSize: '4kW',
+    phase: '1-Phase' as const,
+    panelBrand: 'INA',
+    panelSize: '560W',
+    inverterBrand: 'Vsole/Xwatt',
+    inverterSize: '4kW',
+    inverterType: 'String Inverter',
+    structureType: 'GI Structure',
+    structureSize: '4kW',
+    meterBrand: 'L&T',
+    acCableBrand: 'Polycab',
+    acCableSize: 'As per Set',
+    dcCableBrand: 'Polycab',
+    dcCableSize: 'As per Set',
+    acdb: 'Havells (1-Phase)',
+    dcdb: 'Havells (1-Phase)'
+  },
+  {
+    systemType: 'dcr' as const,
     systemSize: '5.1kW',
     phase: '1-Phase' as const,
     panelBrand: 'Tata',
@@ -340,6 +418,44 @@ const systemConfigKey = (row: {
   systemSize: string;
   panelBrand: string;
 }) => `${row.systemType}|${row.systemSize}|${row.panelBrand}`;
+
+/** Map stored DCR row panelType → matrix column key (June 2026 dealer matrix). */
+const DCR_PANEL_TYPE_MATRIX_COLUMN: Record<string, 'adani' | 'waaree' | 'premierTopcon' | 'ina' | 'tata'> = {
+  'Adani 555W': 'adani',
+  'Adani Topcon 620W': 'adani',
+  'Waaree 540W': 'waaree',
+  'Premier Energies': 'premierTopcon',
+  INA: 'ina',
+  'INA 500W': 'ina',
+  'Tata DCR': 'tata'
+};
+
+export type DcrPricingMatrixRow = {
+  systemSize: string;
+  phase: string;
+  adani?: number;
+  waaree?: number;
+  premierTopcon?: number;
+  ina?: number;
+  tata?: number;
+};
+
+/** Pivot flat `dcr` rows into brand-column matrix for frontend pricing UI. */
+export function buildDcrPricingMatrix(dcrRows: DcrRow[]): DcrPricingMatrixRow[] {
+  const byKey = new Map<string, DcrPricingMatrixRow>();
+  for (const row of dcrRows) {
+    if (!row?.systemSize || !row?.phase || !row?.panelType) continue;
+    const key = `${row.systemSize}|${row.phase}`;
+    let entry = byKey.get(key);
+    if (!entry) {
+      entry = { systemSize: row.systemSize, phase: row.phase };
+      byKey.set(key, entry);
+    }
+    const col = DCR_PANEL_TYPE_MATRIX_COLUMN[row.panelType];
+    if (col) entry[col] = row.price;
+  }
+  return Array.from(byKey.values());
+}
 
 /** June 2026 DCR rows override stale stored rows with the same key. */
 export function mergeDefaultDcrPricing(stored: unknown): DcrRow[] {

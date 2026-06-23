@@ -12,19 +12,28 @@ export const DEFAULT_PANEL_BRANDS = [
   'Tata',
   'Waaree',
   'Premier Energies',
+  'INA',
   'Vikram Solar',
   'RenewSys'
 ] as const;
 
-/** DCR panel wattages used by frontend browse + PDF (incl. 555W Adani column). */
+/** DCR panel wattages used by frontend browse + PDF (incl. 555W Adani, INA 500W–600W). */
 export const DEFAULT_PANEL_SIZES = [
   '440W',
   '445W',
+  '500W',
+  '510W',
+  '520W',
   '530W',
   '540W',
   '545W',
   '550W',
   '555W',
+  '560W',
+  '570W',
+  '580W',
+  '590W',
+  '600W',
   '610W',
   '620W'
 ] as const;
@@ -49,6 +58,14 @@ export const DEFAULT_CABLE_SIZES = [
   'As per Set',
   'As per the set'
 ] as const;
+
+export const DEFAULT_CABLE_BRANDS = ['Polycab', 'Havells', 'Finolex'] as const;
+
+export const DEFAULT_STRUCTURE_TYPES = ['GI Structure', 'Aluminum Structure', 'MS Structure'] as const;
+
+export const DEFAULT_ACDB_OPTIONS = ['Havells (1-Phase)', 'Havells (3-Phase)'] as const;
+
+export const DEFAULT_DCDB_OPTIONS = ['Havells (1-Phase)', 'Havells (3-Phase)'] as const;
 
 export const normalizePanelSizeLabel = (size: unknown): string => {
   const s = String(size || '').trim();

@@ -7,7 +7,8 @@ import {
   mergeDefaultDcrPricing,
   mergeDefaultNonDcrPricing,
   mergeDefaultBothPricing,
-  mergeDefaultSystemConfigs
+  mergeDefaultSystemConfigs,
+  buildDcrPricingMatrix
 } from '../utils/defaultPricingTables';
 import { normalizeProductCatalog } from '../utils/productCatalogNormalize';
 
@@ -231,6 +232,8 @@ export const getIndianStates = async (_req: Request, res: Response): Promise<voi
 // Helper function to normalize pricing tables data
 const normalizePricingTables = (pricing: any): any => {
   const systemConfigs = mergeDefaultSystemConfigs(pricing?.systemConfigs);
+  const dcr = mergeDefaultDcrPricing(pricing?.dcr);
+  const dcrMatrix = buildDcrPricingMatrix(dcr);
   return {
     panels: Array.isArray(pricing?.panels) ? pricing.panels : [],
     inverters: Array.isArray(pricing?.inverters) ? pricing.inverters : [],
@@ -239,7 +242,8 @@ const normalizePricingTables = (pricing: any): any => {
     cables: Array.isArray(pricing?.cables) ? pricing.cables : [],
     acdb: Array.isArray(pricing?.acdb) ? pricing.acdb : [],
     dcdb: Array.isArray(pricing?.dcdb) ? pricing.dcdb : [],
-    dcr: mergeDefaultDcrPricing(pricing?.dcr),
+    dcr,
+    dcrMatrix,
     nonDcr: mergeDefaultNonDcrPricing(pricing?.nonDcr),
     both: mergeDefaultBothPricing(pricing?.both),
     systemConfigs,

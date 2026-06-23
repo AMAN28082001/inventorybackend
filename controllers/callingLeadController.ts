@@ -2251,6 +2251,16 @@ export const getDealerCallingActions = async (req: Request, res: Response): Prom
     const scopedReq = Object.assign(req, {
       query: { ...req.query, dealerId }
     });
+    if (
+      req.query.dealerId &&
+      String(req.query.dealerId).trim() !== dealerId
+    ) {
+      res.status(403).json({
+        success: false,
+        error: { code: 'AUTH_004', message: 'Cannot access another dealer calling actions' }
+      });
+      return;
+    }
     const data = await buildCallingActionsResponse(scopedReq);
     applyNoCacheHeaders(res);
     res.json({ success: true, data });

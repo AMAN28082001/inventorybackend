@@ -1,5 +1,5 @@
 import { readSubsidyChequesFromRow } from './subsidyChequesNormalize';
-import { quotationProductPdfDisplayApiFields } from './quotationProductPdfDisplay';
+import { quotationProductPdfDisplayApiFields, quotationProductInaApiFields } from './quotationProductPdfDisplay';
 import { computeSystemKwFromProducts, formatSystemSizeKw } from './quotationSystemKw';
 
 export type QuotationStatusHistoryEntry = { status: string; at: string };
@@ -245,7 +245,8 @@ export function quotationProductsApiFields(
     centralSubsidy: Number((plainProducts.centralSubsidy ?? plainProducts.central_subsidy) || 0),
     stateSubsidy: Number((plainProducts.stateSubsidy ?? plainProducts.state_subsidy) || 0),
     ...(panels.length > 0 ? { customPanels: panels } : {}),
-    ...quotationProductPdfDisplayApiFields(plainProducts as any)
+    ...quotationProductPdfDisplayApiFields(plainProducts as any),
+    ...quotationProductInaApiFields(plainProducts as any)
   };
 }
 

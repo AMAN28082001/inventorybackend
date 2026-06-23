@@ -1,10 +1,14 @@
 import {
+  DEFAULT_CABLE_BRANDS,
   DEFAULT_CABLE_SIZES,
+  DEFAULT_ACDB_OPTIONS,
+  DEFAULT_DCDB_OPTIONS,
   DEFAULT_INVERTER_BRANDS,
   DEFAULT_INVERTER_TYPES,
   DEFAULT_METER_BRANDS,
   DEFAULT_PANEL_BRANDS,
   DEFAULT_PANEL_SIZES,
+  DEFAULT_STRUCTURE_TYPES,
   normalizePanelSizeLabel
 } from './defaultProductCatalog';
 
@@ -16,6 +20,21 @@ export const panelSizeVariants = (value: unknown): string[] => {
   if (size === '555W') return ['555W', '550W', '545W'];
   if (size === '545W') return ['545W', '550W', '555W'];
   return [size];
+};
+
+/** Always allow June 2026 default brands (e.g. INA) even if DB catalog is stale. */
+export const isAllowedPanelBrandForCatalog = (
+  brand: string | null | undefined,
+  catalogBrands: string[] | undefined
+): boolean => {
+  const normalized = String(brand || '').trim();
+  if (!normalized) return true;
+  const inDefaults = (DEFAULT_PANEL_BRANDS as readonly string[]).some(
+    (b) => b.toLowerCase() === normalized.toLowerCase()
+  );
+  if (inDefaults) return true;
+  if (!catalogBrands?.length) return true;
+  return catalogBrands.includes(normalized);
 };
 
 export const isPanelSizeAllowed = (selectedSize: unknown, catalogSizes: unknown): boolean => {
@@ -53,21 +72,21 @@ export const normalizeProductCatalog = (catalog: any): any => {
       sizes: Array.isArray(catalog?.inverters?.sizes) ? catalog.inverters.sizes : []
     },
     structures: {
-      types: Array.isArray(catalog?.structures?.types) ? catalog.structures.types : [],
-      sizes: []
+      types: mergeUniqueStrings(catalog?.structures?.types, DEFAULT_STRUCTURE_TYPES),
+      sizes: Array.isArray(catalog?.structures?.sizes) ? catalog.structures.sizes : []
     },
     meters: {
       brands: mergeUniqueStrings(catalog?.meters?.brands, DEFAULT_METER_BRANDS)
     },
     cables: {
-      brands: Array.isArray(catalog?.cables?.brands) ? catalog.cables.brands : [],
+      brands: mergeUniqueStrings(catalog?.cables?.brands, DEFAULT_CABLE_BRANDS),
       sizes: mergeUniqueStrings(catalog?.cables?.sizes, DEFAULT_CABLE_SIZES)
     },
     acdb: {
-      options: Array.isArray(catalog?.acdb?.options) ? catalog.acdb.options : []
+      options: mergeUniqueStrings(catalog?.acdb?.options, DEFAULT_ACDB_OPTIONS)
     },
     dcdb: {
-      options: Array.isArray(catalog?.dcdb?.options) ? catalog.dcdb.options : []
+      options: mergeUniqueStrings(catalog?.dcdb?.options, DEFAULT_DCDB_OPTIONS)
     }
   };
 };

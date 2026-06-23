@@ -9,7 +9,8 @@ export const PDF_PANEL_RANGE_KEYS = [
   'adani_540_580_bifacial',
   'adani_610_625_bifacial_topcon',
   'premier_600_625_bifacial_topcon',
-  'tata_530_570'
+  'tata_530_570',
+  'ina_500_600_bifacial'
 ] as const;
 
 export type PdfPanelRangeKey = (typeof PDF_PANEL_RANGE_KEYS)[number];
@@ -21,7 +22,109 @@ export const PDF_PANEL_RANGE_LABELS: Record<PdfPanelRangeKey, string> = {
   adani_540_580_bifacial: '540-580W Bifacial',
   adani_610_625_bifacial_topcon: '610-625W Bifacial Topcon',
   premier_600_625_bifacial_topcon: '600-625W Bifacial Topcon',
-  tata_530_570: '530W - 570W'
+  tata_530_570: '530W - 570W',
+  ina_500_600_bifacial: '500W - 600W'
+};
+
+/** PDF range label sent as panelSize (e.g. INA) — not a catalog wattage. */
+export const isPdfPanelRangeDisplaySize = (size: unknown): boolean => {
+  const s = String(size || '').trim();
+  if (!s) return false;
+  return (Object.values(PDF_PANEL_RANGE_LABELS) as string[]).includes(s);
+};
+
+export const parseInaDcrPackageFlag = (value: unknown): boolean | undefined => {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (value === true || value === 'true' || value === 1 || value === '1') return true;
+  if (value === false || value === 'false' || value === 0 || value === '0') return false;
+  return undefined;
+};
+
+export const isInaDcrPackage = (products: Record<string, unknown> | null | undefined): boolean => {
+  if (!products) return false;
+  const flag = parseInaDcrPackageFlag(products.inaDcrPackage ?? products.ina_dcr_package);
+  if (flag === true) return true;
+  const panelType = String(products.panelType ?? products.panel_type ?? '').trim().toUpperCase();
+  if (panelType === 'INA') return true;
+  const brand = String(products.panelBrand ?? products.panel_brand ?? '').trim().toUpperCase();
+  return brand === 'INA' && Boolean(products.pdfPanelRangeKey ?? products.pdf_panel_range_key);
+};
+
+/** Coerce INA package fields so panelBrand/panelType are not lost on save. */
+export const normalizeInaPackageProductFields = (
+  products: Record<string, unknown> | null | undefined
+): Record<string, unknown> => {
+  if (!products) return {};
+  if (!isInaDcrPackage(products)) return products;
+  const panelType = String(products.panelType ?? products.panel_type ?? 'INA').trim() || 'INA';
+  return {
+    ...products,
+    panelBrand: products.panelBrand ?? products.panel_brand ?? 'INA',
+    panel_brand: products.panel_brand ?? products.panelBrand ?? 'INA',
+    dcrPanelBrand: products.dcrPanelBrand ?? products.dcr_panel_brand ?? 'INA',
+    dcr_panel_brand: products.dcr_panel_brand ?? products.dcrPanelBrand ?? 'INA',
+    panelType,
+    panel_type: panelType,
+    inaDcrPackage: true,
+    ina_dcr_package: true
+  };
+};
+
+export const buildQuotationProductInaPersistFields = (
+  products: Record<string, unknown> | null | undefined
+): Partial<{ panelType: string | null; inaDcrPackage: boolean }> => {
+  const normalized = normalizeInaPackageProductFields(products);
+  const panelTypeRaw = normalized.panelType ?? normalized.panel_type;
+  const panelType =
+    panelTypeRaw === undefined || panelTypeRaw === null || panelTypeRaw === ''
+      ? null
+      : String(panelTypeRaw).trim();
+  const inaFlag = parseInaDcrPackageFlag(normalized.inaDcrPackage ?? normalized.ina_dcr_package);
+  return {
+    panelType: panelType || (isInaDcrPackage(normalized) ? 'INA' : null),
+    inaDcrPackage: inaFlag ?? isInaDcrPackage(normalized)
+  };
+};
+
+export const buildQuotationProductInaPersistFieldsForUpdate = (
+  products: Record<string, unknown> | null | undefined
+): Partial<{ panelType: string | null; inaDcrPackage: boolean }> => {
+  if (!products) return {};
+  const out: Partial<{ panelType: string | null; inaDcrPackage: boolean }> = {};
+  const hasPanelType =
+    Object.prototype.hasOwnProperty.call(products, 'panelType') ||
+    Object.prototype.hasOwnProperty.call(products, 'panel_type');
+  const hasInaFlag =
+    Object.prototype.hasOwnProperty.call(products, 'inaDcrPackage') ||
+    Object.prototype.hasOwnProperty.call(products, 'ina_dcr_package');
+  if (hasPanelType) {
+    const raw = products.panelType ?? products.panel_type;
+    out.panelType = raw === null || raw === '' ? null : String(raw).trim();
+  }
+  if (hasInaFlag) {
+    out.inaDcrPackage = parseInaDcrPackageFlag(products.inaDcrPackage ?? products.ina_dcr_package) ?? false;
+  } else if (hasPanelType && out.panelType?.toUpperCase() === 'INA') {
+    out.inaDcrPackage = true;
+  }
+  return out;
+};
+
+export const quotationProductInaApiFields = (
+  products: Record<string, unknown> | null | undefined
+): Record<string, string | boolean | null> => {
+  if (!products) return {};
+  const panelTypeRaw = products.panelType ?? products.panel_type;
+  const panelType =
+    panelTypeRaw === undefined || panelTypeRaw === null || panelTypeRaw === ''
+      ? null
+      : String(panelTypeRaw);
+  const inaDcrPackage = Boolean(products.inaDcrPackage ?? products.ina_dcr_package ?? false);
+  return {
+    panelType,
+    panel_type: panelType,
+    inaDcrPackage,
+    ina_dcr_package: inaDcrPackage
+  };
 };
 
 /** Combined inverter labels shown in the UI / PDF (not a separate PDF flag). */
@@ -202,6 +305,8 @@ const QUOTATION_PRODUCT_COLUMN_KEYS = [
   'batteryPrice',
   'centralSubsidy',
   'stateSubsidy',
+  'panelType',
+  'inaDcrPackage',
   'subtotal',
   'totalAmount',
   'finalAmount'
@@ -241,6 +346,8 @@ const PRODUCT_SNAKE_TO_CAMEL: Record<string, (typeof QUOTATION_PRODUCT_COLUMN_KE
   battery_price: 'batteryPrice',
   central_subsidy: 'centralSubsidy',
   state_subsidy: 'stateSubsidy',
+  panel_type: 'panelType',
+  ina_dcr_package: 'inaDcrPackage',
   total_amount: 'totalAmount',
   final_amount: 'finalAmount'
 };

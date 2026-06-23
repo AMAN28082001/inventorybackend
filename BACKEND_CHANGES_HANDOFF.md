@@ -112,7 +112,7 @@ Optional: `TZ=Asia/Kolkata` if weekly HR reports must match SPA Mon–Sun in IST
 | `pdfDcrPanelRangeKey` | BOTH — DCR line |
 | `pdfNonDcrPanelRangeKey` | BOTH — Non-DCR line |
 
-**Allowed values:** `waaree_540_560_bifacial`, `waaree_580_700_bifacial_topcon`, `adani_540_580_bifacial`, `adani_610_625_bifacial_topcon`, `premier_600_625_bifacial_topcon`, **`tata_530_570`** (`530W - 570W`, Tata DCR packages only). Unknown keys stored as `null`.
+**Allowed values:** `waaree_540_560_bifacial`, `waaree_580_700_bifacial_topcon`, `adani_540_580_bifacial`, `adani_610_625_bifacial_topcon`, `premier_600_625_bifacial_topcon`, **`tata_530_570`** (`530W - 570W`, Tata DCR packages only), **`ina_500_600_bifacial`** (`500W - 600W`, INA DCR). Unknown keys stored as `null`.
 
 **PDF display (client-generated; keys must round-trip on GET):**
 
@@ -274,6 +274,59 @@ Optional: `TZ=Asia/Kolkata` if weekly HR reports must match SPA Mon–Sun in IST
 - [x] `As per the set` / `As per Set` on panel, inverter, cables
 - [x] Structure `3.1kW` / `5.1kW`
 - [x] (Optional) Tata DCR rows in `GET /api/quotations/pricing-tables` defaults
+
+### 2.6.1 INA DCR — catalog + PDF range + pricing (**implemented**)
+
+**Minimum fix for `Invalid product selection` on INA save:**
+
+| Area | Change |
+|------|--------|
+| `GET /api/quotations/product-catalog` | `panels.brands` includes **`INA`**; sizes include **500W–600W** (`utils/defaultProductCatalog.ts` merged via `normalizeProductCatalog`) |
+| PDF range key | **`ina_500_600_bifacial`** → label `500W - 600W` (`PDF_PANEL_RANGE_KEYS`, Zod, swagger) |
+| `PATCH …/products` / GET | Persist + return `pdfPanelRangeKey` / `pdf_panel_range_key` (same as other brands) |
+| `panelQuantity` | `0` or omitted when any `pdf*PanelRangeKey` is set (`hasPdfPanelRangeKey`) |
+| Inverter | **Non-Tata** — catalog `Vsole`/`Xwatt` + concrete kW; no forced “As per the set” |
+| `GET /api/quotations/pricing-tables` | INA DCR rows + `dcrMatrix[].ina` column (defaults mirror Premier until overridden) |
+| `panelType` / `inaDcrPackage` | Persist on `quotation_products`; echo on GET (`panel_type`, `ina_dcr_package`) — no Adani alias overwrite |
+| Migration | `20260622120000-add-ina-package-fields-to-quotation-products.js` |
+
+**Example PATCH** — see §2.6.2 below.
+
+**Code:** `utils/defaultProductCatalog.ts`, `utils/quotationProductPdfDisplay.ts`, `utils/defaultPricingTables.ts` (`buildDcrPricingMatrix`), `controllers/configController.ts`, `controllers/quotationController.ts`.
+
+### 2.6.2 INA DCR — native round-trip (June 2026, **implemented**)
+
+Frontend no longer needs Adani catalog alias when API returns:
+
+```json
+{
+  "panelBrand": "INA",
+  "panelType": "INA",
+  "inaDcrPackage": true,
+  "pdfPanelRangeKey": "ina_500_600_bifacial",
+  "pdfUsePanelSizeRange": true
+}
+```
+
+| Endpoint | Requirement |
+|----------|-------------|
+| `GET /api/quotations/product-catalog` | `INA` in `panels.brands`; sizes 500W–600W |
+| `GET /api/quotations/pricing-tables` | `dcr[].panelType: "INA"` + `dcrMatrix[].ina` |
+| `PATCH /api/quotations/{id}/products` | Accept + persist `panelType`, `inaDcrPackage`, PDF keys |
+| `GET /api/quotations/{id}` | Echo all fields above on `products` |
+
+### 2.6.3 Dealer calling reports + reschedule remarks (June 2026, **implemented**)
+
+| # | Endpoint | Behavior |
+|---|----------|----------|
+| 1 | `GET /api/dealers/me/calling-actions` | Dealer JWT — same shape as admin (`actions`, `callingActions`, date filters) |
+| 1b | `GET /api/dealers/me/calling-queue/actions` | Alias of (1) |
+| 2 | `GET /api/dealers/me/calling-queue/next` & `/current` | `scheduledLeads` deduped; remark fields on rows |
+| 3 | `PATCH …/calling-queue/{leadId}/action` | Persist `callRemark`, `statusCategory`, `statusText`, `nextFollowUpAt`; `rescheduled` status |
+
+See §4.4–§4.5.1 for queue tab arrays and active-lead rules.
+
+**Code:** `controllers/callingLeadController.ts`, `routes/dealerRoutes.ts`.
 
 ### 2.7 Proposal PDF dates — `updatedAt` and `validUntil` (Jun 2026)
 
