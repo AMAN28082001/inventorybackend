@@ -15,6 +15,7 @@ import { Op } from 'sequelize';
 import sequelize from '../config/database';
 import { Transaction } from 'sequelize';
 import { logError, logInfo } from '../utils/loggerHelper';
+import { lookupQuotationCustomerByPhone } from '../utils/customerPhoneLookup';
 
 const buildSaleIncludes = () => ([
   {
@@ -370,12 +371,18 @@ export const getSaleById = async (req: Request, res: Response): Promise<void> =>
   }
 };
 
-// Lookup customer prefill payload from recent sales by phone
+// Lookup customer prefill payload from recent sales by phone (quotation first, then sales)
 export const getCustomerByPhone = async (req: Request, res: Response): Promise<void> => {
   try {
     const normalizedPhone = normalizePhone(req.query.phone);
     if (!normalizedPhone) {
       res.status(400).json({ error: 'Valid phone query is required' });
+      return;
+    }
+
+    const quotationMatch = await lookupQuotationCustomerByPhone(req, req.query.phone);
+    if (quotationMatch) {
+      res.json(quotationMatch);
       return;
     }
 

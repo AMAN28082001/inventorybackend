@@ -1,6 +1,8 @@
 import express, { Router } from 'express';
 import { login, refreshToken, logout, changePassword, resetPassword, forgotPassword } from '../controllers/quotationAuthController';
+import { getAgentDealerMapping } from '../controllers/authController';
 import { authenticate } from '../middleware/authQuotation';
+import { authenticate as authenticateInventory } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { loginSchema, changePasswordSchema, resetPasswordSchema, forgotPasswordSchema } from '../validations/quotationAuthValidations';
 
@@ -260,6 +262,9 @@ router.post('/reset-password', validate(resetPasswordSchema), resetPassword);
  *         description: Username or date of birth does not match our records
  */
 router.post('/forgot-password', validate(forgotPasswordSchema), forgotPassword);
+
+/** Inventory agent → quotation dealer mapping (alias for stock-out / quotation dropdown). */
+router.get('/agent-dealer', authenticateInventory, getAgentDealerMapping);
 
 export default router;
 

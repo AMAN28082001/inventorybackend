@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import { Dealer, Visitor, InstallationTeam } from '../models/index-quotation';
 import { isInstallationTeamJwtRole } from '../utils/installationTeamRole';
 import { AccountManager, User } from '../models';
+import { tryAuthenticateInventoryUser } from './auth';
 
 // Authenticate dealer or admin
 export const authenticate = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -226,6 +227,40 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
       }
     });
   }
+};
+
+/** Inventory stock-out JWT (users table) or quotation-system JWT (dealers, visitors, account managers). */
+export const authenticateInventoryOrQuotation = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  if (await tryAuthenticateInventoryUser(req)) {
+    next();
+    return;
+  }
+  await authenticate(req, res, next);
+};
+
+/** Phone prefill from quotations — inventory agents + quotation readers. */
+export const authorizeQuotationCustomerByPhone = (req: Request, res: Response, next: NextFunction): void => {
+  const isDealerOrAdmin = req.dealer !== undefined;
+  const isVisitor = req.visitor !== undefined;
+  const isAccountManager = req.user && (req.user.role === 'account-management' || req.user.role === 'hr');
+  const isInventoryStockOutRole =
+    req.user &&
+    (req.user.role === 'agent' ||
+      req.user.role === 'admin' ||
+      req.user.role === 'super-admin' ||
+      req.user.role === 'super-admin-manager' ||
+      req.user.role === 'account');
+
+  if (isDealerOrAdmin || isVisitor || isAccountManager || isInventoryStockOutRole) {
+    next();
+    return;
+  }
+
+  authorizeDealerAdminOrVisitor(req, res, next);
 };
 
 // Authorize dealer only

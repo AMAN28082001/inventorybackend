@@ -3,38 +3,65 @@ import jwt from 'jsonwebtoken';
 import { User } from '../models';
 import { logInfo } from '../utils/loggerHelper';
 
+const INVENTORY_USER_JWT_ROLES = new Set([
+  'super-admin',
+  'super-admin-manager',
+  'admin',
+  'agent',
+  'account',
+  'installer',
+  'baldev',
+  'confirmation',
+  'hr',
+  'metering'
+]);
+
+/** Load inventory `users` row from Bearer JWT without sending an HTTP response. */
+export const tryAuthenticateInventoryUser = async (req: Request): Promise<boolean> => {
+  try {
+    const token = req.header('Authorization')?.replace('Bearer ', '');
+    if (!token) return false;
+
+    const jwtSecret = process.env.JWT_SECRET;
+    if (!jwtSecret) return false;
+
+    const decoded = jwt.verify(token, jwtSecret) as { id: string; role: string };
+    if (!INVENTORY_USER_JWT_ROLES.has(decoded.role)) return false;
+
+    const user = await User.findByPk(decoded.id, {
+      attributes: ['id', 'username', 'name', 'role', 'is_active']
+    });
+    if (!user || !user.is_active) return false;
+
+    req.user = {
+      id: user.id,
+      username: user.username,
+      password: '',
+      name: user.name,
+      role: user.role as 'super-admin' | 'super-admin-manager' | 'admin' | 'agent' | 'account' | 'installer' | 'baldev' | 'confirmation' | 'hr' | 'metering',
+      is_active: user.is_active
+    };
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 // Verify JWT token
 export const authenticate = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const token = req.header('Authorization')?.replace('Bearer ', '');
-
     if (!token) {
       res.status(401).json({ error: 'Access denied. No token provided.' });
       return;
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as { id: string; role: string };
-    
-    // Verify user still exists and is active
-    const user = await User.findByPk(decoded.id, {
-      attributes: ['id', 'username', 'name', 'role', 'is_active']
-    });
-
-    if (!user || !user.is_active) {
-      res.status(401).json({ error: 'Invalid token or user inactive.' });
+    if (await tryAuthenticateInventoryUser(req)) {
+      next();
       return;
     }
 
-    // Assign user with proper typing for inventory system
-    req.user = {
-      id: user.id,
-      username: user.username,
-      password: '', // Not needed in request
-      name: user.name,
-      role: user.role as 'super-admin' | 'super-admin-manager' | 'admin' | 'agent' | 'account' | 'installer' | 'baldev' | 'confirmation' | 'hr' | 'metering',
-      is_active: user.is_active
-    };
-    next();
+    res.status(401).json({ error: 'Invalid token or user inactive.' });
   } catch (error) {
     res.status(401).json({ error: 'Invalid token.' });
   }

@@ -11,6 +11,7 @@ import {
 import {
   createQuotation,
   getQuotations,
+  getQuotationCustomerByPhone,
   getQuotationById,
   updateQuotationDiscount,
   updateQuotationProducts,
@@ -46,6 +47,8 @@ import {
   authenticate,
   authorizeDealer,
   authorizeDealerAdminOrVisitor,
+  authenticateInventoryOrQuotation,
+  authorizeQuotationCustomerByPhone,
   authorizeDealerOrAccountManager,
   authorizeFinalConfirmationUploader,
   authorizeQuotationDocumentsEditor,
@@ -345,6 +348,14 @@ const handleQuotationMeteringMcoMultipart = (
     });
   });
 };
+
+// Phone prefill — register before /:quotationId and before global authenticate (inventory agent JWT)
+router.get(
+  '/customer-by-phone',
+  authenticateInventoryOrQuotation,
+  authorizeQuotationCustomerByPhone,
+  getQuotationCustomerByPhone
+);
 
 // All routes require authentication
 router.use(authenticate);

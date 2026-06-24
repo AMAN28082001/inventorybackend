@@ -33,6 +33,7 @@ import {
   resolveMeterStoredRef
 } from '../utils/meteringMediaApi';
 import { meteringWorkflowApiFields } from '../utils/meteringWorkflowApi';
+import { lookupQuotationCustomerByPhone } from '../utils/customerPhoneLookup';
 import {
   buildReleasedToInstallerWhere,
   isReleasedToInstallerListQuery
@@ -543,6 +544,16 @@ const resolveDealerIdForInventoryUser = async (userId: string, username?: string
     attributes: ['id']
   });
   return dealer ? dealer.id : null;
+};
+
+const normalizePhoneDigits = (value: unknown): string | null => {
+  const digits = String(value ?? '').replace(/\D/g, '');
+  if (!digits) return null;
+  if (digits.length === 10) return digits;
+  if (digits.length === 11 && digits.startsWith('0')) return digits.slice(1);
+  if (digits.length === 12 && digits.startsWith('91')) return digits.slice(2);
+  if (digits.length > 10) return digits.slice(-10);
+  return null;
 };
 
 const resolveSellingPriceByName = async (name: string | null | undefined): Promise<number | null> => {
@@ -1778,6 +1789,39 @@ export const downloadQuotationsExcel = async (req: Request, res: Response): Prom
     res.send(buffer);
   } catch (error) {
     logError('Download quotations excel error', error, { userId: req.user?.id, dealerId: req.dealer?.id });
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
+};
+
+// Lookup customer + address from latest quotation by mobile (inventory B2C prefill)
+export const getQuotationCustomerByPhone = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const normalizedPhone = normalizePhoneDigits(req.query.phone);
+    if (!normalizedPhone) {
+      res.status(400).json({
+        success: false,
+        error: { code: 'VAL_001', message: 'Valid phone query is required' }
+      });
+      return;
+    }
+
+    const result = await lookupQuotationCustomerByPhone(req, req.query.phone);
+    if (!result) {
+      res.status(404).json({
+        success: false,
+        error: { code: 'RES_001', message: 'Customer not found for this phone' }
+      });
+      return;
+    }
+
+    res.json(result);
+  } catch (error) {
+    logError('Get quotation customer by phone error', error, {
+      phone: req.query.phone as string | undefined
+    });
     res.status(500).json({
       success: false,
       error: { code: 'SYS_001', message: 'Internal server error' }

@@ -154,14 +154,21 @@ Authorization: Bearer <dealer-jwt>
 
 ### Phone-based customer prefill
 
-- Added endpoint:
-  - `GET /api/sales/customer-by-phone?phone=...`
-- Behavior:
-  - Normalizes phone (10-digit India format) and finds recent matching sales.
-  - Returns:
-    - `customer` profile block for prefill (`customer_name`, `customer_phone`, `customer_email`, `type`, `company_name`, `gst_number`, `contact_person`, address fields, instructions, notes)
-    - `latest_sale` full row
-    - `recent_sales` compact history list
+**Lookup order (frontend):** quotation first, then sales fallback.
+
+| # | Endpoint | Role |
+|---|----------|------|
+| 1 | `GET /api/quotations/customer-by-phone?phone=...` | Latest quotation customer + full address |
+| 2 | `GET /api/sales/customer-by-phone?phone=...` | Fallback when no quotation exists |
+
+**Quotation endpoint** (`getQuotationCustomerByPhone`):
+- Normalizes phone (10-digit India format)
+- Same access scope as quotation read (agent → mapped dealer; admin → all; account manager → approved only)
+- Returns `customer` (name, phone, email, `billing_address`, `delivery_address`) + `quotation` summary (`id`, `status`, `created_at`)
+- Route registered **before** `GET /:quotationId` in `routes/quotationRoutes.ts`
+
+**Sales fallback** (`getCustomerByPhone`):
+- Returns `customer`, `latest_sale`, `recent_sales` (last 5)
 
 ### Multiple PI/sales per customer phone
 

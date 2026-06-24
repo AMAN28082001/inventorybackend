@@ -1,5 +1,5 @@
 import express, { Router } from 'express';
-import { login, getCurrentUser, forgotPassword, resetPassword, changePassword } from '../controllers/authController';
+import { login, getCurrentUser, forgotPassword, resetPassword, changePassword, getAgentDealerMapping } from '../controllers/authController';
 import { authenticate } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { loginSchema, forgotPasswordSchema, resetPasswordSchema, changePasswordSchema } from '../validations/authValidations';
@@ -65,6 +65,22 @@ router.post('/login', validate(loginSchema), login);
  *         description: Unauthorized
  */
 router.get('/me', authenticate, getCurrentUser);
+
+/**
+ * @swagger
+ * /api/inventory-auth/agent-dealer:
+ *   get:
+ *     summary: Resolve quotation dealer mapping for inventory agent
+ *     tags: [Auth - Inventory]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Mapped dealer for quotation access
+ *       404:
+ *         description: No dealer mapping found
+ */
+router.get('/agent-dealer', authenticate, getAgentDealerMapping);
 
 /**
  * @swagger
