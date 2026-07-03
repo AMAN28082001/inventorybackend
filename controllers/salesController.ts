@@ -16,6 +16,29 @@ import sequelize from '../config/database';
 import { Transaction } from 'sequelize';
 import { logError, logInfo } from '../utils/loggerHelper';
 import { lookupQuotationCustomerByPhone } from '../utils/customerPhoneLookup';
+import { persistableMediaReference } from '../utils/s3Service';
+
+const SALE_PRODUCT_SUMMARY_MAX = 2000;
+const SALE_IMAGE_MAX = 2048;
+const SALE_ITEM_NAME_MAX = 255;
+
+function truncateVarchar(value: string | null | undefined, max: number): string | null {
+  if (value == null) return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  return raw.length <= max ? raw : raw.slice(0, max);
+}
+
+function normalizeSaleImageForStorage(url: string | null | undefined): string | null {
+  if (!url) return null;
+  const stored = persistableMediaReference(url) || String(url).trim();
+  return truncateVarchar(stored, SALE_IMAGE_MAX);
+}
+
+const extractDbErrorMessage = (error: unknown): string => {
+  const err = error as { message?: string; parent?: { message?: string } };
+  return String(err?.parent?.message || err?.message || 'Unable to create sale');
+};
 
 const buildSaleIncludes = () => ([
   {
@@ -110,6 +133,9 @@ const normalizeSaleItems = async (rawItems: any, transaction: Transaction): Prom
     if (!productName || !model) {
       throw new Error('product_name and model are required for each sale item if product_id is not provided');
     }
+
+    productName = truncateVarchar(productName, SALE_ITEM_NAME_MAX) || productName.slice(0, SALE_ITEM_NAME_MAX);
+    model = truncateVarchar(model, SALE_ITEM_NAME_MAX) || model.slice(0, SALE_ITEM_NAME_MAX);
 
     let unitPrice: number;
     if (item.unit_price !== undefined) {
@@ -293,9 +319,38 @@ const logSaleTransaction = async ({ productId, saleId, quantity, customerName, c
   }, { transaction });
 };
 
-const buildProductSummary = (items: NormalizedSaleItem[]): string => items
-  .map((item) => `${item.product_name} (${item.quantity})`)
-  .join(', ');
+const buildProductSummary = (items: NormalizedSaleItem[]): string => {
+  const parts = items.map((item) => `${item.product_name} (${item.quantity})`);
+  let summary = parts.join(', ');
+  if (summary.length <= SALE_PRODUCT_SUMMARY_MAX) return summary;
+
+  const kept: string[] = [];
+  for (const part of parts) {
+    const candidate = kept.length === 0 ? part : `${kept.join(', ')}, ${part}`;
+    if (candidate.length > SALE_PRODUCT_SUMMARY_MAX - 12) break;
+    kept.push(part);
+  }
+
+  const omitted = parts.length - kept.length;
+  if (omitted > 0) {
+    const suffix = ` +${omitted} more`;
+    const base = kept.join(', ');
+    const maxBase = SALE_PRODUCT_SUMMARY_MAX - suffix.length;
+    const trimmedBase = base.length > maxBase ? base.slice(0, maxBase) : base;
+    return `${trimmedBase}${suffix}`;
+  }
+
+  return truncateVarchar(summary, SALE_PRODUCT_SUMMARY_MAX) || summary.slice(0, SALE_PRODUCT_SUMMARY_MAX);
+};
+
+const resolveProductSummaryForSale = (
+  provided: string | undefined,
+  items: NormalizedSaleItem[],
+): string => {
+  const built = buildProductSummary(items);
+  const raw = provided?.trim() || built;
+  return truncateVarchar(raw, SALE_PRODUCT_SUMMARY_MAX) || built.slice(0, SALE_PRODUCT_SUMMARY_MAX);
+};
 
 // Get all sales (with role-based filtering)
 export const getAllSales = async (req: Request, res: Response): Promise<void> => {
@@ -583,13 +638,13 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
     if (req.file && !uploadedS3Image) {
       throw new Error('Image upload failed. Could not store file in S3.');
     }
-    const imagePath = uploadedS3Image;
+    const imagePath = normalizeSaleImageForStorage(uploadedS3Image);
 
     const saleRecord = await Sale.create({
       id: uuidv4(),
       type,
-      customer_name,
-      product_summary: product_summary || buildProductSummary(normalizedItems),
+      customer_name: truncateVarchar(customer_name, 255) || String(customer_name).slice(0, 255),
+      product_summary: resolveProductSummaryForSale(product_summary, normalizedItems),
       total_quantity: totalQuantity,
       subtotal: subtotalValue,
       tax_amount: taxAmountValue,
@@ -770,8 +825,14 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
     });
     
     // Provide detailed error message
-    const errorMessage = error.message || 'Unable to create sale';
+    const errorMessage = extractDbErrorMessage(error);
     const errorResponse: any = { error: errorMessage };
+
+    if (/character varying\(\d+\)|value too long/i.test(errorMessage)) {
+      errorResponse.error =
+        'One of the sale fields is too long (product summary or image). Try fewer products or re-upload the image.';
+      errorResponse.details = errorMessage;
+    }
     
     // Add helpful details for common errors
     if (errorMessage.includes('item') || errorMessage.includes('product')) {
@@ -933,10 +994,10 @@ export const updateSale = async (req: Request, res: Response): Promise<void> => 
     }
 
     if (product_summary) {
-      updates.product_summary = product_summary;
+      updates.product_summary = truncateVarchar(product_summary, SALE_PRODUCT_SUMMARY_MAX);
     }
     if (updatedItems) {
-      updates.product_summary = product_summary || buildProductSummary(updatedItems);
+      updates.product_summary = resolveProductSummaryForSale(product_summary, updatedItems);
     }
 
     if (company_name !== undefined) {
@@ -991,7 +1052,7 @@ export const updateSale = async (req: Request, res: Response): Promise<void> => 
       if (!uploadedS3Image) {
         throw new Error('Image upload failed. Could not store file in S3.');
       }
-      updates.image = uploadedS3Image;
+      updates.image = normalizeSaleImageForStorage(uploadedS3Image);
       
       // Delete old image from S3 if it exists
       if (sale.image) {
@@ -1067,7 +1128,7 @@ export const confirmB2BBill = async (req: Request, res: Response): Promise<void>
       res.status(500).json({ error: 'Bill upload failed. Could not store file in S3.' });
       return;
     }
-    const billImage = uploadedS3BillImage || sale.bill_image;
+    const billImage = normalizeSaleImageForStorage(uploadedS3BillImage) || sale.bill_image;
     
     // Delete old bill image from S3 if it exists
     if (sale.bill_image && req.file) {
@@ -1203,4 +1264,4 @@ export const getSalesSummary = async (req: Request, res: Response): Promise<void
     res.status(500).json({ error: 'Server error' });
   }
 };
-
+//live

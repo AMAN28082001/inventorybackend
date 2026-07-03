@@ -80,7 +80,7 @@ Sale.init(
       allowNull: false
     },
     product_summary: {
-      type: DataTypes.STRING(500),
+      type: DataTypes.TEXT,
       allowNull: false
     },
     total_quantity: {
@@ -133,7 +133,7 @@ Sale.init(
       defaultValue: DataTypes.NOW
     },
     image: {
-      type: DataTypes.STRING(500),
+      type: DataTypes.STRING(2048),
       allowNull: true
     },
     created_by: {
@@ -182,7 +182,7 @@ Sale.init(
       allowNull: true
     },
     bill_image: {
-      type: DataTypes.STRING(500),
+      type: DataTypes.STRING(2048),
       allowNull: true
     },
     bill_confirmed_date: {
