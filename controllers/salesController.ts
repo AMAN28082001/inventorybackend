@@ -17,6 +17,8 @@ import { Transaction } from 'sequelize';
 import { logError, logInfo } from '../utils/loggerHelper';
 import { lookupQuotationCustomerByPhone } from '../utils/customerPhoneLookup';
 import { persistableMediaReference } from '../utils/s3Service';
+import { normalizeSaleQuantity, isWholeSaleQuantity, hasSufficientStock } from '../utils/saleQuantity';
+import { roundProductPrice } from '../utils/productUnit';
 
 const SALE_PRODUCT_SUMMARY_MAX = 2000;
 const SALE_IMAGE_MAX = 2048;
@@ -110,7 +112,7 @@ const normalizeSaleItems = async (rawItems: any, transaction: Transaction): Prom
   const normalized: NormalizedSaleItem[] = [];
 
   for (const item of rawItems) {
-    const quantity = Number(item.quantity);
+    const quantity = normalizeSaleQuantity(item.quantity);
 
     if (!quantity || quantity <= 0 || Number.isNaN(quantity)) {
       throw new Error('Each sale item must have a quantity greater than 0');
@@ -153,8 +155,10 @@ const normalizeSaleItems = async (rawItems: any, transaction: Transaction): Prom
     if (Number.isNaN(unitPrice) || unitPrice < 0) {
       throw new Error('Each sale item must have a non-negative unit_price');
     }
+    unitPrice = roundProductPrice(unitPrice) ?? unitPrice;
 
-    const lineTotal = item.line_total !== undefined ? Number(item.line_total) : quantity * unitPrice;
+    const lineTotalRaw = item.line_total !== undefined ? Number(item.line_total) : quantity * unitPrice;
+    const lineTotal = roundProductPrice(lineTotalRaw) ?? lineTotalRaw;
 
     if (Number.isNaN(lineTotal) || lineTotal < 0) {
       throw new Error('Each sale item must have a non-negative line_total');
@@ -180,6 +184,16 @@ const normalizeSaleItems = async (rawItems: any, transaction: Transaction): Prom
           ? item.serial_numbers.split(/[\n,]+/).map((v: string) => v.trim()).filter(Boolean)
           : null
     });
+
+    const serials = normalized[normalized.length - 1].serial_numbers;
+    if (serials?.length) {
+      if (!isWholeSaleQuantity(quantity)) {
+        throw new Error('Serial numbers require a whole-number quantity');
+      }
+      if (serials.length !== Math.round(quantity)) {
+        throw new Error(`Expected ${Math.round(quantity)} serial numbers, got ${serials.length}`);
+      }
+    }
   }
 
   return normalized;
@@ -274,13 +288,13 @@ const tryReduceAdminInventory = async (adminId: string, productId: string, quant
     lock: transaction.LOCK.UPDATE
   });
 
-  if (!inventory || inventory.quantity < quantity) {
+  if (!inventory || !hasSufficientStock(Number(inventory.quantity), quantity)) {
     return false;
   }
 
   await inventory.decrement('quantity', { by: quantity, transaction });
   await inventory.reload({ transaction });
-  if (inventory.quantity <= 0) {
+  if (Number(inventory.quantity) <= 0) {
     await inventory.destroy({ transaction });
   }
 
@@ -290,7 +304,7 @@ const tryReduceAdminInventory = async (adminId: string, productId: string, quant
 const reduceCentralInventory = async (productId: string, quantity: number, transaction: Transaction): Promise<void> => {
   const product = await Product.findByPk(productId, { transaction, lock: transaction.LOCK.UPDATE });
 
-  if (!product || product.quantity < quantity) {
+  if (!product || !hasSufficientStock(Number(product.quantity), quantity)) {
     throw new Error('Insufficient central inventory for sale');
   }
 

@@ -36,7 +36,7 @@ AdminInventory.init(
       allowNull: false
     },
     quantity: {
-      type: DataTypes.INTEGER,
+      type: DataTypes.DECIMAL(12, 3),
       allowNull: false,
       defaultValue: 0
     }

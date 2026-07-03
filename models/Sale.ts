@@ -84,10 +84,10 @@ Sale.init(
       allowNull: false
     },
     total_quantity: {
-      type: DataTypes.INTEGER,
+      type: DataTypes.DECIMAL(12, 3),
       allowNull: false,
       validate: {
-        min: 1
+        min: 0.001
       }
     },
     subtotal: {

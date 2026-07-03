@@ -32,7 +32,7 @@ export const createSaleSchema = z.object({
   product_id: z.string().optional(), // Legacy support
   product_name: z.string().optional(), // Legacy support
   model: z.string().optional(), // Legacy support
-  quantity: z.coerce.number().int().positive().optional(), // Legacy support
+  quantity: z.coerce.number().positive('Quantity must be greater than 0').optional(), // Legacy support
   unit_price: z.coerce.number().min(0).optional(), // Legacy support
   line_total: z.coerce.number().min(0).optional(), // Legacy support
   product_summary: z.string().optional(),

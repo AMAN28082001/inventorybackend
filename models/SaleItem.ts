@@ -52,10 +52,10 @@ SaleItem.init(
       allowNull: false
     },
     quantity: {
-      type: DataTypes.INTEGER,
+      type: DataTypes.DECIMAL(12, 3),
       allowNull: false,
       validate: {
-        min: 1
+        min: 0.001
       }
     },
     unit_price: {
