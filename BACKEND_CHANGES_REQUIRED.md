@@ -334,6 +334,90 @@ Each row must include:
 
 **Installment count filter:** frontend-only — no `?installmentCount=` unless list performance requires it.
 
+---
+
+## §AB — Installment replace on save (Account Management)
+
+**Status:** Implemented — `utils/quotationPaymentPhases.ts`, `updateQuotationPaymentDetails`  
+**Reference:** `BACKEND_INSTALLMENT_REPLACE.ts`
+
+### Problem
+
+Removing installments and submitting caused deleted rows to return on refresh (upsert-by-`phase_number` left orphans).
+
+### Fix
+
+| Trigger | Behavior |
+|---------|----------|
+| `PUT /api/quotations/{id}/installments` | Always replace (delete all + insert body) |
+| `PATCH …/installments` | Always replace |
+| `PATCH …/payment-details` + `replaceInstallments: true` or `replace: true` | Replace |
+| `PATCH …/payment-details` without replace flags | Legacy upsert |
+| `PATCH …/installation-release` only | Does **not** touch installments |
+
+`phases: []` clears all installment rows.
+
+### QA
+
+| # | Action | Expected |
+|---|--------|----------|
+| 1 | 3 phases → save 2 | GET returns 2 rows |
+| 2 | Save `phases: []` | GET returns 0 rows |
+| 3 | Hard refresh | Count unchanged |
+| 4 | Release-only PATCH | Installments unchanged |
+
+---
+
+| 4 | Release-only PATCH | Installments unchanged |
+
+---
+
+## §AC — Payment Excel Customer Journey columns (Account Management)
+
+**Status:** Implemented — `utils/paymentExcelJourneyStatus.ts`  
+**Reference:** `BACKEND_PAYMENT_EXCEL_JOURNEY_STATUS.ts`  
+**No new endpoint** — CSV export is client-side.
+
+### Required on `GET /api/quotations?status=approved`
+
+| Field | Purpose |
+|-------|---------|
+| `status` | Admin Approval stage |
+| `installationStatus` / `installation_status` | Installation stage + File Status derivation |
+| `meteringStatus` / `meteringStage` / `mcoStatus` | Metering stage |
+| `installments` / `paymentPhases` | Installment count |
+
+Missing `installationStatus` → Excel shows **Workflow Pending** for all rows after refresh.
+
+### Optional pre-computed labels
+
+```json
+{
+  "journeyStageProgress": {
+    "adminApproval": "completed",
+    "installation": "in_progress",
+    "metering": "not_started",
+    "finalConfirmation": "not_started"
+  },
+  "fileStatus": "Pending Metering",
+  "adminApprovalStatus": "Approved",
+  "installationStatusLabel": "Pending Metering",
+  "meteringStatusLabel": "Pending",
+  "finalConfirmationStatusLabel": "Approved"
+}
+```
+
+### QA
+
+| # | Check |
+|---|--------|
+| 1 | Approved list row includes `installationStatus` + `meteringStatus` |
+| 2 | After workflow PATCH, GET reflects new `installationStatus` |
+| 3 | `installments.length` matches saved phase count |
+| 4 | `fileStatus` not always `Workflow Pending` when installation progressed |
+
+---
+
 ### Admin Overview kW — verify list payload (no new endpoint)
 
 **Frontend computes kW client-side** from the admin quotation list (`GET /api/admin/quotations`). No mandatory new API unless you add optional server aggregates or a stored `system_kw` column.

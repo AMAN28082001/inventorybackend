@@ -33,7 +33,16 @@ import {
   resolveMeterStoredRef
 } from '../utils/meteringMediaApi';
 import { meteringWorkflowApiFields } from '../utils/meteringWorkflowApi';
+import { paymentExcelJourneyApiFields } from '../utils/paymentExcelJourneyStatus';
 import { lookupQuotationCustomerByPhone } from '../utils/customerPhoneLookup';
+import {
+  loadQuotationPaymentPhases,
+  replaceQuotationPaymentPhases,
+  serializePaymentPhaseRow,
+  shouldReplacePaymentPhases,
+  upsertQuotationPaymentPhases,
+  type PaymentPhaseRecord
+} from '../utils/quotationPaymentPhases';
 import {
   buildReleasedToInstallerWhere,
   isReleasedToInstallerListQuery
@@ -414,21 +423,6 @@ const remainingPaymentAgainstSubtotal = (
   return Math.max(0, base - safePaid);
 };
 
-type PaymentPhaseRecord = {
-  phaseNumber: number;
-  phaseName: string;
-  amount: number;
-  paidAmount: number;
-  status: 'pending' | 'partial' | 'completed';
-  dueDate?: string | null;
-  paymentDate?: string | null;
-  paymentMode?: 'cash' | 'upi' | 'loan' | 'netbanking' | 'bank_transfer' | 'cheque' | 'card' | 'mix' | null;
-  transactionId?: string | null;
-  note?: string | null;
-  updatedBy?: string | null;
-  updatedAt?: string | null;
-};
-
 const calculatePhaseStatus = (paidAmount: number, amount: number): 'pending' | 'partial' | 'completed' => {
   if (paidAmount <= 0) return 'pending';
   if (amount > 0 && paidAmount >= amount) return 'completed';
@@ -485,21 +479,6 @@ const normalizePaymentPhases = (phases: any[], updatedBy: string | null): Paymen
     })
     .sort((a, b) => a.phaseNumber - b.phaseNumber);
 };
-
-const serializePaymentPhaseRow = (row: any): PaymentPhaseRecord => ({
-  phaseNumber: Number(row.phaseNumber),
-  phaseName: String(row.phaseName || ''),
-  amount: Number(row.amount || 0),
-  paidAmount: Number(row.paidAmount || 0),
-  status: (['pending', 'partial', 'completed'].includes(String(row.status)) ? row.status : 'pending') as PaymentPhaseRecord['status'],
-  dueDate: row.dueDate ? new Date(row.dueDate).toISOString() : null,
-  paymentDate: row.paymentDate ? new Date(row.paymentDate).toISOString() : null,
-  paymentMode: normalizePaymentModeInput(row.paymentMode) ?? null,
-  transactionId: row.transactionId || null,
-  note: row.note || null,
-  updatedBy: row.updatedBy || null,
-  updatedAt: row.updatedAtPhase ? new Date(row.updatedAtPhase).toISOString() : null
-});
 
 const fetchPaymentPhasesByQuotationIds = async (quotationIds: string[]): Promise<Map<string, PaymentPhaseRecord[]>> => {
   const map = new Map<string, PaymentPhaseRecord[]>();
@@ -1609,6 +1588,10 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
           mcoAt: (q as any).mcoAt,
           completionAt: (q as any).completionAt
         }),
+        ...paymentExcelJourneyApiFields({
+          ...row,
+          installationStatus: (q as any).installationStatus || 'pending_installer'
+        }),
         discomName: (q as any).discomName || null,
         meterType: (q as any).meterType || null,
         meterNo: (q as any).meterNo || null,
@@ -2066,6 +2049,10 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
           meteringApprovedAt: quotationAny.meteringApprovedAt,
           mcoAt: quotationAny.mcoAt,
           completionAt: quotationAny.completionAt
+        }),
+        ...paymentExcelJourneyApiFields({
+          ...rowById,
+          installationStatus: quotationAny.installationStatus || 'pending_installer'
         }),
         discomName: quotationAny.discomName || null,
         meterType: quotationAny.meterType || null,
@@ -2772,7 +2759,8 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
     const paymentType =
       paymentTypeBody ||
       (paymentMode && ['loan', 'cash', 'mix'].includes(paymentMode) ? (paymentMode as 'loan' | 'cash' | 'mix') : undefined);
-    const phasePayload = req.body.phases || req.body.installments || req.body.paymentPhases;
+    const phasePayload = req.body.phases ?? req.body.installments ?? req.body.paymentPhases;
+    const hasPhasePayload = Array.isArray(phasePayload);
 
     // Reference: account-management + admin only; quotation JWT admin (dealer.role === 'admin') included.
     const role = req.user?.role;
@@ -2800,47 +2788,16 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
     }
 
     const { actorId } = resolveActorForAudit(req);
-    if (phasePayload && Array.isArray(phasePayload)) {
+    if (hasPhasePayload) {
       const normalizedPhases = normalizePaymentPhases(phasePayload, actorId);
-      for (const phase of normalizedPhases) {
-        const existing = await QuotationPaymentPhase.findOne({
-          where: {
-            quotationId: quotation.id,
-            phaseNumber: phase.phaseNumber
-          }
-        });
-
-        const payload = {
-          quotationId: quotation.id,
-          phaseNumber: phase.phaseNumber,
-          phaseName: phase.phaseName,
-          amount: phase.amount,
-          paidAmount: phase.paidAmount,
-          status: phase.status,
-          dueDate: phase.dueDate ? new Date(phase.dueDate) : null,
-          paymentDate: phase.paymentDate ? new Date(phase.paymentDate) : null,
-          paymentMode: phase.paymentMode || null,
-          transactionId: phase.transactionId || null,
-          note: phase.note || null,
-          updatedBy: actorId,
-          updatedAtPhase: new Date()
-        };
-
-        if (existing) {
-          await existing.update(payload);
-        } else {
-          await QuotationPaymentPhase.create({
-            id: uuidv4(),
-            ...payload
-          });
-        }
+      const replacePhases = shouldReplacePaymentPhases(req, true);
+      if (replacePhases) {
+        await replaceQuotationPaymentPhases(quotation.id, normalizedPhases, actorId);
+      } else {
+        await upsertQuotationPaymentPhases(quotation.id, normalizedPhases, actorId);
       }
 
-      const phaseRows = await QuotationPaymentPhase.findAll({
-        where: { quotationId: quotation.id },
-        order: [['phaseNumber', 'ASC']]
-      });
-      const mergedPhases = (phaseRows as any[]).map(serializePaymentPhaseRow);
+      const mergedPhases = await loadQuotationPaymentPhases(quotation.id);
       const totalPaidAmount = sumPhasePaidAmounts(mergedPhases);
       const paymentCapSubtotal = Number(quotation.subtotal || 0);
       if (totalPaidAmount > paymentCapSubtotal + 0.01) {
@@ -2889,11 +2846,7 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
     }
 
     await quotation.reload();
-    const latestPhaseRows = await QuotationPaymentPhase.findAll({
-      where: { quotationId: quotation.id },
-      order: [['phaseNumber', 'ASC']]
-    });
-    const responsePhases = (latestPhaseRows as any[]).map(serializePaymentPhaseRow);
+    const responsePhases = await loadQuotationPaymentPhases(quotation.id);
     const totalPaidSaved = quotation.paidAmount != null ? Number(quotation.paidAmount) : sumPhasePaidAmounts(responsePhases);
     const subtotalNum = Number(quotation.subtotal || 0);
     const remainingAmount = remainingPaymentAgainstSubtotal(subtotalNum, totalPaidSaved);

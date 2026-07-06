@@ -69,6 +69,8 @@ Optional: `TZ=Asia/Kolkata` if weekly HR reports must match SPA Mon–Sun in IST
 | `statusApprovedAt` set on approve transition | ✅ `PATCH /api/admin/quotations/:id/status` |
 | Admin list: `products` / `quotationProduct` + `systemKw` | ✅ `quotationProductListApiFields` |
 | PATCH payment phases → next GET shows updated phase array | ✅ `updateQuotationPaymentDetails` + `fetchPaymentPhasesByQuotationIds` |
+| **Installment remove persists** (`replaceInstallments` / `PUT /installments` deletes orphans) | ✅ `utils/quotationPaymentPhases.ts` — see `BACKEND_INSTALLMENT_REPLACE.ts` |
+| **Payment Excel journey columns** (`installationStatus`, metering fields on approved list) | ✅ `utils/paymentExcelJourneyStatus.ts` — see `BACKEND_PAYMENT_EXCEL_JOURNEY_STATUS.ts` |
 | `?dealerId=` / `?installmentCount=` on approved list | ❌ Optional |
 | `GET /admin/overview/dealer-stats` | ❌ Optional |
 | Persist `system_kw` column on create/update | ✅ `persistQuotationSystemKw` + migration |
@@ -858,8 +860,35 @@ On multipart routes (quotation documents, visitor/dealer visit complete, meterin
 | `paymentType`, `paymentStatus`, `paymentMode`, `bankName`, `bankIfsc` | Payment filters |
 | `installments` / `paymentPhases` / `payment_phases` | Installment **count** filter (array length) |
 | `subtotal`, `remaining`, `remainingAmount` | Payment amounts |
+| `status` | Admin Approval column |
+| `installationStatus` / `installation_status` | Installation + File Status columns |
+| `meteringStatus` / `meteringStage` / `mcoStatus` | Metering column (derived from `installationStatus`) |
+| `journeyStageProgress`, `fileStatus` (optional) | Pre-computed Excel labels |
+
+### 12.5 — Payment Excel Customer Journey columns (July 2026)
+
+**No new endpoint** — Account Management exports CSV client-side. Backend must echo workflow fields on **`GET /api/quotations?status=approved`** after refresh.
+
+**Status:** Implemented — `utils/paymentExcelJourneyStatus.ts` → `paymentExcelJourneyApiFields` on list + detail.
+
+| Excel column | API source |
+|--------------|------------|
+| Installment Count | `installments.length` |
+| Admin Approval Status | `status` / `adminApprovalStatus` |
+| Installation Status | `installationStatus` / `installationStatusLabel` |
+| Metering Status | `meteringStatus` / `meteringStatusLabel` |
+| Final Confirmation Status | `finalConfirmationStatusLabel` |
+| File Status (last) | `fileStatus` |
+
+If **`installationStatus` is missing** from GET, Excel shows **Workflow Pending** for every row — verify list payload includes `installationStatus` (defaults to `pending_installer` when null in DB).
+
+**Reference:** `BACKEND_PAYMENT_EXCEL_JOURNEY_STATUS.ts`, `BACKEND_CHANGES_REQUIRED.md` §AC.
+
+**Code:** `utils/meteringWorkflowApi.ts`, `controllers/quotationController.ts` → `getQuotations`.
 
 After **`PATCH` / `PUT` `/api/quotations/{id}/installments`** (or `payment-details` / `payment-mode`), the next **GET** must echo updated phases (read-after-write).
+
+**Installment remove:** when frontend sends `replaceInstallments: true`, `replace: true`, or uses **`PUT /installments`**, backend must **delete all** `quotation_payment_phases` rows for that quotation and insert only the request array (`phases: []` clears all). Do not upsert-by-`phase_number` only — that leaves orphan rows. See **`BACKEND_INSTALLMENT_REPLACE.ts`** and §AB below.
 
 If the UI shows the wrong installment count, debug **stale or empty `installments[]`**, not the filter.
 

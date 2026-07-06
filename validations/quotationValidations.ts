@@ -356,6 +356,8 @@ export const updatePaymentDetailsSchema = z
     paymentType: z.enum(['loan', 'cash', 'mix']).optional(),
     paymentMode: z.union([z.string(), z.null()]).optional(),
     paymentStatus: paymentStatusEnum.optional(),
+    replaceInstallments: z.boolean().optional(),
+    replace: z.boolean().optional(),
     phases: z.array(rawPaymentPhaseSchema).optional(),
     installments: z.array(rawPaymentPhaseSchema).optional(),
     paymentPhases: z.array(rawPaymentPhaseSchema).optional(),
