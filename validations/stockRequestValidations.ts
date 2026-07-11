@@ -26,7 +26,9 @@ export const createStockRequestSchema = z.object({
   quantity: z.coerce.number().int().positive().optional(), // Legacy support
   requested_from: z.string().min(1, 'Requested from is required'),
   notes: z.string().nullable().optional(),
-  status: z.string().optional()
+  status: z.string().optional(),
+  /** Super-admin creating request for a specific admin */
+  on_behalf_of_admin_id: z.string().uuid().optional()
 }).refine((data) => {
   // Either items array/string is provided, or legacy single-item fields are provided
   return data.items !== undefined || (data.product_id !== undefined || (data.product_name !== undefined && data.model !== undefined));

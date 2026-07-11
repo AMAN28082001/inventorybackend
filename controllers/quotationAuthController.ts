@@ -5,6 +5,7 @@ import { Dealer, Visitor, InstallationTeam } from '../models/index-quotation';
 import { User, AccountManager, AccountManagerHistory } from '../models';
 import { logError, logInfo } from '../utils/loggerHelper';
 import { v4 as uuidv4 } from 'uuid';
+import { normalizeInventoryRole } from '../utils/inventoryRole';
 
 // Login - for dealers and visitors
 export const login = async (req: Request, res: Response): Promise<void> => {
@@ -87,7 +88,18 @@ export const login = async (req: Request, res: Response): Promise<void> => {
             firstName: dealer.firstName,
             lastName: dealer.lastName,
             email: dealer.email,
-            role: dealer.role
+            role: dealer.role,
+            // Quotation Admin may open Inventory with this same token (no second login)
+            ...(dealer.role === 'admin'
+              ? {
+                  inventoryAccess: true,
+                  inventory_access: true,
+                  requiresInventoryLogin: false,
+                  requires_inventory_login: false,
+                  inventoryRole: 'super-admin',
+                  inventory_role: 'super-admin'
+                }
+              : {})
           },
           expiresIn: 3600
         }
@@ -350,14 +362,15 @@ export const login = async (req: Request, res: Response): Promise<void> => {
       }
 
       const expiresIn: string = process.env.JWT_EXPIRE || '7d';
+      const canonicalRole = normalizeInventoryRole(user.role) || user.role;
       const token = jwt.sign(
-        { id: user.id, role: user.role },
+        { id: user.id, role: canonicalRole },
         jwtSecret,
         { expiresIn } as SignOptions
       );
 
       const refreshToken = jwt.sign(
-        { id: user.id, role: user.role, type: 'refresh' },
+        { id: user.id, role: canonicalRole, type: 'refresh' },
         jwtSecret,
         { expiresIn: '30d' } as SignOptions
       );
@@ -373,7 +386,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
             firstName: user.name.split(' ')[0] || user.name,
             lastName: user.name.split(' ').slice(1).join(' ') || '',
             name: user.name,
-            role: user.role
+            role: canonicalRole
           },
           expiresIn: 3600
         }
@@ -457,7 +470,7 @@ export const refreshToken = async (req: Request, res: Response): Promise<void> =
       const expiresIn: string = process.env.JWT_EXPIRE || '7d';
       const accessPayload: Record<string, string> = {
         id: decoded.id,
-        role: decoded.role || ''
+        role: normalizeInventoryRole(decoded.role) || decoded.role || ''
       };
       if (decoded.installationTeamId) {
         accessPayload.installationTeamId = decoded.installationTeamId;

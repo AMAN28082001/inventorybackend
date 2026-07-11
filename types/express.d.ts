@@ -12,6 +12,8 @@ interface UserAttributes {
   created_by_name?: string | null;
   created_at?: Date;
   updated_at?: Date;
+  /** inventory-user = users table; quotation-admin = Dealer.role admin JWT (§AD.5.1) */
+  authSource?: 'inventory-user' | 'quotation-admin';
 }
 
 // Quotation System User Attributes

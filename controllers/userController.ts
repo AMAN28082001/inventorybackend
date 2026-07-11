@@ -18,26 +18,25 @@ export const getAllUsers = async (req: Request, res: Response): Promise<void> =>
 
     const userRole = req.user.role;
     const userId = req.user.id;
+    const isQuotationAdmin = (req.user as any).authSource === 'quotation-admin';
 
     // Role-based filtering primarily focused on agents
-    if (userRole === 'admin') {
-      // Admins only see their own agents
+    if (userRole === 'admin' && !isQuotationAdmin) {
+      // Inventory admins only see their own agents
       where.role = 'agent';
       where.created_by_id = userId;
     } else if (userRole === 'account' || userRole === 'super-admin-manager') {
-      // Account role sees all agents by default
       if (role) {
         where.role = role;
       } else {
         where.role = 'agent';
       }
-    } else if (userRole === 'super-admin') {
-      // Super-admin can see any role, optionally filtered by query
+    } else if (userRole === 'super-admin' || isQuotationAdmin) {
+      // Super-admin + quotation Admin (Open Inventory) — full directory
       if (role) {
         where.role = role;
       }
     } else {
-      // Agents and other roles are not allowed here
       res.status(403).json({ error: 'Access denied' });
       return;
     }
@@ -101,7 +100,7 @@ export const getUserById = async (req: Request, res: Response): Promise<void> =>
 // Create user
 export const createUser = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { username, password, name, role } = req.body;
+    const { username, password, name, role, created_by_id } = req.body;
 
     if (!username || !password || !name || !role) {
       res.status(400).json({ error: 'All fields are required' });
@@ -148,6 +147,21 @@ export const createUser = async (req: Request, res: Response): Promise<void> => 
     const id = uuidv4();
     const isActive = req.user.role === 'super-admin';
 
+    // Super-admin can assign an agent under a specific admin via created_by_id
+    let createdById = req.user.id;
+    let createdByName = (req.user as any).name || req.user.username;
+    if (req.user.role === 'super-admin' && role === 'agent' && created_by_id) {
+      const adminUser = await User.findByPk(String(created_by_id), {
+        attributes: ['id', 'role', 'name', 'username']
+      });
+      if (!adminUser || adminUser.role !== 'admin') {
+        res.status(400).json({ error: 'created_by_id must be a valid admin user' });
+        return;
+      }
+      createdById = adminUser.id;
+      createdByName = adminUser.name || adminUser.username;
+    }
+
     const newUser = await User.create({
       id,
       username,
@@ -155,8 +169,8 @@ export const createUser = async (req: Request, res: Response): Promise<void> => 
       name,
       role,
       is_active: isActive,
-      created_by_id: req.user.id,
-      created_by_name: (req.user as any).name || req.user.username
+      created_by_id: createdById,
+      created_by_name: createdByName
     });
 
     res.status(201).json({

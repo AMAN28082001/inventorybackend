@@ -125,7 +125,7 @@ router.get('/:id', getSaleById);
  *       400:
  *         description: Validation error
  */
-router.post('/', authorize('agent', 'admin'), upload.single('image'), uploadToS3('sales'), validateWithJsonParse(createSaleSchema, ['items']), createSale);
+router.post('/', authorize('agent', 'admin', 'super-admin'), upload.single('image'), uploadToS3('sales'), validateWithJsonParse(createSaleSchema, ['items']), createSale);
 
 // Update - creator, admin, or super-admin can update
 router.put('/:id', upload.single('image'), uploadToS3('sales'), validate(updateSaleSchema), updateSale);

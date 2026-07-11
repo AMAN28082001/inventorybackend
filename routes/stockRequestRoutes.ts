@@ -115,7 +115,7 @@ router.get('/:id', getStockRequestById);
  *         description: Validation error
  */
 router.post('/', 
-  authorize('admin', 'agent'), 
+  authorize('admin', 'agent', 'super-admin'), 
   logRequestBeforeValidation,
   validateWithJsonParse(createStockRequestSchema, ['items']),
   logRequestAfterValidation,

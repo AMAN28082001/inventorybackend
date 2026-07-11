@@ -4,6 +4,11 @@ import { Dealer, Visitor, InstallationTeam } from '../models/index-quotation';
 import { isInstallationTeamJwtRole } from '../utils/installationTeamRole';
 import { AccountManager, User } from '../models';
 import { tryAuthenticateInventoryUser } from './auth';
+import {
+  isInventoryAdminLikeRole,
+  isInventoryUserJwtRole,
+  normalizeInventoryRole
+} from '../utils/inventoryRole';
 
 // Authenticate dealer or admin
 export const authenticate = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -156,21 +161,8 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
       }
 
       // Check if it's an Inventory System user (super-admin, admin, agent, account)
-      if (
-        decoded.role === 'super-admin' ||
-        decoded.role === 'super-admin-manager' ||
-        decoded.role === 'admin' ||
-        decoded.role === 'agent' ||
-        decoded.role === 'account' ||
-        decoded.role === 'installer' ||
-        decoded.role === 'baldev' ||
-        decoded.role === 'confirmation' ||
-        decoded.role === 'hr' ||
-        decoded.role === 'metering' ||
-        decoded.role === 'meter' ||
-        decoded.role === 'metering-team' ||
-        decoded.role === 'mco'
-      ) {
+      const decodedRole = normalizeInventoryRole(decoded.role) || decoded.role;
+      if (isInventoryUserJwtRole(decoded.role) || isInventoryUserJwtRole(decodedRole)) {
         const user = await User.findByPk(decoded.id);
         if (!user || !user.is_active) {
           res.status(401).json({
@@ -186,7 +178,7 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
         req.user = {
           id: user.id,
           username: user.username,
-          role: user.role as any
+          role: (normalizeInventoryRole(user.role) || user.role) as any
         } as any; // Type assertion needed due to union type differences
         next();
         return;
@@ -319,12 +311,8 @@ export const authorizeAdmin = (req: Request, res: Response, next: NextFunction):
   // Check Quotation System admin (dealer with role 'admin')
   const isQuotationAdmin = req.dealer && req.dealer.role === 'admin';
   
-  // Check Inventory System admin/super-admin
-  const isInventoryAdmin = req.user && (
-    req.user.role === 'admin' || 
-    req.user.role === 'super-admin' ||
-    req.user.role === 'super-admin-manager'
-  );
+  // Check Inventory System admin/super-admin (any username — not limited to "admin")
+  const isInventoryAdmin = req.user && isInventoryAdminLikeRole(req.user.role);
   
   if (!isQuotationAdmin && !isInventoryAdmin) {
     res.status(403).json({
@@ -365,10 +353,7 @@ export const authorizeVisitorOrQuotationsDealer = (req: Request, res: Response, 
     return;
   }
   // Inventory admins (User JWT) may reschedule any visit for support / ops (no req.dealer).
-  if (
-    req.user &&
-    (req.user.role === 'admin' || req.user.role === 'super-admin' || req.user.role === 'super-admin-manager')
-  ) {
+  if (req.user && isInventoryAdminLikeRole(req.user.role)) {
     next();
     return;
   }
@@ -510,7 +495,7 @@ export const authorizeMeteringOrAdmin = (req: Request, res: Response, next: Next
 
 /** Inventory System roles that may edit any quotation (products/pricing), same as `authorizeAdmin` inventory branch. */
 const isInventorySystemAdminRole = (role: string | undefined): boolean =>
-  role === 'admin' || role === 'super-admin' || role === 'super-admin-manager';
+  isInventoryAdminLikeRole(role);
 
 // Allow dealer/admin or account manager
 export const authorizeDealerOrAccountManager = (req: Request, res: Response, next: NextFunction): void => {

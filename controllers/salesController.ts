@@ -698,6 +698,32 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
       createdSaleItems.push(createdItem);
     }
 
+    let adminInventoryOwnerId: string | null = null;
+    if (req.user.role === 'agent') {
+      const agentRecord = await User.findByPk(req.user.id, {
+        attributes: ['id', 'created_by_id']
+      });
+      adminInventoryOwnerId = agentRecord?.created_by_id || null;
+      if (!adminInventoryOwnerId) {
+        await transaction.rollback();
+        res.status(400).json({ error: 'Admin mapping not found for agent' });
+        return;
+      }
+    } else if (req.user.role === 'admin') {
+      adminInventoryOwnerId = req.user.id;
+    } else if (req.user.role === 'super-admin' || req.user.role === 'super-admin-manager') {
+      const bodyAdminId = String((req.body as any).admin_id || '').trim();
+      if (bodyAdminId) {
+        const adminUser = await User.findByPk(bodyAdminId, { attributes: ['id', 'role'] });
+        if (!adminUser || adminUser.role !== 'admin') {
+          await transaction.rollback();
+          res.status(400).json({ error: 'admin_id must be a valid admin user' });
+          return;
+        }
+        adminInventoryOwnerId = adminUser.id;
+      }
+    }
+
     const serialNumbersRaw = (req.body as any).serial_numbers;
     const serialNumbersMapFromItems: Record<string, string[]> = {};
     for (const item of normalizedItems) {
@@ -734,21 +760,8 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
         }
       }
 
-      let adminInventoryOwnerId: string | null = null;
-      if (req.user.role === 'agent') {
-        const agentRecord = await User.findByPk(req.user.id, {
-          attributes: ['id', 'created_by_id']
-        });
-        adminInventoryOwnerId = agentRecord?.created_by_id || null;
-        if (!adminInventoryOwnerId) {
-          await transaction.rollback();
-          res.status(400).json({ error: 'Admin mapping not found for agent' });
-          return;
-        }
-      }
-
       for (const serialRow of serialRows) {
-        if (req.user.role === 'agent') {
+        if (adminInventoryOwnerId && (req.user.role === 'agent' || req.user.role === 'super-admin' || req.user.role === 'super-admin-manager')) {
           if (!['acknowledged', 'dispatched'].includes(serialRow.status || '') || serialRow.dispatched_to_admin_id !== adminInventoryOwnerId) {
             await transaction.rollback();
             res.status(400).json({ error: 'Serial number is not available for sale' });
@@ -774,19 +787,6 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
           }
         );
       }
-    }
-
-    let adminInventoryOwnerId: string | null = null;
-    if (req.user.role === 'agent') {
-      const agentRecord = await User.findByPk(req.user.id, {
-        attributes: ['id', 'created_by_id']
-      });
-      adminInventoryOwnerId = agentRecord?.created_by_id || null;
-      if (!adminInventoryOwnerId) {
-        throw new Error('Admin mapping not found for agent');
-      }
-    } else if (req.user.role === 'admin') {
-      adminInventoryOwnerId = req.user.id;
     }
 
     for (const item of normalizedItems) {

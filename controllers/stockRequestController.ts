@@ -285,7 +285,7 @@ export const createStockRequest = async (req: Request, res: Response): Promise<v
       return;
     }
 
-    const { items: rawItems, requested_from, notes } = req.body;
+    const { items: rawItems, requested_from, notes, on_behalf_of_admin_id } = req.body;
     let itemsPayload: any = rawItems;
 
     if (typeof itemsPayload === 'string') {
@@ -317,7 +317,34 @@ export const createStockRequest = async (req: Request, res: Response): Promise<v
     const normalizedItems = await normalizeItemsPayload(itemsPayload, transaction);
     const totalQuantity = normalizedItems.reduce((sum, item) => sum + item.quantity, 0);
 
-    const requestedByRole = req.user.role === 'admin' ? 'admin' : 'agent';
+    // Super-admin can create a request on behalf of a specific admin
+    let requestedById = req.user.id;
+    let requestedByName = (req.user as any).name || req.user.username;
+    let requestedByRole: 'admin' | 'agent' = req.user.role === 'admin' ? 'admin' : 'agent';
+
+    if (req.user.role === 'super-admin') {
+      const behalfAdminId = String(on_behalf_of_admin_id || '').trim();
+      if (!behalfAdminId) {
+        await transaction.rollback();
+        res.status(400).json({
+          error: 'on_behalf_of_admin_id is required when super-admin creates a stock request'
+        });
+        return;
+      }
+      const adminUser = await User.findByPk(behalfAdminId, {
+        attributes: ['id', 'role', 'name', 'username'],
+        transaction
+      });
+      if (!adminUser || adminUser.role !== 'admin') {
+        await transaction.rollback();
+        res.status(400).json({ error: 'on_behalf_of_admin_id must be a valid admin user' });
+        return;
+      }
+      requestedById = adminUser.id;
+      requestedByName = adminUser.name || adminUser.username;
+      requestedByRole = 'admin';
+    }
+
     const requestedFromRole = requested_from === 'super-admin' ? 'super-admin' : 'admin';
 
     // Validate requested_from based on requester role
@@ -351,8 +378,8 @@ export const createStockRequest = async (req: Request, res: Response): Promise<v
       primary_product_name: primaryItem.product_name,
       primary_model: primaryItem.model,
       total_quantity: totalQuantity,
-      requested_by_id: req.user.id,
-        requested_by_name: (req.user as any).name || req.user.username,
+      requested_by_id: requestedById,
+      requested_by_name: requestedByName,
       requested_by_role: requestedByRole,
       requested_from,
       requested_from_role: requestedFromRole,

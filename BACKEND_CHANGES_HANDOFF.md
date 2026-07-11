@@ -71,6 +71,7 @@ Optional: `TZ=Asia/Kolkata` if weekly HR reports must match SPA Mon–Sun in IST
 | PATCH payment phases → next GET shows updated phase array | ✅ `updateQuotationPaymentDetails` + `fetchPaymentPhasesByQuotationIds` |
 | **Installment remove persists** (`replaceInstallments` / `PUT /installments` deletes orphans) | ✅ `utils/quotationPaymentPhases.ts` — see `BACKEND_INSTALLMENT_REPLACE.ts` |
 | **Payment Excel journey columns** (`installationStatus`, metering fields on approved list) | ✅ `utils/paymentExcelJourneyStatus.ts` — see `BACKEND_PAYMENT_EXCEL_JOURNEY_STATUS.ts` |
+| **Super Admin quotation login + inventory JWT** (`role: super-admin` shared token) | ✅ `utils/inventoryRole.ts` — see `BACKEND_SUPER_ADMIN_QUOTATION_LOGIN.ts` / §AD |
 | `?dealerId=` / `?installmentCount=` on approved list | ❌ Optional |
 | `GET /admin/overview/dealer-stats` | ❌ Optional |
 | Persist `system_kw` column on create/update | ✅ `persistQuotationSystemKw` + migration |
@@ -905,6 +906,25 @@ Dropdown filters (`All Dealers` / specific dealer / `Unassigned`) run in the bro
 | `?installmentCount=2` | Exact phase-row count match |
 
 **Code:** `controllers/quotationController.ts` → `getQuotations`, `updateQuotationPaymentDetails`.
+
+---
+
+## 12b. Super Admin — Quotation login + Inventory data (Jul 2026)
+
+**Status: implemented** — `BACKEND_CHANGES_REQUIRED.md` §AD, `BACKEND_SUPER_ADMIN_QUOTATION_LOGIN.ts`
+
+**Frontend:** `/login` → Admin Panel → **Accounts** → **Open Inventory** (`/dashboard/inventory`).
+
+| Requirement | Behavior |
+|-------------|----------|
+| `POST /api/auth/login` | Accepts inventory `users` including `super-admin`; returns `user.role: "super-admin"` |
+| Role normalize | `superadmin` / `super_admin` → `super-admin` in JWT + response |
+| `/api/admin/*` | Same access as admin via `authorizeAdmin` — any super-admin username |
+| Shared token | Same Bearer works on inventory routes (`/products`, `/users`, `/stock-requests`, `/sales`, `/stock-returns`) |
+| **Quotation Admin on inventory** | Dealer `role: admin` JWT → inventory session as **super-admin** (§AD.5.1) — no token errors; same access as Super Admin panel |
+| Scope | Super-admin + quotation Admin see **all** inventory rows / can manage products, users, stock, sales |
+
+**Code:** `utils/inventoryRole.ts`, `controllers/quotationAuthController.ts`, `middleware/authQuotation.ts`, `middleware/auth.ts` (`tryAuthenticateQuotationAdminForInventory`), `controllers/userController.ts`.
 
 ---
 

@@ -4,6 +4,7 @@ import jwt, { SignOptions } from 'jsonwebtoken';
 import { User } from '../models';
 import { Dealer } from '../models/index-quotation';
 import { logError } from '../utils/loggerHelper';
+import { isQuotationAdminInventorySession, normalizeInventoryRole } from '../utils/inventoryRole';
 
 // Login
 export const login = async (req: Request, res: Response): Promise<void> => {
@@ -41,8 +42,9 @@ export const login = async (req: Request, res: Response): Promise<void> => {
     }
 
     const expiresIn: string = process.env.JWT_EXPIRE || '7d';
+    const canonicalRole = normalizeInventoryRole(user.role) || user.role;
     const token = jwt.sign(
-      { id: user.id, role: user.role },
+      { id: user.id, role: canonicalRole },
       jwtSecret,
       { expiresIn } as SignOptions
     );
@@ -54,7 +56,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
         id: user.id,
         username: user.username,
         name: user.name,
-        role: user.role,
+        role: canonicalRole,
         is_active: user.is_active,
         created_by_id: user.created_by_id,
         created_by_name: user.created_by_name
@@ -66,11 +68,52 @@ export const login = async (req: Request, res: Response): Promise<void> => {
   }
 };
 
-// Get current user
+// Get current user (inventory User OR quotation Admin session — no re-login)
 export const getCurrentUser = async (req: Request, res: Response): Promise<void> => {
   try {
     if (!req.user) {
       res.status(401).json({ error: 'User not authenticated' });
+      return;
+    }
+
+    // Quotation Admin already logged in via POST /api/auth/login — reuse same JWT (§AD)
+    if (isQuotationAdminInventorySession(req.user as { authSource?: string })) {
+      let dealerId = req.user.id;
+      let username = req.user.username;
+      let name = (req.user as { name?: string }).name || req.user.username;
+
+      if (req.dealer) {
+        dealerId = req.dealer.id;
+        username = req.dealer.username;
+      } else {
+        const dealer = await Dealer.findByPk(req.user.id, {
+          attributes: ['id', 'username', 'firstName', 'lastName', 'role', 'isActive']
+        });
+        if (!dealer || !dealer.isActive || dealer.role !== 'admin') {
+          res.status(401).json({ error: 'Invalid token or user inactive.' });
+          return;
+        }
+        dealerId = dealer.id;
+        username = dealer.username;
+        name = `${dealer.firstName || ''} ${dealer.lastName || ''}`.trim() || dealer.username;
+      }
+
+      res.json({
+        id: dealerId,
+        username,
+        name,
+        role: 'super-admin',
+        is_active: true,
+        created_by_id: null,
+        created_by_name: null,
+        created_at: null,
+        authSource: 'quotation-admin',
+        auth_source: 'quotation-admin',
+        inventoryAccess: true,
+        inventory_access: true,
+        requiresInventoryLogin: false,
+        requires_inventory_login: false
+      });
       return;
     }
 
@@ -92,7 +135,17 @@ export const getCurrentUser = async (req: Request, res: Response): Promise<void>
       return;
     }
 
-    res.json(user);
+    const role = normalizeInventoryRole(user.role) || user.role;
+    res.json({
+      ...user.toJSON(),
+      role,
+      authSource: 'inventory-user',
+      auth_source: 'inventory-user',
+      inventoryAccess: true,
+      inventory_access: true,
+      requiresInventoryLogin: false,
+      requires_inventory_login: false
+    });
   } catch (error) {
     logError('Get current user error', error, { userId: req.user?.id });
     res.status(500).json({ error: 'Server error' });

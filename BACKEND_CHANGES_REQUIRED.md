@@ -418,6 +418,64 @@ Missing `installationStatus` → Excel shows **Workflow Pending** for all rows a
 
 ---
 
+## §AD — Super Admin on Quotation Admin Login + Inventory data (Jul 2026)
+
+**Status:** Implemented — `utils/inventoryRole.ts`, `quotationAuthController.login`, `authorizeAdmin`, inventory `authenticate`  
+**Reference:** `BACKEND_SUPER_ADMIN_QUOTATION_LOGIN.ts`  
+**Frontend:** `/login` → Admin Panel → Accounts → Open Inventory (`/dashboard/inventory`)
+
+### Requirements
+
+| # | Requirement |
+|---|-------------|
+| 1 | `POST /api/auth/login` accepts inventory `users` with super-admin credentials |
+| 2 | Response `user.role` is canonical **`super-admin`** (normalize `superadmin` / `super_admin`) |
+| 3 | JWT access + refresh claims use the same canonical role |
+| 4 | `/api/admin/*` allows `super-admin` the same as admin — **do not** require `username === "admin"` |
+| 5 | Same Bearer from `/auth/login` works on inventory routes (`middleware/auth.ts`) — no separate inventory-only login for this SPA |
+| 6 | Super-admin inventory scope is **full** (all products, admins, stock-requests, sales, stock-returns) |
+
+### Inventory endpoints (super-admin full scope)
+
+| Method | Path |
+|--------|------|
+| GET | `/api/products`, `/api/users?role=admin`, `/api/users` (agents), `/api/stock-requests`, `/api/sales`, `/api/stock-returns` |
+| POST/PATCH | create product / add stock / create+dispatch stock-request / approve sale / process return (existing role gates) |
+
+### Auth notes
+
+- Quotation admin JWT (`req.dealer.role === 'admin'`) remains valid for `/admin/*`.
+- Inventory super-admin JWT is accepted via `authorizeAdmin` → `isInventoryAdminLikeRole`.
+- Shared secret: `JWT_SECRET` (same for quotation + inventory).
+
+### QA
+
+| # | Check |
+|---|--------|
+| 1 | Login as `superadmin` → `data.user.role === "super-admin"` |
+| 2 | Decode JWT → `role: "super-admin"` |
+| 3 | `GET /api/admin/quotations` with that token → 200 |
+| 4 | `GET /api/products` + `GET /api/users?role=admin` with same token → non-empty (full scope) |
+| 5 | No 403 solely because username is not `"admin"` |
+
+### AD.5.1 — Known SPA error: `Invalid token or user inactive` on `GET /users`
+
+**Status:** Fixed — `tryAuthenticateQuotationAdminForInventory` in `middleware/auth.ts`
+
+| Item | Detail |
+|------|--------|
+| Symptom | Accounts → Open Inventory shows red banner; `GET /users` → 401 `Invalid token or user inactive` while `GET /products` works |
+| Why products work | `GET /api/products` is public (no auth middleware) |
+| Why /users failed | Inventory `authenticate` only loaded `users` by JWT `id`. Quotation Admin JWT `id` is a **Dealer** id |
+| Fix | Accept Dealer JWT with `role: "admin"` + `isActive` → inventory session with **`req.user.role = "super-admin"`**, `authSource: "quotation-admin"` |
+| Allow-list | Inventory `super-admin` **and** quotation Admin (Dealer) — same inventory capabilities |
+| Scope | Quotation Admin ≡ Super Admin on `/users`, `/products`, `/stock-requests`, `/sales`, `/stock-returns`, `/admin-inventory`, etc. |
+
+**QA:** Quotation Admin token → `GET /api/users` and `GET /api/users/agents` → **200** (not 401).  
+**No second login:** Same token → `GET /api/inventory-auth/me` → 200 with `requiresInventoryLogin: false` (do not force `/inventory-auth/login`).
+
+---
+
 ### Admin Overview kW — verify list payload (no new endpoint)
 
 **Frontend computes kW client-side** from the admin quotation list (`GET /api/admin/quotations`). No mandatory new API unless you add optional server aggregates or a stored `system_kw` column.
