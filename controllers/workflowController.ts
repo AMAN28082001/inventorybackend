@@ -20,13 +20,25 @@ import {
 import {
   buildMcoDocApiFields,
   buildMeterDocumentApiFields,
+  buildMeterInstallationPendingPhotoApiFields,
   getLatestMcoDocMeta,
   getLatestMeterDocMeta,
   MCO_DOC_FIELDS,
   resolveMeterStoredRef
 } from '../utils/meteringMediaApi';
-import { meteringWorkflowApiFields } from '../utils/meteringWorkflowApi';
+import {
+  METER_INSTALLATION_PENDING_STATUS,
+  meteringWorkflowApiFields,
+  normalizeMeteringWorkflowStatus
+} from '../utils/meteringWorkflowApi';
 import { resolveImageContentTypeForUpload } from '../utils/uploadMimeTypes';
+import {
+  INSTALLATION_PARTIAL_STATUS,
+  installationPartialApiFields,
+  isInstallationPartialApprovedStatus,
+  meteringDetailsEchoFields,
+  parseTruthyFlag
+} from '../utils/installationPartialApi';
 
 const assertInstallationTeamQuotationScope = (req: Request, quotation: Quotation, res: Response): boolean => {
   const tid = getInstallationTeamIdFromRequest(req);
@@ -354,13 +366,30 @@ const getWorkflowQueue = async (
             installation_team_id: q.installationTeamId ?? null,
             meteringId: q.meteringId || null,
             meteringActionAt: q.meteringActionAt || null,
-            meteringRemarks: q.meteringRemarks || null,
+            ...meteringDetailsEchoFields({
+              meteringRemarks: q.meteringRemarks,
+              meteringAuthorizedRepresentative: (q as any).meteringAuthorizedRepresentative,
+              discomName: q.discomName,
+              discomLocation: (q as any).discomLocation
+            }),
+            ...installationPartialApiFields({
+              installationStatus: q.installationStatus,
+              installationPartialApproved: (q as any).installationPartialApproved,
+              installationPartialApprovedAt: (q as any).installationPartialApprovedAt
+            }),
             ...meteringWorkflowApiFields({
               installationStatus: q.installationStatus,
               meteringApprovedAt: q.meteringApprovedAt,
               mcoAt: q.mcoAt,
-              completionAt: q.completionAt
+              completionAt: q.completionAt,
+              meterInstallationPendingAt: (q as any).meterInstallationPendingAt
             }),
+            ...(await buildMeterInstallationPendingPhotoApiFields({
+              meterInstallationPhotoUrl: (q as any).meterInstallationPhotoUrl,
+              meterInstallationPhotoName: (q as any).meterInstallationPhotoName,
+              plantLivePhotoUrl: (q as any).plantLivePhotoUrl,
+              plantLivePhotoName: (q as any).plantLivePhotoName
+            })),
             discomName: q.discomName || null,
             meterType: q.meterType || null,
             meterNo: q.meterNo || null,
@@ -482,7 +511,7 @@ export const getMeteringQueue = async (req: Request, res: Response): Promise<voi
   if (aliasMap[status]) {
     req.query.status = aliasMap[status] as any;
   }
-  await getWorkflowQueue(req, res, 'pending_metering,metering_in_progress,metering_approved,mco', {
+  await getWorkflowQueue(req, res, 'pending_metering,metering_in_progress,metering_approved,meter_installation_pending,mco', {
     meteringQueue: true
   });
 };
@@ -544,9 +573,15 @@ export const meteringStatusUpdate = async (req: Request, res: Response): Promise
         'installer_in_progress',
         'installer_approved'
       ],
-      send_to_mco: ['metering_approved'],
-      mark_completed: ['mco', 'metering_approved'],
-      move_back: ['metering_in_progress', 'metering_approved', 'mco']
+      // Primary path: Meter Installation Pending → MCO; legacy: metering_approved → mco
+      send_to_mco: [METER_INSTALLATION_PENDING_STATUS, 'metering_approved'],
+      mark_completed: ['mco', 'metering_approved', METER_INSTALLATION_PENDING_STATUS],
+      move_back: [
+        'metering_in_progress',
+        'metering_approved',
+        METER_INSTALLATION_PENDING_STATUS,
+        'mco'
+      ]
     };
 
     const patch: Record<string, unknown> = {
@@ -556,8 +591,8 @@ export const meteringStatusUpdate = async (req: Request, res: Response): Promise
     };
 
     const wf003Message = (act: string, stage: string): string => {
-      if (act === 'send_to_mco' && stage !== 'metering_approved') {
-        return 'Metering must be approved before MCO. Save metering details, then use approve (Move to Approved) while status is installer_approved or pending_metering.';
+      if (act === 'send_to_mco' && !valid.send_to_mco.includes(stage)) {
+        return 'To MCO requires meter_installation_pending (or legacy metering_approved).';
       }
       if (act === 'approve' && !valid.approve.includes(stage)) {
         return 'Metering approve is not allowed for the current installation stage.';
@@ -625,51 +660,83 @@ export const meteringStatusUpdate = async (req: Request, res: Response): Promise
         patch.installationStatus = 'pending_baldev';
       }
       if (action === 'move_back') {
-        patch.installationStatus = current === 'mco' ? 'metering_approved' : 'pending_metering';
+        if (current === METER_INSTALLATION_PENDING_STATUS) {
+          patch.installationStatus = 'metering_approved';
+        } else {
+          patch.installationStatus = current === 'mco' ? 'metering_approved' : 'pending_metering';
+        }
       }
     } else {
-      // Direct body fallback: { installationStatus, meteringStatus, status } — same rules as approve / send_to_mco.
+      // Direct body fallback: metering_approved | meter_installation_pending | mco
       const rawTarget =
         parseTrimmedString(body.installationStatus) ||
         parseTrimmedString(body.installation_status) ||
         parseTrimmedString(body.meteringStatus) ||
+        parseTrimmedString(body.metering_status) ||
         parseTrimmedString(body.status);
-      const target = (rawTarget || '').toLowerCase();
+      const target = normalizeMeteringWorkflowStatus(rawTarget) || '';
 
-      if (!['metering_approved', 'mco'].includes(target)) {
+      if (!['metering_approved', METER_INSTALLATION_PENDING_STATUS, 'mco'].includes(target)) {
         res.status(400).json({
           success: false,
           error: {
             code: 'VALIDATION_ERROR',
-            message: 'Direct status must be metering_approved or mco when action is omitted',
-            details: [{ field: 'installationStatus', message: 'Use action enum, or installationStatus/meteringStatus = metering_approved | mco' }]
+            message:
+              'Direct status must be metering_approved, meter_installation_pending, or mco when action is omitted',
+            details: [
+              {
+                field: 'installationStatus',
+                message:
+                  'Use action enum, or installationStatus/meteringStatus = metering_approved | meter_installation_pending | mco'
+              }
+            ]
           }
         });
         return;
       }
 
       if (target === 'metering_approved') {
-        if (!valid.approve.includes(current)) {
+        // Undo from Meter Installation Pending → Meter in Discom, or approve path
+        if (current === METER_INSTALLATION_PENDING_STATUS) {
+          patch.installationStatus = 'metering_approved';
+        } else {
+          if (!valid.approve.includes(current)) {
+            res.status(409).json({
+              success: false,
+              error: { code: 'WF_003', message: wf003Message('approve', current) }
+            });
+            return;
+          }
+          const detailsErrors = await collectMeteringApproveErrors(quotation, quotationId);
+          if (detailsErrors.length > 0) {
+            res.status(400).json({
+              success: false,
+              error: {
+                code: 'WF_002',
+                message: 'Metering details are incomplete for approve action.',
+                details: detailsErrors
+              }
+            });
+            return;
+          }
+          patch.installationStatus = 'metering_approved';
+          patch.meteringApprovedAt = new Date();
+        }
+      } else if (target === METER_INSTALLATION_PENDING_STATUS) {
+        if (current !== 'metering_approved' && current !== METER_INSTALLATION_PENDING_STATUS) {
           res.status(409).json({
             success: false,
-            error: { code: 'WF_003', message: wf003Message('approve', current) }
-          });
-          return;
-        }
-        const detailsErrors = await collectMeteringApproveErrors(quotation, quotationId);
-        if (detailsErrors.length > 0) {
-          res.status(400).json({
-            success: false,
             error: {
-              code: 'WF_002',
-              message: 'Metering details are incomplete for approve action.',
-              details: detailsErrors
+              code: 'WF_003',
+              message: 'meter_installation_pending is only allowed from metering_approved'
             }
           });
           return;
         }
-        patch.installationStatus = 'metering_approved';
-        patch.meteringApprovedAt = new Date();
+        patch.installationStatus = METER_INSTALLATION_PENDING_STATUS;
+        if (!(quotation as any).meterInstallationPendingAt) {
+          patch.meterInstallationPendingAt = new Date();
+        }
       } else if (target === 'mco') {
         if (!valid.send_to_mco.includes(current)) {
           res.status(409).json({
@@ -694,11 +761,17 @@ export const meteringStatusUpdate = async (req: Request, res: Response): Promise
           installationStatus: quotation.installationStatus,
           meteringApprovedAt: quotation.meteringApprovedAt,
           mcoAt: quotation.mcoAt,
-          completionAt: quotation.completionAt
+          completionAt: quotation.completionAt,
+          meterInstallationPendingAt: (quotation as any).meterInstallationPendingAt
         }),
         meteringId: quotation.meteringId || null,
         meteringActionAt: quotation.meteringActionAt || null,
-        meteringRemarks: quotation.meteringRemarks || null,
+        ...meteringDetailsEchoFields({
+          meteringRemarks: quotation.meteringRemarks,
+          meteringAuthorizedRepresentative: (quotation as any).meteringAuthorizedRepresentative,
+          discomName: quotation.discomName,
+          discomLocation: (quotation as any).discomLocation
+        }),
         updatedAt: quotation.updatedAt
       }
     });
@@ -1019,7 +1092,11 @@ type InstallerUrlDocCandidate = {
   docType: 'installer_po' | 'installer_pi' | 'additional_expense' | 'site_completion_image';
   slot?: string;
   /** Provenance for retained URL rows (admin partial re-upload). */
-  urlSource?: 'existing_installation_image_urls_json' | 'existing_pi_upload_url' | 'url_submit';
+  urlSource?:
+    | 'existing_installation_image_urls_json'
+    | 'existing_pi_upload_url'
+    | 'existing_pi_upload_urls_json'
+    | 'url_submit';
 };
 
 /** Logical keys allowed inside `existingInstallationImageUrlsJson` (per-field URL retention). */
@@ -1091,6 +1168,39 @@ const buildExistingPiUploadUrlCandidate = (body: Record<string, unknown>): Insta
     docType: 'installer_pi',
     urlSource: 'existing_pi_upload_url'
   };
+};
+
+const parseExistingPiUploadUrlsJson = (
+  body: Record<string, unknown>
+): { candidates: InstallerUrlDocCandidate[]; parseError: string | null } => {
+  const raw = body.existingPiUploadUrlsJson ?? body.existing_pi_upload_urls_json;
+  const s = parseTrimmedString(raw);
+  if (s === undefined) {
+    return { candidates: [], parseError: null };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(s);
+  } catch {
+    return { candidates: [], parseError: 'existingPiUploadUrlsJson is not valid JSON' };
+  }
+  if (!Array.isArray(parsed)) {
+    return { candidates: [], parseError: 'existingPiUploadUrlsJson must be a JSON array' };
+  }
+  const candidates: InstallerUrlDocCandidate[] = [];
+  const seen = new Set<string>();
+  for (const item of parsed) {
+    const url = normalizeWorkflowFileUrl(item);
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    candidates.push({
+      fieldName: 'piUpload',
+      url,
+      docType: 'installer_pi',
+      urlSource: 'existing_pi_upload_urls_json'
+    });
+  }
+  return { candidates, parseError: null };
 };
 
 const mergeInstallerUrlDocCandidates = (lists: InstallerUrlDocCandidate[][]): InstallerUrlDocCandidate[] => {
@@ -1253,12 +1363,14 @@ export const saveMeteringDetails = async (req: Request, res: Response): Promise<
     const allowedStatuses = new Set([
       'pending_installer',
       'installer_in_progress',
+      'installer_partial_approved',
       'installer_approved',
       'pending_baldev',
       'baldev_approved',
       'pending_metering',
       'metering_in_progress',
       'metering_approved',
+      METER_INSTALLATION_PENDING_STATUS,
       'mco'
     ]);
     if (!allowedStatuses.has(quotation.installationStatus || '')) {
@@ -1274,6 +1386,13 @@ export const saveMeteringDetails = async (req: Request, res: Response): Promise<
     const meterNo = parseTrimmedString(body.meterNo);
     const solarMeterNo = parseTrimmedString(body.solarMeterNo);
     const netMeterNo = parseTrimmedString(body.netMeterNo);
+    const meteringRemarks =
+      parseTrimmedString(body.remarks) ?? parseTrimmedString(body.meteringRemarks);
+    const authorizedRepresentative =
+      parseTrimmedString(body.authorizedRepresentative) ??
+      parseTrimmedString(body.authorized_representative);
+    const discomLocation =
+      parseTrimmedString(body.discomLocation) ?? parseTrimmedString(body.discom_location);
 
     if (meterType && !['solar', 'net', 'both'].includes(meterType)) {
       res.status(400).json({
@@ -1302,27 +1421,95 @@ export const saveMeteringDetails = async (req: Request, res: Response): Promise<
       return;
     }
 
-    const files = flattenMulterFiles(req).filter((f) => f.fieldname === 'meterDocumentImage');
+    const allFiles = flattenMulterFiles(req);
+    const pickFirst = (...names: string[]) =>
+      allFiles.find((f) => names.includes(f.fieldname)) || null;
+
+    const meterDocFile = pickFirst('meterDocumentImage', 'meter_document_image');
+    const meterInstallPhotoFile = pickFirst(
+      'meterInstallationPhoto',
+      'meter_installation_photo'
+    );
+    const plantLivePhotoFile = pickFirst('plantLivePhoto', 'plant_live_photo');
+
     let meterDocumentImageUrl = quotation.meterDocumentImageUrl || null;
     let meterDocumentName: string | null = null;
+    let meterInstallationPhotoUrl = (quotation as any).meterInstallationPhotoUrl || null;
+    let meterInstallationPhotoName = (quotation as any).meterInstallationPhotoName || null;
+    let plantLivePhotoUrl = (quotation as any).plantLivePhotoUrl || null;
+    let plantLivePhotoName = (quotation as any).plantLivePhotoName || null;
 
-    if (files.length > 0) {
-      const file = files[0];
-      meterDocumentImageUrl = await uploadFileToS3(file, quotationId, 'meter_doc');
-      meterDocumentName = file.originalname || null;
+    const actorId = req.user?.id || req.dealer?.id || 'unknown';
+    const actorRole = req.user?.role || req.dealer?.role || 'unknown';
+
+    if (meterDocFile) {
+      meterDocumentImageUrl = await uploadFileToS3(meterDocFile, quotationId, 'meter_doc');
+      meterDocumentName = meterDocFile.originalname || null;
       await QuotationInstallationDoc.create({
         id: uuidv4(),
         quotationId,
         docType: 'meter_doc',
         fileUrl: meterDocumentImageUrl,
-        uploadedByUserId: req.user?.id || 'unknown',
-        uploadedByRole: req.user?.role || 'unknown',
+        uploadedByUserId: actorId,
+        uploadedByRole: actorRole,
         remarks: parseTrimmedString(body.remarks) || 'metering_detail_upload',
         metadata: {
-          originalName: file.originalname,
-          mimeType: file.mimetype,
-          size: file.size,
-          field: file.fieldname
+          originalName: meterDocFile.originalname,
+          mimeType: meterDocFile.mimetype,
+          size: meterDocFile.size,
+          field: meterDocFile.fieldname
+        },
+        uploadedAt: new Date()
+      });
+    }
+
+    if (meterInstallPhotoFile) {
+      meterInstallationPhotoUrl = await uploadFileToS3(
+        meterInstallPhotoFile,
+        quotationId,
+        'meter_installation_photo'
+      );
+      meterInstallationPhotoName = meterInstallPhotoFile.originalname || null;
+      await QuotationInstallationDoc.create({
+        id: uuidv4(),
+        quotationId,
+        docType: 'other',
+        fileUrl: meterInstallationPhotoUrl,
+        uploadedByUserId: actorId,
+        uploadedByRole: actorRole,
+        remarks: parseTrimmedString(body.remarks) || 'meter_installation_photo',
+        metadata: {
+          originalName: meterInstallPhotoFile.originalname,
+          mimeType: meterInstallPhotoFile.mimetype,
+          size: meterInstallPhotoFile.size,
+          field: 'meterInstallationPhoto',
+          meteringField: 'meterInstallationPhoto'
+        },
+        uploadedAt: new Date()
+      });
+    }
+
+    if (plantLivePhotoFile) {
+      plantLivePhotoUrl = await uploadFileToS3(
+        plantLivePhotoFile,
+        quotationId,
+        'plant_live_photo'
+      );
+      plantLivePhotoName = plantLivePhotoFile.originalname || null;
+      await QuotationInstallationDoc.create({
+        id: uuidv4(),
+        quotationId,
+        docType: 'other',
+        fileUrl: plantLivePhotoUrl,
+        uploadedByUserId: actorId,
+        uploadedByRole: actorRole,
+        remarks: parseTrimmedString(body.remarks) || 'plant_live_photo',
+        metadata: {
+          originalName: plantLivePhotoFile.originalname,
+          mimeType: plantLivePhotoFile.mimetype,
+          size: plantLivePhotoFile.size,
+          field: 'plantLivePhoto',
+          meteringField: 'plantLivePhoto'
         },
         uploadedAt: new Date()
       });
@@ -1334,7 +1521,16 @@ export const saveMeteringDetails = async (req: Request, res: Response): Promise<
       meterNo: meterNo ?? quotation.meterNo,
       solarMeterNo: solarMeterNo ?? quotation.solarMeterNo,
       netMeterNo: netMeterNo ?? quotation.netMeterNo,
-      meterDocumentImageUrl
+      meterDocumentImageUrl,
+      meterInstallationPhotoUrl,
+      meterInstallationPhotoName,
+      plantLivePhotoUrl,
+      plantLivePhotoName,
+      ...(discomLocation !== undefined ? { discomLocation } : {}),
+      ...(meteringRemarks !== undefined ? { meteringRemarks } : {}),
+      ...(authorizedRepresentative !== undefined
+        ? { meteringAuthorizedRepresentative: authorizedRepresentative }
+        : {})
     } as any);
 
     await quotation.reload();
@@ -1354,19 +1550,37 @@ export const saveMeteringDetails = async (req: Request, res: Response): Promise<
       quotation.meterDocumentImageUrl,
       meterDocumentName
     );
+    const mipPhotoFields = await buildMeterInstallationPendingPhotoApiFields({
+      meterInstallationPhotoUrl: (quotation as any).meterInstallationPhotoUrl,
+      meterInstallationPhotoName: (quotation as any).meterInstallationPhotoName,
+      plantLivePhotoUrl: (quotation as any).plantLivePhotoUrl,
+      plantLivePhotoName: (quotation as any).plantLivePhotoName
+    });
 
     res.json({
       success: true,
       data: {
         id: quotation.id,
         quotationId: quotation.id,
-        installationStatus: quotation.installationStatus,
-        discomName: quotation.discomName || null,
+        ...meteringWorkflowApiFields({
+          installationStatus: quotation.installationStatus,
+          meteringApprovedAt: quotation.meteringApprovedAt,
+          mcoAt: quotation.mcoAt,
+          completionAt: quotation.completionAt,
+          meterInstallationPendingAt: (quotation as any).meterInstallationPendingAt
+        }),
+        ...meteringDetailsEchoFields({
+          meteringRemarks: quotation.meteringRemarks,
+          meteringAuthorizedRepresentative: (quotation as any).meteringAuthorizedRepresentative,
+          discomName: quotation.discomName,
+          discomLocation: (quotation as any).discomLocation
+        }),
         meterType: quotation.meterType || null,
         meterNo: quotation.meterNo || null,
         solarMeterNo: quotation.solarMeterNo || null,
         netMeterNo: quotation.netMeterNo || null,
         ...meterDocumentFields,
+        ...mipPhotoFields,
         meteringApprovedAt: quotation.meteringApprovedAt || null,
         updatedAt: quotation.updatedAt
       }
@@ -1627,6 +1841,20 @@ export const installerUploadDocuments = async (req: Request, res: Response): Pro
       return;
     }
 
+    const { candidates: existingPiUrlsFromJson, parseError: existingPiUrlsParseError } =
+      parseExistingPiUploadUrlsJson(body);
+    if (existingPiUrlsParseError) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: existingPiUrlsParseError,
+          details: [{ field: 'existingPiUploadUrlsJson', message: existingPiUrlsParseError }]
+        }
+      });
+      return;
+    }
+
     const fieldOrder = parseInstallerCompletionImageFieldOrderJson(body);
     let aggregateImageIndex = 0;
     const files = buildOrderedInstallerMultipartFiles(req);
@@ -1634,13 +1862,16 @@ export const installerUploadDocuments = async (req: Request, res: Response): Pro
     const urlDocs = mergeInstallerUrlDocCandidates([
       buildInstallerUrlDocCandidates(body, bodyDocType),
       urlCandidatesFromExistingBlob,
+      existingPiUrlsFromJson,
       existingPiUrlCandidate ? [existingPiUrlCandidate] : []
     ]);
     const adminMetaPayload =
       isAdmin &&
       (parseTrimmedString(body.installationStatus) !== undefined ||
         parseTrimmedString(body.installerRemarks) !== undefined ||
-        parseTrimmedString(body.remarks) !== undefined);
+        parseTrimmedString(body.remarks) !== undefined ||
+        parseTruthyFlag(body.installationPartialApproved) !== undefined ||
+        parseTruthyFlag(body.installation_partial_approved) !== undefined);
     if (files.length === 0 && urlDocs.length === 0 && !siteSignal && !extraParsed && !adminMetaPayload) {
       res.status(400).json({
         success: false,
@@ -1652,6 +1883,19 @@ export const installerUploadDocuments = async (req: Request, res: Response): Pro
     const seenHashes = new Set<string>();
     const seenUrls = new Set<string>();
     const createdDocs: any[] = [];
+
+    // Prefer reusing already-persisted URL docs on partial re-upload (avoid duplicates).
+    const priorDocs = await QuotationInstallationDoc.findAll({
+      where: {
+        quotationId,
+        docType: { [Op.in]: ['site_completion_image', 'installer_pi', 'installer_po', 'additional_expense'] }
+      },
+      attributes: ['fileUrl', 'docType']
+    });
+    for (const d of priorDocs) {
+      const url = normalizeWorkflowFileUrl(d.fileUrl);
+      if (url) seenUrls.add(`${d.docType}:${url}`);
+    }
 
     for (const file of files) {
       const baseMap = INSTALLER_FIELD_DOC_MAP[file.fieldname];
@@ -1777,7 +2021,16 @@ export const installerUploadDocuments = async (req: Request, res: Response): Pro
       await quotation.update(quotationPatch as any);
     }
 
-    const markInstallerApproved = parseTrimmedString(body.installationStatus) === 'installer_approved';
+    const requestedInstallStatus = parseTrimmedString(body.installationStatus);
+    const partialFlag =
+      parseTruthyFlag(body.installationPartialApproved) === true ||
+      parseTruthyFlag(body.installation_partial_approved) === true ||
+      isInstallationPartialApprovedStatus(requestedInstallStatus);
+    const markInstallerApproved = requestedInstallStatus === 'installer_approved';
+    const markInstallerPartial =
+      !markInstallerApproved &&
+      (requestedInstallStatus === INSTALLATION_PARTIAL_STATUS || partialFlag);
+
     if (markInstallerApproved) {
       if (!isAdmin) {
         const siteImages = await QuotationInstallationDoc.count({
@@ -1796,8 +2049,21 @@ export const installerUploadDocuments = async (req: Request, res: Response): Pro
         installerId: isAdmin ? quotation.installerId : req.user?.id || quotation.installerId,
         installerActionAt: new Date(),
         installerApprovedAt: new Date(),
-        installerRemarks: rem || quotation.installerRemarks || null
-      });
+        installerRemarks: rem || quotation.installerRemarks || null,
+        installationPartialApproved: false,
+        installationPartialApprovedAt: null
+      } as any);
+    } else if (markInstallerPartial) {
+      await quotation.update({
+        installationStatus: INSTALLATION_PARTIAL_STATUS,
+        installerId: isAdmin ? quotation.installerId : req.user?.id || quotation.installerId,
+        installerActionAt: new Date(),
+        // Do not set installerApprovedAt for partial — keeps row out of Approved Installation
+        installerApprovedAt: null,
+        installerRemarks: rem || quotation.installerRemarks || null,
+        installationPartialApproved: true,
+        installationPartialApprovedAt: new Date()
+      } as any);
     }
 
     await quotation.reload();
@@ -1812,12 +2078,22 @@ export const installerUploadDocuments = async (req: Request, res: Response): Pro
       installationStatus: quotation.installationStatus
     });
 
+    const installDocsPayload = await mapWorkflowDocumentsForFrontend(
+      allDocs.map((doc: any) => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc))
+    );
+
     res.status(createdDocs.length > 0 ? 201 : 200).json({
       success: true,
       data: {
         quotationId,
         id: quotation.id,
         installationStatus: quotation.installationStatus,
+        installation_status: quotation.installationStatus,
+        ...installationPartialApiFields({
+          installationStatus: quotation.installationStatus,
+          installationPartialApproved: (quotation as any).installationPartialApproved,
+          installationPartialApprovedAt: (quotation as any).installationPartialApprovedAt
+        }),
         installerInProgressAt: quotation.installerInProgressAt || null,
         installerApprovedAt: quotation.installerApprovedAt || null,
         installerRemarks: quotation.installerRemarks || null,
@@ -1835,9 +2111,9 @@ export const installerUploadDocuments = async (req: Request, res: Response): Pro
         front_leg_ft: quotation.frontLegFt != null ? Number(quotation.frontLegFt) : null,
         extraExpensesTotal: quotation.extraExpensesTotal != null ? Number(quotation.extraExpensesTotal) : null,
         extraExpensesJson: quotation.extraExpensesJson || null,
-        documents: await mapWorkflowDocumentsForFrontend(
-          allDocs.map((doc: any) => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc))
-        )
+        documents: installDocsPayload,
+        piUploadUrl: (installDocsPayload as any)?.piUploadUrl ?? null,
+        piUploadUrls: (installDocsPayload as any)?.piUploadUrls ?? []
       }
     });
   } catch (error) {

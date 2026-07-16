@@ -1476,6 +1476,7 @@ export const rejectVisit = async (req: Request, res: Response): Promise<void> =>
 const INSTALLER_PATCH_VISIT_STATUSES = new Set([
   'pending_installer',
   'installer_in_progress',
+  'installer_partial_approved',
   'installer_approved'
 ]);
 

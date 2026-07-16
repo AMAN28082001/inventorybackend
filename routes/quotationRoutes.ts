@@ -294,7 +294,14 @@ const handleQuotationMeteringDetailsMultipart = (
   res: express.Response,
   next: express.NextFunction
 ): void => {
-  documentsUpload.fields([{ name: 'meterDocumentImage', maxCount: 1 }])(req, res, (err: unknown) => {
+  documentsUpload.fields([
+    { name: 'meterDocumentImage', maxCount: 1 },
+    { name: 'meter_document_image', maxCount: 1 },
+    { name: 'meterInstallationPhoto', maxCount: 1 },
+    { name: 'meter_installation_photo', maxCount: 1 },
+    { name: 'plantLivePhoto', maxCount: 1 },
+    { name: 'plant_live_photo', maxCount: 1 }
+  ])(req, res, (err: unknown) => {
     if (!err) {
       next();
       return;
@@ -305,7 +312,7 @@ const handleQuotationMeteringDetailsMultipart = (
         success: false,
         error: {
           code: 'VALIDATION_ERROR',
-          message: 'meterDocumentImage exceeds the 30 MB maximum upload size'
+          message: 'Uploaded file exceeds the 30 MB maximum upload size'
         }
       });
       return;

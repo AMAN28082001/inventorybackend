@@ -40,8 +40,12 @@ export const installerUploadMetaSchema = z
     installerCompletionImageFieldOrderJson: z.string().max(50000).optional(),
     /** JSON object: logical field → URL string[] for slots kept from server (admin partial re-upload). */
     existingInstallationImageUrlsJson: z.string().max(500000).optional(),
-    /** Single retained PI document URL when no new `piUpload` file is sent. */
-    existingPiUploadUrl: z.string().max(8000).optional()
+    /** Single retained PI document URL when exactly one PI is kept (legacy / single). */
+    existingPiUploadUrl: z.string().max(8000).optional(),
+    /** JSON string array of retained PI URLs (multi-PI partial re-upload). */
+    existingPiUploadUrlsJson: z.string().max(500000).optional(),
+    installationPartialApproved: z.string().max(16).optional(),
+    installation_partial_approved: z.string().max(16).optional()
   })
   .passthrough();
 
@@ -72,10 +76,15 @@ export const meteringStatusSchema = z
 
 export const meteringDetailsSchema = z.object({
   discomName: z.string().max(255).optional(),
+  discomLocation: z.string().max(2000).optional(),
+  discom_location: z.string().max(2000).optional(),
   meterType: z.enum(['solar', 'net', 'both']).optional(),
   meterNo: z.string().max(120).optional(),
   solarMeterNo: z.string().max(120).optional(),
-  netMeterNo: z.string().max(120).optional()
+  netMeterNo: z.string().max(120).optional(),
+  remarks: z.string().max(5000).optional(),
+  authorizedRepresentative: z.string().max(500).optional(),
+  authorized_representative: z.string().max(500).optional()
 }).passthrough();
 
 export const meteringMcoDocumentsSchema = z

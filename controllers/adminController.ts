@@ -24,10 +24,21 @@ import {
 } from '../utils/installationDocumentsApi';
 import {
   buildMeterDocumentApiFields,
+  buildMeterInstallationPendingPhotoApiFields,
   getLatestMeterDocMeta,
   resolveMeterStoredRef
 } from '../utils/meteringMediaApi';
-import { meteringWorkflowApiFields } from '../utils/meteringWorkflowApi';
+import {
+  METER_INSTALLATION_PENDING_STATUS,
+  meteringWorkflowApiFields,
+  normalizeMeteringWorkflowStatus
+} from '../utils/meteringWorkflowApi';
+import {
+  INSTALLATION_PARTIAL_STATUS,
+  installationPartialApiFields,
+  isInstallationPartialApprovedStatus,
+  meteringDetailsEchoFields
+} from '../utils/installationPartialApi';
 import { persistQuotationSystemKw } from '../utils/persistQuotationSystemKw';
 
 const sumPhasePaidAmounts = (phases: { paidAmount?: number }[]): number =>
@@ -45,16 +56,12 @@ const hasAdminQuotationAccess = (req: Request): boolean => {
   return isQuotationAdmin || isInventoryAdmin;
 };
 
-/** Admin Send to Metering — allow early handoff from install pipeline (§L.1). */
+/** Admin Send to Metering — only after full installer approval (§ partial). */
 const SEND_TO_METERING_FROM_STATUSES = new Set([
-  'pending_installer',
-  'installer_in_progress',
   'installer_approved',
-  'installer_rejected',
   'pending_baldev',
   'baldev_approved',
   'baldev_rejected',
-  'pending_metering',
   'metering_in_progress'
 ]);
 
@@ -167,7 +174,13 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
     }
 
     const installerForwardStates = [...INSTALLER_RELEASE_STATUSES];
-    const meteringStates = ['pending_metering', 'metering_in_progress', 'metering_approved', 'mco'];
+    const meteringStates = [
+      'pending_metering',
+      'metering_in_progress',
+      'metering_approved',
+      METER_INSTALLATION_PENDING_STATUS,
+      'mco'
+    ];
     const baldevStates = ['installer_approved', 'pending_baldev', 'baldev_approved', 'completed'];
     if (operationalView === 'installer' || (wantsReleasedInstallerList && scope !== 'installer_queue')) {
       where.status = 'approved';
@@ -365,11 +378,17 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
             approvedAt: (q as any).approvedAt || null,
             installerApprovedAt: (q as any).installerApprovedAt || null,
             installer_approved_at: (q as any).installerApprovedAt || null,
+            ...installationPartialApiFields({
+              installationStatus: (q as any).installationStatus || 'pending_installer',
+              installationPartialApproved: (q as any).installationPartialApproved,
+              installationPartialApprovedAt: (q as any).installationPartialApprovedAt
+            }),
             ...meteringWorkflowApiFields({
               installationStatus: (q as any).installationStatus || 'pending_installer',
               meteringApprovedAt: (q as any).meteringApprovedAt,
               mcoAt: (q as any).mcoAt,
-              completionAt: (q as any).completionAt
+              completionAt: (q as any).completionAt,
+              meterInstallationPendingAt: (q as any).meterInstallationPendingAt
             }),
             dealerName: qAny.dealer
               ? `${qAny.dealer.firstName || ''} ${qAny.dealer.lastName || ''}`.trim() || null
@@ -379,7 +398,18 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
               : null,
             dealerMobile: qAny.dealer?.mobile ?? null,
             dealer_mobile: qAny.dealer?.mobile ?? null,
-            discomName: (q as any).discomName || null,
+            ...meteringDetailsEchoFields({
+              meteringRemarks: (q as any).meteringRemarks,
+              meteringAuthorizedRepresentative: (q as any).meteringAuthorizedRepresentative,
+              discomName: (q as any).discomName,
+              discomLocation: (q as any).discomLocation
+            }),
+            ...(await buildMeterInstallationPendingPhotoApiFields({
+              meterInstallationPhotoUrl: (q as any).meterInstallationPhotoUrl,
+              meterInstallationPhotoName: (q as any).meterInstallationPhotoName,
+              plantLivePhotoUrl: (q as any).plantLivePhotoUrl,
+              plantLivePhotoName: (q as any).plantLivePhotoName
+            })),
             meterType: (q as any).meterType || null,
             meterNo: (q as any).meterNo || null,
             solarMeterNo: (q as any).solarMeterNo || null,
@@ -638,8 +668,54 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
       return;
     }
 
-    const nextStatus = requested;
+    const nextStatus =
+      normalizeMeteringWorkflowStatus(requested) || requested;
     const currentStatus = String(quotation.installationStatus || 'pending_installer').trim();
+
+    if (nextStatus === METER_INSTALLATION_PENDING_STATUS) {
+      if (
+        currentStatus !== 'metering_approved' &&
+        currentStatus !== METER_INSTALLATION_PENDING_STATUS
+      ) {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'VAL_001',
+            message: `Cannot move to meter_installation_pending from "${currentStatus}"`,
+            details: [
+              {
+                field: 'installationStatus',
+                message: 'Allowed only from metering_approved'
+              }
+            ]
+          }
+        });
+        return;
+      }
+    }
+
+    if (nextStatus === 'mco') {
+      const allowedToMco = new Set([
+        METER_INSTALLATION_PENDING_STATUS,
+        'metering_approved'
+      ]);
+      if (!allowedToMco.has(currentStatus) && currentStatus !== 'mco') {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'VAL_001',
+            message: `Cannot move to mco from "${currentStatus}"`,
+            details: [
+              {
+                field: 'installationStatus',
+                message: 'To MCO requires meter_installation_pending (or legacy metering_approved)'
+              }
+            ]
+          }
+        });
+        return;
+      }
+    }
 
     if (nextStatus === 'pending_metering') {
       if (currentStatus === 'pending_metering') {
@@ -651,7 +727,8 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
               installationStatus: quotation.installationStatus,
               meteringApprovedAt: quotation.meteringApprovedAt,
               mcoAt: quotation.mcoAt,
-              completionAt: quotation.completionAt
+              completionAt: quotation.completionAt,
+              meterInstallationPendingAt: (quotation as any).meterInstallationPendingAt
             }),
             updatedAt: quotation.updatedAt
           }
@@ -667,7 +744,9 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
             details: [{
               field: 'installationStatus',
               message:
-                'Allowed from pending_installer, installer_*, pending_baldev, baldev_*, or metering_in_progress'
+                isInstallationPartialApprovedStatus(currentStatus)
+                  ? 'Complete & Mark as Approved first (installer_partial_approved cannot go to metering)'
+                  : 'Send to Metering requires installer_approved (or later Baldev stages)'
             }]
           }
         });
@@ -684,9 +763,22 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
       patch.meteringActionAt = now;
     }
 
+    if (nextStatus === METER_INSTALLATION_PENDING_STATUS) {
+      patch.meterInstallationPendingAt =
+        (quotation as any).meterInstallationPendingAt || now;
+    }
+
+    if (nextStatus === 'mco') {
+      patch.mcoAt = quotation.mcoAt || now;
+      if (!quotation.meteringApprovedAt) {
+        patch.meteringApprovedAt = now;
+      }
+    }
+
     const preMeteringApproved = new Set([
       'pending_installer',
       'installer_in_progress',
+      INSTALLATION_PARTIAL_STATUS,
       'installer_approved',
       'installer_rejected',
       'pending_baldev',
@@ -699,19 +791,30 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
     if (preMeteringApproved.has(nextStatus)) {
       patch.meteringApprovedAt = null;
       patch.mcoAt = null;
+      patch.meterInstallationPendingAt = null;
     }
 
-    if (nextStatus === 'installer_approved' && !quotation.installerApprovedAt) {
-      patch.installerApprovedAt = now;
+    if (nextStatus === INSTALLATION_PARTIAL_STATUS) {
+      patch.installationPartialApproved = true;
+      patch.installationPartialApprovedAt =
+        (quotation as any).installationPartialApprovedAt || now;
+      patch.installerApprovedAt = null;
+    }
+
+    if (nextStatus === 'installer_approved') {
+      if (!quotation.installerApprovedAt) {
+        patch.installerApprovedAt = now;
+      }
+      patch.installationPartialApproved = false;
+      patch.installationPartialApprovedAt = null;
     }
     if (nextStatus === 'metering_approved') {
       patch.meteringApprovedAt = quotation.meteringApprovedAt || now;
-      patch.mcoAt = null;
-    }
-    if (nextStatus === 'mco') {
-      patch.mcoAt = quotation.mcoAt || now;
-      if (!quotation.meteringApprovedAt) {
-        patch.meteringApprovedAt = now;
+      // Undo from MIP keeps metering_approved; clear MIP stamp only when leaving that path later if needed
+      if (currentStatus === METER_INSTALLATION_PENDING_STATUS) {
+        // keep meterInstallationPendingAt history; status alone drives the tab
+      } else {
+        patch.mcoAt = null;
       }
     }
     if (nextStatus === 'completed' && !quotation.completionAt) {
@@ -732,7 +835,13 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
           installationStatus: quotation.installationStatus,
           meteringApprovedAt: quotation.meteringApprovedAt,
           mcoAt: quotation.mcoAt,
-          completionAt: quotation.completionAt
+          completionAt: quotation.completionAt,
+          meterInstallationPendingAt: (quotation as any).meterInstallationPendingAt
+        }),
+        ...installationPartialApiFields({
+          installationStatus: quotation.installationStatus,
+          installationPartialApproved: (quotation as any).installationPartialApproved,
+          installationPartialApprovedAt: (quotation as any).installationPartialApprovedAt
         }),
         updatedAt: quotation.updatedAt
       }
@@ -1023,15 +1132,32 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
         approvedAt: quotationAny.approvedAt || null,
         installerApprovedAt: quotationAny.installerApprovedAt || null,
         installer_approved_at: quotationAny.installerApprovedAt || null,
+        ...installationPartialApiFields({
+          installationStatus: quotationAny.installationStatus || 'pending_installer',
+          installationPartialApproved: quotationAny.installationPartialApproved,
+          installationPartialApprovedAt: quotationAny.installationPartialApprovedAt
+        }),
         ...meteringWorkflowApiFields({
           installationStatus: quotationAny.installationStatus || 'pending_installer',
           meteringApprovedAt: quotationAny.meteringApprovedAt,
           mcoAt: quotationAny.mcoAt,
-          completionAt: quotationAny.completionAt
+          completionAt: quotationAny.completionAt,
+          meterInstallationPendingAt: quotationAny.meterInstallationPendingAt
         }),
         installationReadyForInstaller: Boolean(quotationAny.installationReadyForInstaller),
         installation_ready_for_installer: Boolean(quotationAny.installationReadyForInstaller),
-        discomName: quotationAny.discomName || null,
+        ...meteringDetailsEchoFields({
+          meteringRemarks: quotationAny.meteringRemarks,
+          meteringAuthorizedRepresentative: quotationAny.meteringAuthorizedRepresentative,
+          discomName: quotationAny.discomName,
+          discomLocation: quotationAny.discomLocation
+        }),
+        ...(await buildMeterInstallationPendingPhotoApiFields({
+          meterInstallationPhotoUrl: quotationAny.meterInstallationPhotoUrl,
+          meterInstallationPhotoName: quotationAny.meterInstallationPhotoName,
+          plantLivePhotoUrl: quotationAny.plantLivePhotoUrl,
+          plantLivePhotoName: quotationAny.plantLivePhotoName
+        })),
         meterType: quotationAny.meterType || null,
         meterNo: quotationAny.meterNo || null,
         solarMeterNo: quotationAny.solarMeterNo || null,

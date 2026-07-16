@@ -124,9 +124,12 @@ export const mapInstallationDocumentsForApi = async (
     slotToUrls[slot].push(url);
   }
 
-  const piUploadUrl =
-    slotToUrls.piUpload?.[slotToUrls.piUpload.length - 1] ??
-    (installerPi.length ? String(installerPi[installerPi.length - 1].publicUrl || installerPi[installerPi.length - 1].url) : null);
+  const piFromInstallerPi = installerPi
+    .map((doc) => (typeof doc.publicUrl === 'string' ? doc.publicUrl : String(doc.url || '')))
+    .filter((u) => u.length > 0);
+  const piFromSlot = slotToUrls.piUpload || [];
+  const piUploadUrls = [...new Set([...piFromInstallerPi, ...piFromSlot])];
+  const piUploadUrl = piUploadUrls[0] ?? null;
   const installerPoUrl =
     slotToUrls.installerPo?.[slotToUrls.installerPo.length - 1] ??
     (installerPo.length ? String(installerPo[installerPo.length - 1].publicUrl || installerPo[installerPo.length - 1].url) : null);
@@ -134,6 +137,10 @@ export const mapInstallationDocumentsForApi = async (
   const installationFieldUrls: Record<string, unknown> = {
     piUploadUrl,
     pi_upload_url: piUploadUrl,
+    piUploadUrls,
+    pi_upload_urls: piUploadUrls,
+    piUploads: piUploadUrls,
+    pi_uploads: piUploadUrls,
     installerPoUrl,
     installer_po_url: installerPoUrl
   };
@@ -166,6 +173,7 @@ export const mapInstallationDocumentsForApi = async (
     meter_doc: meterDocs,
     meterDocs,
     piUploadUrl,
+    piUploadUrls,
     installerPoUrl,
     existingInstallationImageUrlsJson,
     ...installationFieldUrls

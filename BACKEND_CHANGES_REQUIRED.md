@@ -83,6 +83,24 @@ Single-file slot uploads also accept `POST /api/quotations/{quotationId}/install
 - On admin-driven `installer_approved`, `installerId` on the quotation is **not** overwritten with the admin user id (preserves the real installer when present).
 - `QuotationInstallationDoc.uploadedBy*` uses `req.user?.id` / `req.dealer?.id` and matching role for attribution.
 
+### §6.4.C.3 — Partial Approved + multi PI (Jul 2026)
+
+**Handoff:** `BACKEND_INSTALLATION_PARTIAL_AND_METERING.md`.
+
+- `installationStatus=installer_partial_approved` (or flags `installationPartialApproved=true`) — partial photo set; **not** Approved Installation; **Send to Metering blocked**.
+- Full approve clears partial flags and sets `installer_approved` + `installerApprovedAt`.
+- Optional text: `existingInstallationImageUrlsJson`, `existingPiUploadUrl`, `existingPiUploadUrlsJson`; merge with new `installerCompletionImages` / repeated `piUpload`.
+- GET returns `piUploadUrls[]` (keep singular `piUploadUrl`).
+- Metering details POST/GET: `remarks` + `authorizedRepresentative` / `authorized_representative`.
+
+### Meter Installation Pending + WCC (Jul 2026)
+
+**Handoff:** `BACKEND_METER_INSTALLATION_PENDING.md`.
+
+- Status `meter_installation_pending` from `metering_approved`; GET returns it as `meteringStatus`.
+- To MCO: `meter_installation_pending` → `mco` (legacy from `metering_approved` still allowed).
+- Details POST accepts `meterInstallationPhoto` / `plantLivePhoto` (+ snake_case), `discomLocation`, WCC fields; echoes browsable URLs + names.
+
 ---
 
 ## §X — Quotation PDF display (panel range keys, May 2026)
@@ -610,15 +628,19 @@ Frontend fallback: `lib/api.ts` → `patchOperationalWorkflowStatus` (metering s
 
 | From | Allowed |
 |------|---------|
-| `pending_installer`, `installer_in_progress`, `installer_approved` | Yes — early handoff (installer_approved **not** required) |
+| `installer_approved` | **Yes** (required minimum) |
 | `pending_baldev`, `baldev_*` | Yes |
-| `pending_metering` | Yes — idempotent **200** |
 | `metering_in_progress` | Yes — reset to `pending_metering` |
+| `pending_metering` | Yes — idempotent **200** |
+| `pending_installer`, `installer_in_progress` | **No** — complete installer first |
+| `installer_partial_approved` | **No** — Complete & Mark as Approved first |
 | `metering_approved`, `mco`, `completed` | **400** `VAL_001` with clear message |
 
 **Quotation `status`:** Admin may send while quotation is still `pending` (no block).
 
 **Release gate:** Admin override — PATCH does **not** require `installationReadyForInstaller` / `installationReleasedAt`.
+
+See also `BACKEND_INSTALLATION_PARTIAL_AND_METERING.md`.
 
 ### L.1.4 — Response (200)
 

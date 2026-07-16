@@ -11,6 +11,7 @@ export const buildReleasedToInstallerWhere = (): WhereOptions => ({
 export const INSTALLER_RELEASE_STATUSES = [
   'pending_installer',
   'installer_in_progress',
+  'installer_partial_approved',
   'installer_approved',
   'pending_baldev',
   'baldev_approved',

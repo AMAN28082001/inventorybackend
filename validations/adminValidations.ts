@@ -29,6 +29,7 @@ export const updateStatusSchema = z
 const installationStatusEnum = z.enum([
   'pending_installer',
   'installer_in_progress',
+  'installer_partial_approved',
   'installer_approved',
   'installer_rejected',
   'pending_baldev',
@@ -37,6 +38,8 @@ const installationStatusEnum = z.enum([
   'pending_metering',
   'metering_in_progress',
   'metering_approved',
+  'meter_installation_pending',
+  'meter_install_pending',
   'mco',
   'completed'
 ]);

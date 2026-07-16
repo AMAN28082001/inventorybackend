@@ -182,3 +182,64 @@ export const buildMcoDocApiFields = async (
     complete_dcr_report_image_name: meta.completeDcrReportImageName
   };
 };
+
+export type MeterInstallationPendingPhotoApiFields = {
+  meterInstallationPhotoUrl: string | null;
+  meterInstallationPhotoPublicUrl: string | null;
+  meterInstallationPhotoName: string | null;
+  meter_installation_photo_url: string | null;
+  meter_installation_photo_public_url: string | null;
+  meter_installation_photo_name: string | null;
+  plantLivePhotoUrl: string | null;
+  plantLivePhotoPublicUrl: string | null;
+  plantLivePhotoName: string | null;
+  plant_live_photo_url: string | null;
+  plant_live_photo_public_url: string | null;
+  plant_live_photo_name: string | null;
+};
+
+/** Meter Installation Pending photos — browsable public/presigned URLs for GET/POST echo. */
+export const buildMeterInstallationPendingPhotoApiFields = async (q: {
+  meterInstallationPhotoUrl?: string | null;
+  meterInstallationPhotoName?: string | null;
+  plantLivePhotoUrl?: string | null;
+  plantLivePhotoName?: string | null;
+}): Promise<MeterInstallationPendingPhotoApiFields> => {
+  const meterRef =
+    typeof q.meterInstallationPhotoUrl === 'string' && q.meterInstallationPhotoUrl.trim()
+      ? q.meterInstallationPhotoUrl.trim()
+      : null;
+  const plantRef =
+    typeof q.plantLivePhotoUrl === 'string' && q.plantLivePhotoUrl.trim()
+      ? q.plantLivePhotoUrl.trim()
+      : null;
+
+  const meterUrl = meterRef
+    ? await resolveBrowsableMediaUrl(meterRef, METER_DOC_PRESIGN_TTL_SECONDS)
+    : null;
+  const plantUrl = plantRef
+    ? await resolveBrowsableMediaUrl(plantRef, METER_DOC_PRESIGN_TTL_SECONDS)
+    : null;
+
+  const meterName =
+    (typeof q.meterInstallationPhotoName === 'string' && q.meterInstallationPhotoName.trim()) ||
+    meterDocumentNameFromStored(meterRef);
+  const plantName =
+    (typeof q.plantLivePhotoName === 'string' && q.plantLivePhotoName.trim()) ||
+    meterDocumentNameFromStored(plantRef);
+
+  return {
+    meterInstallationPhotoUrl: meterUrl,
+    meterInstallationPhotoPublicUrl: meterUrl,
+    meterInstallationPhotoName: meterName,
+    meter_installation_photo_url: meterUrl,
+    meter_installation_photo_public_url: meterUrl,
+    meter_installation_photo_name: meterName,
+    plantLivePhotoUrl: plantUrl,
+    plantLivePhotoPublicUrl: plantUrl,
+    plantLivePhotoName: plantName,
+    plant_live_photo_url: plantUrl,
+    plant_live_photo_public_url: plantUrl,
+    plant_live_photo_name: plantName
+  };
+};

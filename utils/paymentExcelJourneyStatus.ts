@@ -12,6 +12,7 @@ export type JourneyStageProgress = {
 const INSTALLATION_STATUS_LABELS: Record<string, string> = {
   pending_installer: 'Pending Installer',
   installer_in_progress: 'Installer In Progress',
+  installer_partial_approved: 'Installer Partial Approved',
   installer_approved: 'Installer Approved',
   installer_rejected: 'Installer Rejected',
   pending_baldev: 'Pending Final Confirmation',
@@ -20,6 +21,7 @@ const INSTALLATION_STATUS_LABELS: Record<string, string> = {
   pending_metering: 'Pending Metering',
   metering_in_progress: 'Metering In Progress',
   metering_approved: 'Metering Approved',
+  meter_installation_pending: 'Meter Installation Pending',
   mco: 'MCO',
   completed: 'Completed'
 };
@@ -60,11 +62,11 @@ export const deriveInstallationStage = (
   if (deriveAdminApprovalStage(quotationStatus) !== 'completed') return 'not_started';
   const inst = String(installationStatus || 'pending_installer').trim();
   if (inst === 'installer_rejected') return 'rejected';
-  if (['metering_approved', 'mco', 'completed', 'pending_metering', 'metering_in_progress', 'baldev_approved'].includes(inst)) {
+  if (['metering_approved', 'mco', 'completed', 'pending_metering', 'metering_in_progress', 'meter_installation_pending', 'baldev_approved'].includes(inst)) {
     return 'completed';
   }
   if (['installer_approved', 'pending_baldev', 'baldev_rejected'].includes(inst)) return 'completed';
-  if (inst === 'installer_in_progress') return 'in_progress';
+  if (inst === 'installer_in_progress' || inst === 'installer_partial_approved') return 'in_progress';
   return 'pending';
 };
 

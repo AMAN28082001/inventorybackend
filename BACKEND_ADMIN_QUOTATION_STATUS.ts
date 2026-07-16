@@ -906,14 +906,10 @@ export async function patchAdminQuotationInstallationStatus(req, res) {
     }
 
     const allowedFrom = new Set([
-      "pending_installer",
-      "installer_in_progress",
       "installer_approved",
-      "installer_rejected",
       "pending_baldev",
       "baldev_approved",
       "baldev_rejected",
-      "pending_metering",
       "metering_in_progress",
     ])
     if (nextStatus === "pending_metering" && !allowedFrom.has(current)) {
@@ -927,7 +923,22 @@ export async function patchAdminQuotationInstallationStatus(req, res) {
       return
     }
 
-    await quotation.update({ installationStatus: nextStatus })
+    const patch = { installationStatus: nextStatus }
+    if (nextStatus === "installer_partial_approved") {
+      Object.assign(patch, {
+        installationPartialApproved: true,
+        installationPartialApprovedAt: new Date(),
+        installerApprovedAt: null,
+      })
+    }
+    if (nextStatus === "installer_approved") {
+      Object.assign(patch, {
+        installationPartialApproved: false,
+        installationPartialApprovedAt: null,
+      })
+    }
+
+    await quotation.update(patch)
     await quotation.reload()
 
     const meteringStatus =

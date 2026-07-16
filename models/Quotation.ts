@@ -58,12 +58,14 @@ interface QuotationAttributes {
   paymentPlanUpdatedBy?: string | null;
   paymentPlanUpdatedAt?: Date | null;
   approvedAt?: Date | null;
-  installationStatus?: 'pending_installer' | 'installer_in_progress' | 'installer_approved' | 'installer_rejected' | 'pending_baldev' | 'baldev_approved' | 'baldev_rejected' | 'pending_metering' | 'metering_in_progress' | 'metering_approved' | 'mco' | 'completed';
+  installationStatus?: 'pending_installer' | 'installer_in_progress' | 'installer_partial_approved' | 'installer_approved' | 'installer_rejected' | 'pending_baldev' | 'baldev_approved' | 'baldev_rejected' | 'pending_metering' | 'metering_in_progress' | 'metering_approved' | 'meter_installation_pending' | 'mco' | 'completed';
   installerId?: string | null;
   installerActionAt?: Date | null;
   installerInProgressAt?: Date | null;
   installerApprovedAt?: Date | null;
   installerRemarks?: string | null;
+  installationPartialApproved?: boolean;
+  installationPartialApprovedAt?: Date | null;
   installationReadyForInstaller?: boolean;
   installationReleasedAt?: Date | null;
   /** Admin-planned installation date (calendar day, YYYY-MM-DD) */
@@ -77,12 +79,19 @@ interface QuotationAttributes {
   meteringActionAt?: Date | null;
   meteringApprovedAt?: Date | null;
   meteringRemarks?: string | null;
+  meteringAuthorizedRepresentative?: string | null;
   discomName?: string | null;
+  discomLocation?: string | null;
   meterType?: 'solar' | 'net' | 'both' | null;
   meterNo?: string | null;
   solarMeterNo?: string | null;
   netMeterNo?: string | null;
   meterDocumentImageUrl?: string | null;
+  meterInstallationPendingAt?: Date | null;
+  meterInstallationPhotoUrl?: string | null;
+  meterInstallationPhotoName?: string | null;
+  plantLivePhotoUrl?: string | null;
+  plantLivePhotoName?: string | null;
   mcoAt?: Date | null;
   completionAt?: Date | null;
   /** Installer site legs (cm): back / mid / front */
@@ -102,7 +111,7 @@ interface QuotationAttributes {
 
 interface QuotationCreationAttributes extends Optional<
   QuotationAttributes,
-  'id' | 'status' | 'discount' | 'createdAt' | 'updatedAt' | 'centralSubsidy' | 'stateSubsidy' | 'totalSubsidy' | 'amountAfterSubsidy' | 'discountAmount' | 'systemKw' |   'paymentMode' | 'paymentType' | 'bankName' | 'bankIfsc' | 'subsidyChequeDetails' | 'fileLoginStatus' | 'filePaymentType' | 'fileBankName' | 'fileBankIfsc' | 'fileSubsidyChequeDetails' | 'fileLoginAt' | 'statusApprovedAt'   | 'statusHistory' | 'subsidyCheques' | 'remainingAmount' | 'paidAmount' | 'paymentDate' | 'paymentStatus' | 'paymentPhases' | 'paymentPlanUpdatedBy' | 'paymentPlanUpdatedAt' | 'approvedAt' | 'installationStatus' | 'installerId' | 'installerActionAt' | 'installerInProgressAt' |   'installerApprovedAt' | 'installerRemarks' | 'installationReadyForInstaller' | 'installationReleasedAt' | 'installationScheduledAt' | 'installationTeamId' |   'baldevId' | 'baldevActionAt' | 'baldevRemarks' | 'meteringId' | 'meteringActionAt' | 'meteringApprovedAt' | 'meteringRemarks' | 'discomName' | 'meterType' | 'meterNo' | 'solarMeterNo' | 'netMeterNo' | 'meterDocumentImageUrl' | 'mcoAt' | 'completionAt' | 'siteLengthCm' | 'siteWidthCm' | 'siteHeightCm' | 'backLegFt' | 'midLegFt' | 'frontLegFt' | 'extraExpensesTotal' | 'extraExpensesJson'
+  'id' | 'status' | 'discount' | 'createdAt' | 'updatedAt' | 'centralSubsidy' | 'stateSubsidy' | 'totalSubsidy' | 'amountAfterSubsidy' | 'discountAmount' | 'systemKw' |   'paymentMode' | 'paymentType' | 'bankName' | 'bankIfsc' | 'subsidyChequeDetails' | 'fileLoginStatus' | 'filePaymentType' | 'fileBankName' | 'fileBankIfsc' | 'fileSubsidyChequeDetails' | 'fileLoginAt' | 'statusApprovedAt'   | 'statusHistory' | 'subsidyCheques' | 'remainingAmount' | 'paidAmount' | 'paymentDate' | 'paymentStatus' | 'paymentPhases' | 'paymentPlanUpdatedBy' | 'paymentPlanUpdatedAt' | 'approvedAt' | 'installationStatus' | 'installerId' | 'installerActionAt' | 'installerInProgressAt' |   'installerApprovedAt' | 'installerRemarks' | 'installationPartialApproved' | 'installationPartialApprovedAt' | 'installationReadyForInstaller' | 'installationReleasedAt' | 'installationScheduledAt' | 'installationTeamId' |   'baldevId' | 'baldevActionAt' | 'baldevRemarks' | 'meteringId' | 'meteringActionAt' | 'meteringApprovedAt' | 'meteringRemarks' | 'meteringAuthorizedRepresentative' | 'discomName' | 'meterType' | 'meterNo' | 'solarMeterNo' | 'netMeterNo' | 'meterDocumentImageUrl' | 'mcoAt' | 'completionAt' | 'siteLengthCm' | 'siteWidthCm' | 'siteHeightCm' | 'backLegFt' | 'midLegFt' | 'frontLegFt' | 'extraExpensesTotal' | 'extraExpensesJson'
 > {}
 
 class Quotation extends Model<QuotationAttributes, QuotationCreationAttributes> implements QuotationAttributes {
@@ -161,12 +170,14 @@ class Quotation extends Model<QuotationAttributes, QuotationCreationAttributes> 
   public paymentPlanUpdatedBy!: string | null;
   public paymentPlanUpdatedAt!: Date | null;
   public approvedAt!: Date | null;
-  public installationStatus!: 'pending_installer' | 'installer_in_progress' | 'installer_approved' | 'installer_rejected' | 'pending_baldev' | 'baldev_approved' | 'baldev_rejected' | 'pending_metering' | 'metering_in_progress' | 'metering_approved' | 'mco' | 'completed';
+  public installationStatus!: 'pending_installer' | 'installer_in_progress' | 'installer_partial_approved' | 'installer_approved' | 'installer_rejected' | 'pending_baldev' | 'baldev_approved' | 'baldev_rejected' | 'pending_metering' | 'metering_in_progress' | 'metering_approved' | 'meter_installation_pending' | 'mco' | 'completed';
   public installerId!: string | null;
   public installerActionAt!: Date | null;
   public installerInProgressAt!: Date | null;
   public installerApprovedAt!: Date | null;
   public installerRemarks!: string | null;
+  public installationPartialApproved!: boolean;
+  public installationPartialApprovedAt!: Date | null;
   public installationReadyForInstaller!: boolean;
   public installationReleasedAt!: Date | null;
   public installationScheduledAt!: string | null;
@@ -178,12 +189,19 @@ class Quotation extends Model<QuotationAttributes, QuotationCreationAttributes> 
   public meteringActionAt!: Date | null;
   public meteringApprovedAt!: Date | null;
   public meteringRemarks!: string | null;
+  public meteringAuthorizedRepresentative!: string | null;
   public discomName!: string | null;
+  public discomLocation!: string | null;
   public meterType!: 'solar' | 'net' | 'both' | null;
   public meterNo!: string | null;
   public solarMeterNo!: string | null;
   public netMeterNo!: string | null;
   public meterDocumentImageUrl!: string | null;
+  public meterInstallationPendingAt!: Date | null;
+  public meterInstallationPhotoUrl!: string | null;
+  public meterInstallationPhotoName!: string | null;
+  public plantLivePhotoUrl!: string | null;
+  public plantLivePhotoName!: string | null;
   public mcoAt!: Date | null;
   public completionAt!: Date | null;
   public siteLengthCm!: number | null;
@@ -364,6 +382,7 @@ Quotation.init(
       type: DataTypes.ENUM(
         'pending_installer',
         'installer_in_progress',
+        'installer_partial_approved',
         'installer_approved',
         'installer_rejected',
         'pending_baldev',
@@ -372,6 +391,7 @@ Quotation.init(
         'pending_metering',
         'metering_in_progress',
         'metering_approved',
+        'meter_installation_pending',
         'mco',
         'completed'
       ),
@@ -397,6 +417,17 @@ Quotation.init(
     installerRemarks: {
       type: DataTypes.TEXT,
       allowNull: true
+    },
+    installationPartialApproved: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+      field: 'installationPartialApproved'
+    },
+    installationPartialApprovedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: 'installationPartialApprovedAt'
     },
     installationReadyForInstaller: {
       type: DataTypes.BOOLEAN,
@@ -443,8 +474,17 @@ Quotation.init(
       type: DataTypes.TEXT,
       allowNull: true
     },
+    meteringAuthorizedRepresentative: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      field: 'meteringAuthorizedRepresentative'
+    },
     discomName: {
       type: DataTypes.STRING(255),
+      allowNull: true
+    },
+    discomLocation: {
+      type: DataTypes.TEXT,
       allowNull: true
     },
     meterType: {
@@ -465,6 +505,26 @@ Quotation.init(
     },
     meterDocumentImageUrl: {
       type: DataTypes.TEXT,
+      allowNull: true
+    },
+    meterInstallationPendingAt: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
+    meterInstallationPhotoUrl: {
+      type: DataTypes.TEXT,
+      allowNull: true
+    },
+    meterInstallationPhotoName: {
+      type: DataTypes.STRING(255),
+      allowNull: true
+    },
+    plantLivePhotoUrl: {
+      type: DataTypes.TEXT,
+      allowNull: true
+    },
+    plantLivePhotoName: {
+      type: DataTypes.STRING(255),
       allowNull: true
     },
     mcoAt: {

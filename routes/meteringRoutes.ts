@@ -12,7 +12,7 @@ import {
 const router: Router = express.Router();
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 15 * 1024 * 1024, files: 5 },
+  limits: { fileSize: 15 * 1024 * 1024, files: 8 },
   fileFilter: (_req, file, cb) => {
     if (isAllowedStandardImageOrPdfUpload(file)) {
       cb(null, true);
@@ -22,6 +22,15 @@ const upload = multer({
   }
 });
 
+const METERING_DETAILS_FILE_FIELDS: multer.Field[] = [
+  { name: 'meterDocumentImage', maxCount: 1 },
+  { name: 'meter_document_image', maxCount: 1 },
+  { name: 'meterInstallationPhoto', maxCount: 1 },
+  { name: 'meter_installation_photo', maxCount: 1 },
+  { name: 'plantLivePhoto', maxCount: 1 },
+  { name: 'plant_live_photo', maxCount: 1 }
+];
+
 router.use(authenticate);
 router.use(authorizeMetering);
 
@@ -30,7 +39,7 @@ router.patch('/quotations/:quotationId/status', validate(meteringStatusSchema), 
 router.post(
   '/quotations/:quotationId/details',
   (req, res, next) => {
-    upload.fields([{ name: 'meterDocumentImage', maxCount: 1 }])(req, res, (err) => {
+    upload.fields(METERING_DETAILS_FILE_FIELDS)(req, res, (err) => {
       if (!err) {
         next();
         return;
@@ -39,7 +48,7 @@ router.post(
       if (e.code === 'LIMIT_FILE_SIZE') {
         res.status(413).json({
           success: false,
-          error: { code: 'VAL_001', message: 'meterDocumentImage exceeds max file size' }
+          error: { code: 'VAL_001', message: 'Uploaded file exceeds max file size' }
         });
         return;
       }

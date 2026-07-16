@@ -1460,6 +1460,49 @@ Admin **Final Confirmation** tab uploads fail with **400** `Invalid quotation do
 
 ---
 
+## 13. Installation Partial Approved + multi PI + Metering fields (Jul 2026)
+
+**Full handoff:** `BACKEND_INSTALLATION_PARTIAL_AND_METERING.md`.
+
+| Area | Backend |
+|------|---------|
+| Status | `installer_partial_approved` + flags `installationPartialApproved` / `At` |
+| Upload | Accepts status + `existingInstallationImageUrlsJson` + `existingPiUploadUrl(s)Json` |
+| Multi PI | Repeated `piUpload`; GET returns `piUploadUrls[]` (+ singular) |
+| Metering | Persist `meteringRemarks` + `meteringAuthorizedRepresentative`; echo on lists |
+| Send to Metering | **Blocked** until `installer_approved` (partial cannot advance) |
+
+### QA
+
+1. Partial upload → Partial Approved tab; not Approved Installation.
+2. Complete & Approve → `installer_approved`; partial flags cleared.
+3. Partial → Send to Metering → **400**.
+4. 2+ PI → `piUploadUrls.length >= 2` on GET.
+5. Metering remarks + authorized representative survive refresh.
+
+---
+
+## 14. Meter Installation Pending + WCC fields (Jul 2026)
+
+**Full handoff:** `BACKEND_METER_INSTALLATION_PENDING.md`.
+
+| Area | Backend |
+|------|---------|
+| Status | `meter_installation_pending` (+ `meterInstallationPendingAt`) |
+| From | `metering_approved` → MIP via admin/metering PATCH |
+| To MCO | `meter_installation_pending` → `mco` (legacy `metering_approved` still allowed) |
+| Details POST | `meterInstallationPhoto`, `plantLivePhoto`, `discomLocation`, WCC fields |
+| GET echo | Public/presigned photo URLs + names; `discomLocation` |
+
+### QA
+
+1. Meter in Discom → To Meter Installation Pending → status survives refresh.
+2. MIP Update uploads 2 photos → GET returns browsable URLs.
+3. WCC save Discom + Assigned + optional location → Meter Pending after stage set.
+4. MIP → To MCO → `mco`.
+
+---
+
 ## Related docs
 
 | Doc | Section |
@@ -1468,6 +1511,8 @@ Admin **Final Confirmation** tab uploads fail with **400** `Invalid quotation do
 | `API_ENDPOINTS_SUMMARY.md` | `GET /admin/visits` |
 | `API_SPECIFICATION.txt` | §K Admin Visitor Reports |
 | `BACKEND_INSTALLATION_RELEASE.md` | Installation release PATCH + GET contract |
+| `BACKEND_INSTALLATION_PARTIAL_AND_METERING.md` | Partial Approved, multi PI, metering remarks |
+| `BACKEND_METER_INSTALLATION_PENDING.md` | Meter Installation Pending + WCC / MIP photos |
 | `BACKEND_CHANGES_DECIMAL_PRICE_KG_TO_PIECES.md` | Decimal prices + unit + kg→pieces |
 | `BACKEND_ADMIN_QUOTATION_STATUS.ts` | Reference contracts |
 
