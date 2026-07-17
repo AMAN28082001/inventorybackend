@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { ALLOWED_PAYMENT_MODES, normalizePaymentModeInput } from '../utils/paymentMode';
 import { normalizeSubsidyChequesFromRequestBody } from '../utils/subsidyChequesNormalize';
-import { hasPdfPanelRangeKey, PDF_PANEL_RANGE_KEYS } from '../utils/quotationProductPdfDisplay';
+import { hasPdfPanelRangeKey, PDF_PANEL_RANGE_KEYS, readCommercialFlag } from '../utils/quotationProductPdfDisplay';
 import { isTataDcrPackageSet } from '../utils/quotationTataDcrValidation';
 
 const addressSchema = z.object({
@@ -76,6 +76,7 @@ const productsSchemaObject = z.object({
   pdf_use_inverter_brand_options: booleanOrString.optional(),
   pdfCommercialSet: booleanOrString.optional(),
   pdf_commercial_set: booleanOrString.optional(),
+  isCommercial: booleanOrString.optional(),
   pdfPanelRangeKey: z
     .union([z.enum(PDF_PANEL_RANGE_KEYS), z.literal(''), z.null()])
     .nullish(),
@@ -115,6 +116,8 @@ const refineProductsSubsidy = (
 ): void => {
   const systemType = String(val.systemType || '').trim().toLowerCase();
   if (!systemType) return;
+  // Commercial DCR/BOTH legitimately have no subsidy — skip the "required" rule.
+  const commercial = readCommercialFlag(val);
   const centralSubsidy = Number(val.centralSubsidy ?? 0);
   const stateSubsidy = Number(val.stateSubsidy ?? 0);
   if (systemType === 'non-dcr') {
@@ -135,7 +138,7 @@ const refineProductsSubsidy = (
     return;
   }
   if (systemType === 'dcr' || systemType === 'both') {
-    if (centralSubsidy <= 0) {
+    if (!commercial && centralSubsidy <= 0) {
       ctx.addIssue({
         code: 'custom',
         message: 'centralSubsidy is required for dcr and both system types',
@@ -561,7 +564,8 @@ const panSchema = z
 export const validateSubsidyForSystemType = (
   systemType: string,
   centralSubsidy: number,
-  stateSubsidy: number
+  stateSubsidy: number,
+  commercial = false
 ): { valid: boolean; details: Array<{ field: string; message: string }> } => {
   const normalized = String(systemType || '').trim().toLowerCase();
   const details: Array<{ field: string; message: string }> = [];
@@ -573,7 +577,8 @@ export const validateSubsidyForSystemType = (
       details.push({ field: 'stateSubsidy', message: 'stateSubsidy must be 0 for non-dcr system type' });
     }
   } else if (normalized === 'dcr' || normalized === 'both') {
-    if (centralSubsidy <= 0) {
+    // Commercial DCR/BOTH have no subsidy — skip the "required" rule.
+    if (!commercial && centralSubsidy <= 0) {
       details.push({
         field: 'centralSubsidy',
         message: 'centralSubsidy is required for dcr and both system types'

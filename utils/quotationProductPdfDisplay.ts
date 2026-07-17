@@ -400,6 +400,64 @@ export const hasPdfPanelRangeKey = (products: Record<string, unknown> | null | u
   return Boolean(keys.pdfPanelRangeKey || keys.pdfDcrPanelRangeKey || keys.pdfNonDcrPanelRangeKey);
 };
 
+/**
+ * Commercial DCR/BOTH have no subsidy. Read the commercial flag from any source object
+ * (request root, `products`, or `pricing`) in the three interchangeable spellings the
+ * frontend sends. See BACKEND_COMMERCIAL_DCR_SUBSIDY.md.
+ */
+export const readCommercialFlag = (
+  source: Record<string, unknown> | null | undefined
+): boolean => {
+  if (!source) return false;
+  const truthy = (v: unknown) => v === true || v === 'true' || v === 1 || v === '1';
+  return (
+    truthy(source.pdfCommercialSet) ||
+    truthy(source.pdf_commercial_set) ||
+    truthy((source as Record<string, unknown>).isCommercial)
+  );
+};
+
+/** True when the request (root, `products`, or `pricing`) marks the quotation commercial. */
+export const isCommercialRequestBody = (
+  body: Record<string, unknown> | null | undefined
+): boolean => {
+  if (!body) return false;
+  const products = (body.products as Record<string, unknown> | undefined) || undefined;
+  const pricing = (body.pricing as Record<string, unknown> | undefined) || undefined;
+  return readCommercialFlag(body) || readCommercialFlag(products) || readCommercialFlag(pricing);
+};
+
+/** True when the commercial flag is explicitly present (any spelling) in the request body. */
+export const commercialFlagDefinedInBody = (
+  body: Record<string, unknown> | null | undefined
+): boolean => {
+  const has = (s: Record<string, unknown> | null | undefined) =>
+    Boolean(
+      s &&
+        (s.pdfCommercialSet !== undefined ||
+          s.pdf_commercial_set !== undefined ||
+          (s as Record<string, unknown>).isCommercial !== undefined)
+    );
+  if (!body) return false;
+  return (
+    has(body) ||
+    has(body.products as Record<string, unknown> | undefined) ||
+    has(body.pricing as Record<string, unknown> | undefined)
+  );
+};
+
+/**
+ * Resolve the effective commercial flag for an update: an explicit flag in the request body
+ * wins (so unchecking clears it), otherwise fall back to the persisted `products` value.
+ */
+export const resolveCommercialFlag = (
+  body: Record<string, unknown> | null | undefined,
+  persistedProducts: Record<string, unknown> | null | undefined
+): boolean => {
+  if (commercialFlagDefinedInBody(body)) return isCommercialRequestBody(body);
+  return readCommercialFlag(persistedProducts);
+};
+
 export const quotationProductPdfDisplayApiFields = (
   products: Record<string, unknown> | null | undefined
 ): Record<string, string | boolean | null> => {

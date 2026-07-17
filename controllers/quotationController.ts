@@ -58,7 +58,11 @@ import {
   hasPdfPanelRangeKey,
   isAllowedInverterBrandForCatalog,
   isAllowedMeterBrandForCatalog,
-  isPdfPanelRangeDisplaySize
+  isPdfPanelRangeDisplaySize,
+  isCommercialRequestBody,
+  readCommercialFlag,
+  resolveCommercialFlag,
+  commercialFlagDefinedInBody
 } from '../utils/quotationProductPdfDisplay';
 import {
   FINAL_CONFIRMATION_DOCUMENT_FIELDS,
@@ -990,10 +994,20 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
       return;
     }
 
-    const normalizedCentralSubsidy = Number(centralSubsidy ?? req.body.pricing?.centralSubsidy ?? products?.centralSubsidy ?? 0);
-    const normalizedStateSubsidy = Number(stateSubsidy ?? req.body.pricing?.stateSubsidy ?? products?.stateSubsidy ?? 0);
-    const normalizedTotalSubsidy = Number(totalSubsidy ?? req.body.pricing?.totalSubsidy ?? (normalizedCentralSubsidy + normalizedStateSubsidy));
-    const normalizedAmountAfterSubsidy = Number(amountAfterSubsidy ?? req.body.pricing?.amountAfterSubsidy ?? (validatedSubtotal - normalizedTotalSubsidy));
+    // Commercial DCR/BOTH have no subsidy: force 0 and do not deduct from subtotal.
+    const isCommercial = isCommercialRequestBody(req.body);
+    const normalizedCentralSubsidy = isCommercial
+      ? 0
+      : Number(centralSubsidy ?? req.body.pricing?.centralSubsidy ?? products?.centralSubsidy ?? 0);
+    const normalizedStateSubsidy = isCommercial
+      ? 0
+      : Number(stateSubsidy ?? req.body.pricing?.stateSubsidy ?? products?.stateSubsidy ?? 0);
+    const normalizedTotalSubsidy = isCommercial
+      ? 0
+      : Number(totalSubsidy ?? req.body.pricing?.totalSubsidy ?? (normalizedCentralSubsidy + normalizedStateSubsidy));
+    const normalizedAmountAfterSubsidy = isCommercial
+      ? validatedSubtotal
+      : Number(amountAfterSubsidy ?? req.body.pricing?.amountAfterSubsidy ?? (validatedSubtotal - normalizedTotalSubsidy));
     const parsedDiscountAmount = discountAmountInput !== undefined && discountAmountInput !== null && discountAmountInput !== ''
       ? Number(discountAmountInput)
       : NaN;
@@ -2313,10 +2327,14 @@ export const updateQuotationProducts = async (req: Request, res: Response): Prom
       products.centralSubsidy !== undefined ||
       products.stateSubsidy !== undefined;
     if (subsidyFieldsTouched) {
+      const commercialForProducts =
+        isCommercialRequestBody(req.body) ||
+        readCommercialFlag(existingProduct as Record<string, unknown> | null);
       const subsidyCheck = validateSubsidyForSystemType(
         effectiveSystemTypeForSubsidy,
         Number(products.centralSubsidy ?? existingProduct?.centralSubsidy ?? quotation.centralSubsidy ?? 0),
-        Number(products.stateSubsidy ?? existingProduct?.stateSubsidy ?? quotation.stateSubsidy ?? 0)
+        Number(products.stateSubsidy ?? existingProduct?.stateSubsidy ?? quotation.stateSubsidy ?? 0),
+        commercialForProducts
       );
       if (!subsidyCheck.valid) {
         res.status(400).json({
@@ -2563,10 +2581,17 @@ export const updateQuotationPricing = async (req: Request, res: Response): Promi
     const quotationAny = quotation as any;
     const currentProducts = quotationAny.products || {};
 
+    // Commercial DCR/BOTH have no subsidy: force 0 and do not deduct from subtotal.
+    const isCommercial = resolveCommercialFlag(req.body, currentProducts as Record<string, unknown>);
+
     // Get current values or use provided values
     const newSubtotal = subtotal !== undefined ? Number(toFiniteNumber(subtotal)) : Number(quotation.subtotal || 0);
-    const newStateSubsidy = stateSubsidy !== undefined ? Number(toFiniteNumber(stateSubsidy)) : Number(currentProducts.stateSubsidy || 0);
-    const newCentralSubsidy = centralSubsidy !== undefined ? Number(toFiniteNumber(centralSubsidy)) : Number(currentProducts.centralSubsidy || 0);
+    const newStateSubsidy = isCommercial
+      ? 0
+      : (stateSubsidy !== undefined ? Number(toFiniteNumber(stateSubsidy)) : Number(currentProducts.stateSubsidy || 0));
+    const newCentralSubsidy = isCommercial
+      ? 0
+      : (centralSubsidy !== undefined ? Number(toFiniteNumber(centralSubsidy)) : Number(currentProducts.centralSubsidy || 0));
     const newDiscount = discount !== undefined 
       ? Number(toFiniteNumber(discount))
       : Number(quotation.discount || 0);
@@ -2670,11 +2695,16 @@ export const updateQuotationPricing = async (req: Request, res: Response): Promi
       validUntil: computeQuotationValidUntil(new Date())
     });
 
-    // Update products with subsidies if provided
-    if (stateSubsidy !== undefined || centralSubsidy !== undefined) {
+    // Update products with subsidies and/or the commercial flag if provided
+    const commercialFlagProvided = commercialFlagDefinedInBody(req.body);
+    if (stateSubsidy !== undefined || centralSubsidy !== undefined || commercialFlagProvided) {
       let quotationProduct = quotationAny.products || await QuotationProduct.findOne({ 
         where: { quotationId: quotation.id } 
       });
+
+      const commercialPersistFields = commercialFlagProvided
+        ? { pdfCommercialSet: isCommercial }
+        : {};
 
       if (!quotationProduct) {
         // Get systemType and pricing from quotation
@@ -2685,12 +2715,14 @@ export const updateQuotationPricing = async (req: Request, res: Response): Promi
           subtotal: Number(quotation.subtotal || 0),
           totalAmount: Number(quotation.totalAmount || 0),
           stateSubsidy: newStateSubsidy,
-          centralSubsidy: newCentralSubsidy
+          centralSubsidy: newCentralSubsidy,
+          ...commercialPersistFields
         });
       } else {
         await quotationProduct.update({
           stateSubsidy: newStateSubsidy,
-          centralSubsidy: newCentralSubsidy
+          centralSubsidy: newCentralSubsidy,
+          ...commercialPersistFields
         });
       }
     }
