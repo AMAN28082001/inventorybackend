@@ -2327,9 +2327,19 @@ export const updateQuotationProducts = async (req: Request, res: Response): Prom
       products.centralSubsidy !== undefined ||
       products.stateSubsidy !== undefined;
     if (subsidyFieldsTouched) {
+      const existingProductRecord =
+        existingProduct && typeof (existingProduct as { toJSON?: () => unknown }).toJSON === 'function'
+          ? ((existingProduct as { toJSON: () => Record<string, unknown> }).toJSON() as Record<string, unknown>)
+          : (existingProduct as Record<string, unknown> | null);
       const commercialForProducts =
         isCommercialRequestBody(req.body) ||
-        readCommercialFlag(existingProduct as Record<string, unknown> | null);
+        readCommercialFlag(products as Record<string, unknown>) ||
+        readCommercialFlag(existingProductRecord);
+      // Commercial DCR/BOTH: force subsidies to 0 before persist / subsidy check.
+      if (commercialForProducts) {
+        products.centralSubsidy = 0;
+        products.stateSubsidy = 0;
+      }
       const subsidyCheck = validateSubsidyForSystemType(
         effectiveSystemTypeForSubsidy,
         Number(products.centralSubsidy ?? existingProduct?.centralSubsidy ?? quotation.centralSubsidy ?? 0),

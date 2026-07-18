@@ -1,7 +1,12 @@
 import { z } from 'zod';
 import { ALLOWED_PAYMENT_MODES, normalizePaymentModeInput } from '../utils/paymentMode';
 import { normalizeSubsidyChequesFromRequestBody } from '../utils/subsidyChequesNormalize';
-import { hasPdfPanelRangeKey, PDF_PANEL_RANGE_KEYS, readCommercialFlag } from '../utils/quotationProductPdfDisplay';
+import {
+  hasPdfPanelRangeKey,
+  PDF_PANEL_RANGE_KEYS,
+  readCommercialFlag,
+  isCommercialRequestBody
+} from '../utils/quotationProductPdfDisplay';
 import { isTataDcrPackageSet } from '../utils/quotationTataDcrValidation';
 
 const addressSchema = z.object({
@@ -212,8 +217,31 @@ const applyProductRefinements = (
 
 const productsSchema = productsSchemaObject.superRefine(applyProductRefinements);
 
-/** PATCH products — partial fields; apply refinements after `.partial()` on the base object. */
-const productsPartialSchema = productsSchemaObject.partial().superRefine(applyProductRefinements);
+/**
+ * PATCH products — panel qty refinements only.
+ * Subsidy is enforced in the controller via `validateSubsidyForSystemType`, which can
+ * see the persisted `pdfCommercialSet` on the quotation (Zod only sees the PATCH body).
+ */
+const productsPartialSchema = productsSchemaObject.partial().superRefine((val, ctx) => {
+  refineProductsPanelQuantity(val, ctx);
+});
+
+/** Copy commercial flags from request root / pricing into `products` before Zod refinements. */
+const withCommercialPropagatedToProducts = <T extends Record<string, unknown>>(raw: T): T => {
+  if (!raw || typeof raw !== 'object') return raw;
+  const products = raw.products;
+  if (!products || typeof products !== 'object' || Array.isArray(products)) return raw;
+  if (!isCommercialRequestBody(raw as Record<string, unknown>)) return raw;
+  return {
+    ...raw,
+    products: {
+      ...(products as Record<string, unknown>),
+      pdfCommercialSet: true,
+      pdf_commercial_set: true,
+      isCommercial: true
+    }
+  };
+};
 
 const paymentModeEnum = z.enum(
   ['cash', 'upi', 'loan', 'netbanking', 'bank_transfer', 'cheque', 'card', 'mix'],
@@ -237,7 +265,9 @@ const numberOrStringNumber = z.union([
   })
 ]);
 
-export const createQuotationSchema = z.object({
+export const createQuotationSchema = z.preprocess(
+  (raw) => withCommercialPropagatedToProducts((raw ?? {}) as Record<string, unknown>),
+  z.object({
   customerId: z.string().nullish(),
   customer: customerSchema.nullish(),
   products: productsSchema,
@@ -257,6 +287,10 @@ export const createQuotationSchema = z.object({
   totalSubsidy: z.number().nonnegative().default(0).nullish(),
   amountAfterSubsidy: z.number().nonnegative().default(0).nullish(),
   discountAmount: z.number().nonnegative().default(0).nullish(),
+  // Commercial DCR/BOTH — accept at root so Zod does not strip them before the controller.
+  pdfCommercialSet: booleanOrString.optional(),
+  pdf_commercial_set: booleanOrString.optional(),
+  isCommercial: booleanOrString.optional(),
   // Optional nested pricing object (for backward compatibility)
   pricing: z.object({
     subtotal: numberOrStringNumber.pipe(z.number().positive()).nullish(),
@@ -266,7 +300,10 @@ export const createQuotationSchema = z.object({
     stateSubsidy: numberOrStringNumber.pipe(z.number().nonnegative()).nullish(),
     totalSubsidy: numberOrStringNumber.pipe(z.number().nonnegative()).nullish(),
     amountAfterSubsidy: numberOrStringNumber.pipe(z.number().nonnegative()).nullish(),
-    discountAmount: numberOrStringNumber.pipe(z.number().nonnegative()).nullish()
+    discountAmount: numberOrStringNumber.pipe(z.number().nonnegative()).nullish(),
+    pdfCommercialSet: booleanOrString.optional(),
+    pdf_commercial_set: booleanOrString.optional(),
+    isCommercial: booleanOrString.optional()
   }).nullish()
 })
   .refine((data) => data.customerId || data.customer, {
@@ -283,7 +320,8 @@ export const createQuotationSchema = z.object({
   .refine((data) => data.finalAmount !== undefined || data.pricing?.finalAmount !== undefined, {
     path: ['finalAmount'],
     message: 'Final amount is required'
-  });
+  })
+);
 
 export const updateDiscountSchema = z.object({
   discount: numberOrStringNumber.pipe(z.number().min(0).max(100)).optional(),
@@ -292,7 +330,9 @@ export const updateDiscountSchema = z.object({
   message: 'Either discount or discountAmount must be provided'
 });
 
-export const updateProductsSchema = z.object({
+export const updateProductsSchema = z.preprocess(
+  (raw) => withCommercialPropagatedToProducts((raw ?? {}) as Record<string, unknown>),
+  z.object({
   products: productsPartialSchema.refine((val) => {
     if (val.systemType === 'customize') {
       return Array.isArray(val.customPanels) && val.customPanels.length > 0;
@@ -300,10 +340,15 @@ export const updateProductsSchema = z.object({
     return true;
   }, {
     message: 'customPanels is required when systemType is customize'
-  })
+  }),
+  // Commercial flags may also arrive at the PATCH root (alongside nested products).
+  pdfCommercialSet: booleanOrString.optional(),
+  pdf_commercial_set: booleanOrString.optional(),
+  isCommercial: booleanOrString.optional()
 }).refine((data) => Object.keys(data.products || {}).length > 0, {
   message: 'At least one products field must be provided'
-});
+})
+);
 
 export const updatePricingSchema = z.object({
   subtotal: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
@@ -315,7 +360,11 @@ export const updatePricingSchema = z.object({
   paymentMode: paymentModeEnum.optional(),
   paidAmount: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
   paymentDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Payment date must be in YYYY-MM-DD format').optional(),
-  paymentStatus: paymentStatusEnum.optional()
+  paymentStatus: paymentStatusEnum.optional(),
+  // Keep commercial flags after Zod parse (validate middleware replaces req.body).
+  pdfCommercialSet: booleanOrString.optional(),
+  pdf_commercial_set: booleanOrString.optional(),
+  isCommercial: booleanOrString.optional()
 }).refine((data) => {
   // At least one field must be provided and not undefined
   const hasValue = Object.keys(data).some(key => data[key as keyof typeof data] !== undefined);

@@ -257,6 +257,18 @@ Each PATCH response includes the new `updatedAt` (and `validUntil` when recomput
 | `dealer` on GET by id | List + detail |
 | Do not strip unknown products keys on partial PATCH | Same as range keys |
 
+### X.10 — Proposal PDF pricing breakdown (Jul 2026) — no API change
+
+Frontend-only PDF display (see frontend `BACKEND_CHANGES_REQUIRED.md` §I):
+
+- Pricing table shows **Central Subsidy only** (not State Subsidy).
+- Label **Total price After subsidy** = `subtotal − centralSubsidy` (state is **not** deducted in that footer).
+- Blank middle page with state subsidy present was a frontend pagination bug (fixed in `quotation-details-dialog.tsx`).
+
+**Backend:** keep returning numeric `centralSubsidy`, `stateSubsidy`, `totalSubsidy`, `amountAfterSubsidy`, `finalAmount` on GET. Do not drop `stateSubsidy` from the API. **No new endpoints.**
+
+**Related (required, separate):** Commercial DCR/BOTH must not require `centralSubsidy` — `BACKEND_COMMERCIAL_DCR_SUBSIDY.md` / create + products/pricing PATCH.
+
 ---
 
 ## §Y — Quick handoff (May 2026)
@@ -270,7 +282,9 @@ Each PATCH response includes the new `updatedAt` (and `validUntil` when recomput
 | **Medium** | Admin Visitor Reports `GET /api/admin/visits` | **Done** — §Z, HANDOFF §19 |
 | **High** | Tata DCR + `tata_530_570` + `VAL_003` fix | **Done** — §X.6, HANDOFF §2.6 |
 | **Medium** | Commercial PDF flag `pdfCommercialSet` | **Done** — §X.1, HANDOFF §2.5 |
+| **High** | Commercial DCR/BOTH skip `centralSubsidy` required | **Done** — `BACKEND_COMMERCIAL_DCR_SUBSIDY.md` (`6851388` + local Zod/controller harden) |
 | **Medium** | Proposal PDF dates (`updatedAt`, `validUntil` +7d) | **Done** — §X.8, HANDOFF §2.7 |
+| **Info** | PDF pricing: central-only / total after subsidy | **No API change** — §X.10 |
 | **High** | Persist/return `pdf_panel_range_key` on GET | **Done** |
 | **High** | HR upload live counts | **Done** — §7.8 |
 | **High** | Calling queue `LEAD_004` + remarks | **Done** — §E |
