@@ -4,660 +4,642 @@
  * BACKEND REFERENCE — Account Management "Final Settlement" (Jul 2026)
  * =============================================================================
  *
- * Copy-paste-ready Express + Sequelize controllers matching the frontend client
- * `api.quotations.finalizeSettlement`. Spec: BACKEND_FINAL_SETTLEMENT.md.
+ * Frontend:
+ *   - app/dashboard/account-management/page.tsx → submitFinalSettlement
+ *   - lib/api.ts → api.quotations.finalizeSettlement
  *
- * Settlement rule
- *   Settlement amount = REMAINING ONLY (e.g. ₹2,000) → written off as `discountAmount` (`d`).
- *   Installments are NEVER rewritten during settlement (paid stays as-is).
- *   NEVER hard-reject a settle because the server thinks the balance is cleared
- *   (subtotal-vs-amountAfterSubsidy mismatch). Settlement always = "mark completed, remaining 0".
+ * What the user does:
+ *   In Payment Management, a customer has a small Remaining (e.g. ₹2,000).
+ *   Account Management clicks "Submit final settlement" to write that Remaining
+ *   off as a discount `d`, mark payment completed, and set Remaining = 0.
  *
- * Frontend try-order (finalizeSettlement):
- *   1. POST  /api/quotations/:id/final-settlement           (preferred, atomic — postFinalSettlement)
- *   2. PATCH /api/quotations/:id/pricing                    (absolute discountAmount — patchPricingWithSettlement)
- *      + PATCH /api/quotations/:id/payment-details          (status-only, no phases — patchPaymentDetailsStatusOnly)
- *   3. PATCH /api/quotations/:id/discount                   (absolute INR fallback — patchDiscountAbsolute)
+ * IMPORTANT (new behavior, Jul 2026):
+ *   The frontend NO LONGER falls back to localStorage when the API is on.
+ *   `finalizeSettlement` THROWS if nothing was persisted server-side. So the
+ *   backend MUST persist and MUST return the settled state on GET, otherwise:
+ *     - the UI shows "Settlement not saved", and
+ *     - the "Submit final settlement" button stays visible.
  *
- * Persistence is MANDATORY. The client no longer falls back to localStorage when the API is on:
- * if the backend does not persist, the user sees "Settlement not saved" and the button stays.
+ * Client call order (see lib/api.ts → finalizeSettlement):
+ *   1) POST  /api/quotations/:id/final-settlement     ← PREFERRED (implement this)
+ *   2) PATCH /api/quotations/:id/pricing  +  PATCH /api/quotations/:id/payment-details
+ *   3) PATCH /api/quotations/:id/discount             ← last fallback
+ *   4) GET   /api/quotations?status=approved          ← must reflect settled state
  *
- * GET must return `finalSettlementApplied: true` (and/or `finalSettlementAmount > 0`),
- * `remaining: 0`, `paymentStatus: "completed"` so the button stays hidden after refresh
- * on any device/role. See extendQuotationJsonForSettlement().
+ * Auth: role `account-management` or `admin`; quotation must be `status = approved`.
  *
- * Live implementation in this repo:
- *   controllers/quotationController.ts — submitQuotationFinalSettlement, updateQuotationPricing,
- *                                        updateQuotationPaymentDetails, updateQuotationDiscount,
- *                                        reconcilePaymentRemainingStatus
- *   validations/quotationValidations.ts — updatePricingSchema, updatePaymentDetailsSchema,
- *                                         finalSettlementSchema
- *   routes/quotationRoutes.ts — route registration (see bottom)
- *   models/Quotation.ts + migration 20260720140000-final-settlement-fields.js
+ * Live implementation in THIS repo (kept in sync with this reference):
+ *   controllers/quotationController.ts — submitQuotationFinalSettlement,
+ *     updateQuotationPricing, updateQuotationPaymentDetails (status-only + flag-only
+ *     settlement branch), updateQuotationDiscount, reconcilePaymentRemainingStatus
+ *   validations/quotationValidations.ts — finalSettlementSchema, updatePricingSchema,
+ *     updatePaymentDetailsSchema (status-only body allowed)
+ *   routes/quotationRoutes.ts — POST /final-settlement + PATCH pricing/payment-details/discount
+ *   models/Quotation.ts + migrations 20260720140000 / 20260721120000 — finalSettlement* cols
+ *
  * =============================================================================
- */
-
-import { Request, Response } from 'express';
-import { Quotation, QuotationProduct } from '../models';
-import {
-  loadQuotationPaymentPhases,
-  sumPhasePaidAmounts,
-  normalizePaymentPhases,
-  shouldReplacePaymentPhases,
-  replaceQuotationPaymentPhases,
-  upsertQuotationPaymentPhases
-} from '../utils/quotationPaymentPhases';
-
-/* -----------------------------------------------------------------------------
- * Shared money helpers
- * ---------------------------------------------------------------------------*/
-
-/** amountAfterSubsidy = stored column, else subtotal − (central + state). */
-const resolveAmountAfterSubsidy = (q, products = null): number => {
-  const subtotal = Number(q.subtotal || 0);
-  const stored = Number(q.amountAfterSubsidy);
-  const rawStored = q.amountAfterSubsidy;
-  // Prefer persisted value unless it looks unset (0 while subtotal > 0).
-  if (rawStored !== undefined && rawStored !== null && Number.isFinite(stored) && !(stored === 0 && subtotal > 0)) {
-    return Math.max(0, stored);
-  }
-  const central = Number(products?.centralSubsidy ?? q.centralSubsidy ?? 0);
-  const state = Number(products?.stateSubsidy ?? q.stateSubsidy ?? 0);
-  return Math.max(0, subtotal - central - state);
-};
-
-/** remaining = max(0, amountAfterSubsidy − discountAmount − totalPaid). */
-const remainingAgainstAmountAfterSubsidy = (amountAfterSubsidy, totalPaid, discountAmount = 0): number => {
-  const base = Number(amountAfterSubsidy) || 0;
-  const discount = Math.max(0, Number(discountAmount) || 0);
-  const paid = Number(totalPaid);
-  return Math.max(0, base - discount - (Number.isNaN(paid) ? 0 : paid));
-};
-
-/** Effective payable after subsidy + discount write-off (cap for paid totals). */
-const effectivePayableCap = (amountAfterSubsidy, discountAmount = 0): number =>
-  Math.max(0, (Number(amountAfterSubsidy) || 0) - Math.max(0, Number(discountAmount) || 0));
-
-/**
- * Resolve remaining + status for API. NEVER claim completed / remaining 0
- * while an unpaid gap still exists WITHOUT discount covering it.
- * paid 150000 of 185000, no discount → { remaining: 35000, paymentStatus: 'partial' }.
- */
-const reconcilePaymentRemainingStatus = (storedStatus, amountAfterSubsidy, totalPaid, discountAmount) => {
-  const remaining = remainingAgainstAmountAfterSubsidy(amountAfterSubsidy, totalPaid, discountAmount);
-  const paid = Number(totalPaid) || 0;
-  if (remaining > 0.01) {
-    return { remaining, paymentStatus: paid <= 0.01 ? 'pending' : 'partial' };
-  }
-  if (storedStatus === 'completed') {
-    return { remaining: 0, paymentStatus: 'completed' };
-  }
-  const payable = effectivePayableCap(amountAfterSubsidy, discountAmount);
-  const derived = paid >= payable - 0.01 && payable > 0 ? 'completed' : paid > 0 ? 'partial' : 'pending';
-  return { remaining: 0, paymentStatus: derived };
-};
-
-/* -----------------------------------------------------------------------------
- * 1) POST /api/quotations/:id/final-settlement   (PREFERRED — atomic, idempotent)
- * ---------------------------------------------------------------------------*/
-/**
- * One DB write: adds `amount` (= remaining) to discountAmount, sets remaining = 0,
- * paymentStatus = completed, and persists finalSettlementApplied / finalSettlementAmount /
- * finalSettlementAt / finalSettlementBy. Idempotent — if already applied, does not double-add.
+ * DEFINITIONS — the exact math the frontend uses
+ * =============================================================================
  *
- * Body the frontend sends (all amount aliases = remaining; extras are echoed/ignored):
- *   {
- *     "amount": 2000, "settlementAmount": 2000, "discountAmount": 2000,
- *     "finalAmount": 290000, "paymentStatus": "completed",
- *     "remaining": 0, "remainingAmount": 0, "finalSettlementApplied": true
- *   }
+ *   amCap            = Account Management payment cap
+ *                      = amountAfterSubsidy (preferred), else subtotal shown in AM
+ *   paid             = SUM(installment.paidAmount)                (UNCHANGED by settlement)
+ *   settlementAmount = current Remaining = max(0, amCap - existingDiscount - paid)
+ *   discountAmount   = existingDiscount + settlementAmount        (the discount `d`)
+ *   finalAmount      = max(0, amountAfterSubsidy - discountAmount)
+ *   remaining        = 0   (after settlement)
+ *   paymentStatus    = "completed"
+ *
+ * Example — JITENDRA:
+ *   amCap 292000, paid 290000, existingDiscount 0
+ *   settlementAmount = 2000, discountAmount = 2000, remaining 0, status completed
+ *   Installment rows are NOT rewritten (paid stays 290000).
+ *
+ * DO NOT run "total paid cannot exceed payable after discount" during settlement.
+ * amCap (292000) can differ from a pricing "payable after discount" (212000); the
+ * write-off is only ₹2,000 and must not be rejected because of that mismatch.
+ *
+ * NEVER hard-reject a settle because the server thinks the balance is cleared
+ * (subtotal-vs-amountAfterSubsidy mismatch). Settlement always = "mark completed,
+ * remaining 0"; grow discount only up to (amountAfterSubsidy − paid).
  */
-export const postFinalSettlement = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const role = req.user?.role;
-    const isAccountManager = role === 'account-management' || role === 'hr';
-    const isInventoryAdmin = role === 'admin' || role === 'super-admin' || role === 'super-admin-manager';
-    const isQuotationAdmin = req.dealer && req.dealer.role === 'admin';
-    if (!isAccountManager && !isInventoryAdmin && !isQuotationAdmin) {
-      res.status(403).json({ success: false, error: { code: 'AUTH_004', message: 'Insufficient permissions' } });
-      return;
-    }
 
-    const { quotationId } = req.params;
-    // Client sends amount / settlementAmount / discountAmount (all = remaining) — accept any.
-    const amountRaw =
-      req.body?.amount ?? req.body?.settlementAmount ?? req.body?.discountAmount ?? req.body?.finalSettlementAmount;
-    const amount = amountRaw !== undefined && amountRaw !== null ? Number(amountRaw) : NaN;
-    if (!Number.isFinite(amount) || amount < 0) {
-      res.status(400).json({
-        success: false,
-        error: { code: 'VAL_001', message: 'amount must be a non-negative number (settlement = remaining only)' }
-      });
-      return;
-    }
+// -----------------------------------------------------------------------------
+// Shared helpers
+// -----------------------------------------------------------------------------
 
-    const quotation = await Quotation.findOne({
-      where: { id: quotationId, status: 'approved' },
-      include: [{ model: QuotationProduct, as: 'products' }]
-    });
-    if (!quotation) {
-      res.status(404).json({ success: false, error: { code: 'RES_001', message: 'Quotation not found' } });
-      return;
-    }
+const N = (v) => {
+  const n = Number(v)
+  return Number.isFinite(n) ? n : 0
+}
+const round = (v) => Math.round(N(v))
 
-    // Idempotency: if already settled, echo current state instead of double-adding.
-    if (quotation.finalSettlementApplied === true) {
-      const phasesEcho = await loadQuotationPaymentPhases(quotation.id);
-      res.json({ success: true, data: buildSettlementResponse(quotation, phasesEcho) });
-      return;
-    }
-
-    const phases = await loadQuotationPaymentPhases(quotation.id);
-    const paid = phases.length > 0 ? sumPhasePaidAmounts(phases) : Number(quotation.paidAmount || 0);
-    const amountAfterSubsidy = resolveAmountAfterSubsidy(quotation, quotation.products);
-    const existingDiscount = Number(quotation.discountAmount || 0);
-    const currentRemaining = remainingAgainstAmountAfterSubsidy(amountAfterSubsidy, paid, existingDiscount);
-
-    // DO NOT reject when the server thinks the balance is already cleared.
-    // Settlement = "mark completed, remaining 0". The subtotal-vs-amountAfterSubsidy mismatch
-    // (AM shows a small gap the server's amountAfterSubsidy does not) must NOT block the write.
-    // Store the requested amount for audit, but only grow discount up to (amountAfterSubsidy − paid)
-    // so payable never drops below paid (avoids creating paid > payable).
-    const requestedSettlement = amount > 0 ? amount : currentRemaining;
-    const maxDiscountAddable = Math.max(0, currentRemaining); // amountAfterSubsidy − paid − existingDiscount, floored at 0
-    const discountAdded = Math.min(requestedSettlement, maxDiscountAddable);
-    const newDiscountAmount = existingDiscount + discountAdded;
-    const newTotalAmount = Math.max(0, amountAfterSubsidy - newDiscountAmount);
-    const actorId = req.user?.id ?? req.dealer?.id ?? null;
-
-    await quotation.update({
-      discountAmount: newDiscountAmount,
-      discount: newDiscountAmount, // convention: > 100 ⇒ absolute INR
-      totalAmount: newTotalAmount,
-      finalAmount: newTotalAmount,
-      remainingAmount: 0,
-      paymentStatus: 'completed',
-      finalSettlementAmount: requestedSettlement, // audit: what AM asked to write off
-      finalSettlementApplied: true,
-      finalSettlementAt: new Date(),
-      finalSettlementBy: actorId
-      // NOTE: installments are NOT touched — paidAmount / phases unchanged.
-    });
-
-    await quotation.reload();
-    const responsePhases = await loadQuotationPaymentPhases(quotation.id);
-    res.json({ success: true, data: buildSettlementResponse(quotation, responsePhases) });
-  } catch (error) {
-    res.status(500).json({ success: false, error: { code: 'SYS_001', message: 'Internal server error' } });
-  }
-};
-
-/* -----------------------------------------------------------------------------
- * 2a) PATCH /api/quotations/:id/pricing   (absolute discountAmount, no subtotal)
- * ---------------------------------------------------------------------------*/
 /**
- * Body (Final Settlement): { "discountAmount": 2000, "totalAmount": 183000, "finalAmount": 183000 }
- * - discountAmount is ABSOLUTE INR — do NOT recompute from %.
- * - subtotal is OPTIONAL — keep the stored package amount.
- * - Validate finalAmount against stored/computed amountAfterSubsidy (kills the
- *   "Final amount must be between 0 and amount after subsidy" error).
+ * Structured tracer for the whole settlement flow. Prints one tagged line per
+ * step so you can follow a request end-to-end in the server terminal:
+ *   ▶ IN       — incoming request (quotationId, user, role, full body)
+ *   ⚙ COMPUTE  — derived numbers (amountAfterSubsidy, paid, discount, ...)
+ *   ⚙ PATCH    — exactly what is about to be written
+ *   ✔ SAVED    — persisted row after reload()
+ *   ◀ OUT      — response payload + status
+ *   ✖ ERROR    — crash message + full stack (this pinpoints a 500)
+ * Swap `console.*` for your logInfo/logError if you prefer.
  */
-export const patchPricingWithSettlement = async (req: Request, res: Response): Promise<void> => {
+function logFS(stage, data) {
+  const ts = new Date().toISOString()
   try {
-    const isAccountManager = req.user && (req.user.role === 'account-management' || req.user.role === 'hr');
-    const isInventoryAdmin =
-      req.user && ['admin', 'super-admin', 'super-admin-manager'].includes(req.user.role);
-    if (!req.dealer && !isAccountManager && !isInventoryAdmin) {
-      res.status(401).json({ success: false, error: { code: 'AUTH_003', message: 'User not authenticated' } });
-      return;
-    }
+    const isErr = typeof stage === "string" && stage.includes("✖")
+    const line = `[FinalSettlement ${ts}] ${stage}`
+    if (isErr) console.error(line, data)
+    else console.log(line, data === undefined ? "" : typeof data === "string" ? data : JSON.stringify(data))
+  } catch {
+    console.log(`[FinalSettlement ${ts}] ${stage}`)
+  }
+}
 
-    const { quotationId } = req.params;
-    const { subtotal, stateSubsidy, centralSubsidy, discount, discountAmount, finalAmount, totalAmount } = req.body;
+/**
+ * A compact, comparable snapshot of the settlement-relevant DB state. Used for the
+ * ① BEFORE / ② AFTER / ③ DIFF trace so you can see EXACTLY what a settle changed
+ * (and confirm installment rows were untouched).
+ */
+function snapshotQuotation(quotation) {
+  const rows = quotation.paymentPhases || quotation.installments || []
+  return {
+    discountAmount: N(quotation.discountAmount),
+    discount: N(quotation.discount),
+    finalAmount: N(quotation.finalAmount),
+    totalAmount: N(quotation.totalAmount),
+    amountAfterSubsidy: N(quotation.amountAfterSubsidy),
+    remaining: N(quotation.remaining),
+    remainingAmount: N(quotation.remainingAmount),
+    paymentStatus: quotation.paymentStatus ?? null,
+    finalSettlementApplied: quotation.finalSettlementApplied === true,
+    finalSettlementAmount: N(quotation.finalSettlementAmount),
+    paidSum: Array.isArray(rows) ? rows.reduce((a, r) => a + N(r.paidAmount), 0) : 0,
+    installmentsCount: Array.isArray(rows) ? rows.length : 0,
+  }
+}
 
-    const where: any = { id: quotationId };
-    if (isAccountManager) where.status = 'approved';
-    else if (req.dealer && req.dealer.role !== 'admin') where.dealerId = req.dealer.id;
+/** Field-by-field { from → to } for keys that actually changed between two snapshots. */
+function diffSnapshots(before, after) {
+  const diff = {}
+  const keys = new Set([...Object.keys(before || {}), ...Object.keys(after || {})])
+  for (const k of keys) {
+    const a = before?.[k]
+    const b = after?.[k]
+    if (a !== b) diff[k] = { from: a, to: b }
+  }
+  return diff
+}
 
-    const quotation = await Quotation.findOne({ where, include: [{ model: QuotationProduct, as: 'products' }] });
+function requireAmUser(req, res) {
+  const user = req.user || req.dealer
+  if (!user || !["account-management", "admin"].includes(user.role)) {
+    res.status(403).json({ success: false, error: { code: "AUTH_004", message: "Forbidden" } })
+    return null
+  }
+  return user
+}
+
+/** amountAfterSubsidy is the source of truth for the payable cap. Never shrink it. */
+function pickAmountAfterSubsidy(quotation) {
+  const p = quotation.pricing || {}
+  const candidates = [
+    quotation.amountAfterSubsidy,
+    p.amountAfterSubsidy,
+    quotation.finalAmount,
+    quotation.subtotal,
+  ]
+  for (const c of candidates) {
+    const n = Number(c)
+    if (Number.isFinite(n) && n > 0) return n
+  }
+  return 0
+}
+
+/** Sum of paid installments — settlement must NOT change these rows. */
+function sumPaidInstallments(quotation) {
+  const rows = quotation.paymentPhases || quotation.installments || []
+  if (!Array.isArray(rows)) return 0
+  return rows.reduce((acc, r) => acc + N(r.paidAmount), 0)
+}
+
+function existingDiscountAmount(quotation) {
+  const p = quotation.pricing || {}
+  return Math.max(0, N(quotation.discountAmount ?? p.discountAmount ?? quotation.discount))
+}
+
+/**
+ * Core settlement mutation. Idempotent and safe to call from the atomic endpoint
+ * or the pricing/discount fallbacks. Returns the values written.
+ *
+ * `explicitDiscountAmount` (absolute INR, existing + settlement) is preferred; if
+ * only `settlementAmount` is given we add it to the existing discount.
+ */
+function computeSettlement(quotation, body) {
+  const amountAfterSubsidy = pickAmountAfterSubsidy(quotation)
+  const paid = sumPaidInstallments(quotation)
+  const existing = existingDiscountAmount(quotation)
+
+  // The settlement clears the balance to 0. Compute the discount that makes payable
+  // (finalAmount) equal what is ALREADY PAID — this never creates "paid exceeds payable".
+  //
+  // Important: AM's subtotal (e.g. 190,000) can be higher than the server's
+  // amountAfterSubsidy (e.g. 189,000). AM then shows Remaining 1,000 while the server
+  // considers the customer fully paid (remaining 0). In that case discountToClear = 0:
+  // we simply mark it completed. DO NOT reject with "settlement cannot exceed remaining".
+  const discountToClear = Math.max(0, amountAfterSubsidy - Math.min(paid, amountAfterSubsidy))
+  let discountAmount = Math.max(existing, discountToClear)
+  if (discountAmount > amountAfterSubsidy) discountAmount = amountAfterSubsidy
+
+  // What AM wrote off (audit only) — may differ from discountAmount when subtotal > AAS.
+  const settlementAmount = round(body.settlementAmount ?? body.amount ?? 0)
+  const finalAmount = Math.max(0, amountAfterSubsidy - discountAmount)
+
+  const s = {
+    amountAfterSubsidy,
+    paid,
+    existingDiscount: existing,
+    discountAmount,
+    settlementAmount,
+    finalAmount,
+    remaining: 0,
+    paymentStatus: "completed",
+  }
+  logFS("⚙ COMPUTE", s)
+  return s
+}
+
+/** Persist settlement WITHOUT touching installment rows. */
+async function applySettlement(quotation, s, user, { transaction } = {}) {
+  const before = snapshotQuotation(quotation)
+  logFS("① BEFORE (db state)", before)
+
+  const pricing = { ...(quotation.pricing || {}) }
+  pricing.discountAmount = s.discountAmount
+  pricing.totalAmount = s.finalAmount
+  pricing.finalAmount = s.finalAmount
+  pricing.amountAfterSubsidy = s.amountAfterSubsidy
+  pricing.finalSettlementApplied = true
+
+  await quotation.update(
+    {
+      discount: s.discountAmount,
+      discountAmount: s.discountAmount,
+      totalAmount: s.finalAmount,
+      finalAmount: s.finalAmount,
+      amountAfterSubsidy: s.amountAfterSubsidy,
+      pricing,
+      remaining: 0,
+      remainingAmount: 0,
+      paymentStatus: "completed",
+      // Persisted flags the frontend reads to KEEP THE BUTTON HIDDEN after refresh:
+      finalSettlementApplied: true,
+      finalSettlementAmount: s.settlementAmount,
+      finalSettlementAt: new Date(),
+      finalSettlementBy: user?.id || null,
+      // NOTE: paymentPhases / installments intentionally UNCHANGED.
+    },
+    { transaction },
+  )
+  await quotation.reload({ transaction })
+
+  const after = snapshotQuotation(quotation)
+  logFS("② AFTER (db state)", after)
+  logFS("③ DIFF (what changed)", diffSnapshots(before, after))
+
+  // Sanity: if the DB didn't actually persist the flag/remaining, the columns are not
+  // mapped (redo the migration + model). This is the #1 cause of "button reappears".
+  if (after.finalSettlementApplied !== true) {
+    logFS("⚠ WARN finalSettlementApplied did NOT persist — check migration/model mapping", {
+      id: quotation.id,
+    })
+  }
+  if (after.remaining !== 0) {
+    logFS("⚠ WARN remaining did NOT reset to 0 after settle", { id: quotation.id, remaining: after.remaining })
+  }
+  if (after.paidSum !== before.paidSum || after.installmentsCount !== before.installmentsCount) {
+    logFS("⚠ WARN installment rows changed during settle (should be untouched)", {
+      id: quotation.id,
+      paidSum: { from: before.paidSum, to: after.paidSum },
+      installmentsCount: { from: before.installmentsCount, to: after.installmentsCount },
+    })
+  }
+  return quotation
+}
+
+// -----------------------------------------------------------------------------
+// 1) PREFERRED — POST /api/quotations/:id/final-settlement (atomic)
+// -----------------------------------------------------------------------------
+/**
+ * Body (from lib/api.ts → finalizeSettlement):
+ * {
+ *   "amount": 2000,                 // settlement (Remaining) — the discount `d`
+ *   "settlementAmount": 2000,
+ *   "discountAmount": 2000,         // existing + settlement (absolute INR)
+ *   "finalAmount": 290000,          // amountAfterSubsidy - discountAmount
+ *   "paymentStatus": "completed",
+ *   "remaining": 0,
+ *   "remainingAmount": 0,
+ *   "finalSettlementApplied": true
+ * }
+ */
+export async function postFinalSettlement(req, res) {
+  const user = requireAmUser(req, res)
+  if (!user) return
+  const quotationId = req.params.quotationId || req.params.id
+  logFS("▶ IN  POST /final-settlement", {
+    quotationId,
+    user: user?.id,
+    role: user?.role,
+    body: req.body,
+  })
+  try {
+    const quotation = await Quotation.findByPk(quotationId)
     if (!quotation) {
-      res.status(404).json({ success: false, error: { code: 'RES_001', message: 'Quotation not found' } });
-      return;
+      logFS("◀ OUT 404", { quotationId })
+      return res.status(404).json({ success: false, error: { code: "RES_001", message: "Not found" } })
     }
-    const products = quotation.products || {};
-
-    // subtotal optional — fall back to stored package amount.
-    const newSubtotal = subtotal !== undefined ? Number(subtotal) : Number(quotation.subtotal || 0);
-    const newStateSubsidy = stateSubsidy !== undefined ? Number(stateSubsidy) : Number(products.stateSubsidy ?? quotation.stateSubsidy ?? 0);
-    const newCentralSubsidy = centralSubsidy !== undefined ? Number(centralSubsidy) : Number(products.centralSubsidy ?? quotation.centralSubsidy ?? 0);
-
-    // Prefer stored amountAfterSubsidy when only discount/finalAmount are patched.
-    const patchedBase = subtotal !== undefined || stateSubsidy !== undefined || centralSubsidy !== undefined;
-    const amountAfterSubsidy = patchedBase
-      ? Math.max(0, newSubtotal - newStateSubsidy - newCentralSubsidy)
-      : resolveAmountAfterSubsidy(quotation, { centralSubsidy: newCentralSubsidy, stateSubsidy: newStateSubsidy });
-
-    // Absolute discountAmount; else % of amountAfterSubsidy; else keep existing.
-    let effectiveDiscountAmount;
-    if (discountAmount !== undefined && discountAmount !== null && discountAmount !== '') {
-      effectiveDiscountAmount = Number(discountAmount);
-    } else if (discount !== undefined && Number(discount) > 100) {
-      effectiveDiscountAmount = Number(discount); // > 100 ⇒ absolute INR
-    } else if (discount !== undefined) {
-      effectiveDiscountAmount = (amountAfterSubsidy * Number(discount)) / 100;
-    } else {
-      effectiveDiscountAmount = Number(quotation.discountAmount || 0);
-    }
-    if (!Number.isFinite(effectiveDiscountAmount) || effectiveDiscountAmount < 0) {
-      res.status(400).json({
-        success: false,
-        error: { code: 'VAL_001', message: 'Discount amount must be a non-negative number' }
-      });
-      return;
+    if (String(quotation.status || "").toLowerCase() !== "approved") {
+      logFS("◀ OUT 400", { quotationId, status: quotation.status })
+      return res.status(400).json({ success: false, error: { code: "VAL_010", message: "Not approved" } })
     }
 
-    const newFinalAmount = finalAmount !== undefined ? Number(finalAmount) : undefined;
-    // Validate finalAmount against amountAfterSubsidy (allow float tolerance).
-    if (newFinalAmount !== undefined && (Number.isNaN(newFinalAmount) || newFinalAmount < 0 || newFinalAmount > amountAfterSubsidy + 0.01)) {
-      res.status(400).json({
+    // Idempotent: already settled → return 200 with current state, do not double-add.
+    if (quotation.finalSettlementApplied === true) {
+      logFS("◀ OUT 200 (idempotent, already settled)", { quotationId })
+      return res.json({ success: true, data: quotationToApiJson(quotation) })
+    }
+
+    // NEVER reject a settlement because the server's stored remaining is 0. AM may be
+    // reconciling a subtotal-vs-amountAfterSubsidy gap; the correct result is simply
+    // "completed, remaining 0" (with discount clamped so payable never drops below paid).
+    const s = computeSettlement(quotation, req.body || {})
+    await applySettlement(quotation, s, user)
+    logFS("◀ OUT 200", { quotationId, discountAmount: s.discountAmount, settlementAmount: s.settlementAmount })
+    return res.json({ success: true, data: quotationToApiJson(quotation) })
+  } catch (e) {
+    logFS("✖ ERROR POST /final-settlement", { quotationId, message: e?.message, stack: e?.stack })
+    return res.status(500).json({ success: false, error: { code: "SYS_001", message: "Internal error" } })
+  }
+}
+
+// -----------------------------------------------------------------------------
+// 2a) FALLBACK — PATCH /api/quotations/:id/pricing  (absolute discountAmount)
+// -----------------------------------------------------------------------------
+/**
+ * Body: { "discountAmount": 2000, "totalAmount": 290000, "finalAmount": 290000 }
+ *
+ * MUST:
+ *   - Treat discountAmount as ABSOLUTE INR (never re-derive from %).
+ *   - NOT require `subtotal` in the body.
+ *   - Validate finalAmount against STORED amountAfterSubsidy (not a rewritten subtotal).
+ *   - Set remaining=0 / status=completed when the discount clears the gap.
+ * MUST NOT:
+ *   - Reject INR values > 100 as "invalid percent".
+ *   - Emit "Final amount must be between 0 and amount after subsidy" when finalAmount
+ *     is computed from the STORED amountAfterSubsidy.
+ */
+export async function patchPricingWithSettlement(req, res) {
+  const user = requireAmUser(req, res)
+  if (!user) return
+  const quotationId = req.params.quotationId || req.params.id
+  logFS("▶ IN  PATCH /pricing", {
+    quotationId,
+    user: user?.id,
+    role: user?.role,
+    body: req.body,
+  })
+  try {
+    const quotation = await Quotation.findByPk(quotationId)
+    if (!quotation) {
+      logFS("◀ OUT 404", { quotationId })
+      return res.status(404).json({ success: false, error: { code: "RES_001", message: "Not found" } })
+    }
+
+    const body = req.body || {}
+    const amountAfterSubsidy = pickAmountAfterSubsidy(quotation)
+    const discountAmount = round(body.discountAmount)
+
+    if (discountAmount < 0 || discountAmount > amountAfterSubsidy) {
+      logFS("◀ OUT 400", { quotationId, discountAmount, amountAfterSubsidy })
+      return res.status(400).json({
         success: false,
         error: {
-          code: 'VAL_001',
-          message: 'Final amount must be between 0 and amount after subsidy',
-          details: [{ field: 'finalAmount', message: `Final amount must be between 0 and ${amountAfterSubsidy}` }]
-        }
-      });
-      return;
+          code: "VAL_015",
+          message: `discountAmount must be between 0 and amountAfterSubsidy (${amountAfterSubsidy})`,
+        },
+      })
     }
 
-    const calculatedTotal = Math.max(0, amountAfterSubsidy - effectiveDiscountAmount);
-    const persistedTotalAmount = totalAmount !== undefined ? Number(totalAmount) : calculatedTotal;
-    const persistedFinalAmount = newFinalAmount !== undefined ? newFinalAmount : calculatedTotal;
+    // Reuse the same settlement application (idempotent, no installment rewrite).
+    const s = computeSettlement(quotation, { discountAmount })
+    await applySettlement(quotation, s, user)
+    logFS("◀ OUT 200", { quotationId, discountAmount: s.discountAmount })
+    return res.json({ success: true, data: quotationToApiJson(quotation) })
+  } catch (e) {
+    logFS("✖ ERROR PATCH /pricing", { quotationId, message: e?.message, stack: e?.stack })
+    return res.status(500).json({ success: false, error: { code: "SYS_001", message: "Internal error" } })
+  }
+}
 
-    const paid = Number(quotation.paidAmount || 0);
-    const remaining = remainingAgainstAmountAfterSubsidy(amountAfterSubsidy, paid, effectiveDiscountAmount);
+// -----------------------------------------------------------------------------
+// 2b) FALLBACK — PATCH /api/quotations/:id/payment-details (STATUS-ONLY, no phases)
+// -----------------------------------------------------------------------------
+/**
+ * Body (no `phases` / `installments`):
+ * {
+ *   "paymentStatus": "completed",
+ *   "replaceInstallments": false,
+ *   "finalSettlementApplied": true,
+ *   "finalSettlementAmount": 2000,
+ *   "remaining": 0,
+ *   "remainingAmount": 0,
+ *   "paymentType": "cash",
+ *   "paymentMode": "cash"
+ * }
+ *
+ * CRITICAL: when there are NO phases in the body:
+ *   - update status / remaining / settlement flags ONLY,
+ *   - DO NOT delete or rewrite installment rows,
+ *   - DO NOT run "total paid cannot exceed payable after discount".
+ *
+ * (When phases ARE present, use the existing replace flow —
+ *  see BACKEND_INSTALLMENT_REPLACE.ts.)
+ */
+export async function patchPaymentDetailsStatusOnly(req, res) {
+  const user = requireAmUser(req, res)
+  if (!user) return
+  const quotationId = req.params.quotationId || req.params.id
+  logFS("▶ IN  PATCH /payment-details", {
+    quotationId,
+    user: user?.id,
+    role: user?.role,
+    body: req.body,
+  })
+  try {
+    const quotation = await Quotation.findByPk(quotationId)
+    if (!quotation) {
+      logFS("◀ OUT 404", { quotationId })
+      return res.status(404).json({ success: false, error: { code: "RES_001", message: "Not found" } })
+    }
 
-    await quotation.update({
-      subtotal: newSubtotal,
-      discount: effectiveDiscountAmount, // store INR on discount too (> 100 ⇒ INR)
-      discountAmount: effectiveDiscountAmount,
-      totalAmount: persistedTotalAmount,
-      finalAmount: persistedFinalAmount,
-      remainingAmount: remaining
-    });
-    await quotation.reload();
+    const body = req.body || {}
+    const hasPhases = Array.isArray(body.phases) || Array.isArray(body.installments)
+    if (hasPhases) {
+      // Delegate to the installment-replace controller.
+      logFS("↪ DELEGATE PATCH /payment-details → replace flow (phases present)", { quotationId })
+      return patchQuotationPaymentDetailsWithReplace(req, res)
+    }
 
-    res.json({
-      success: true,
-      data: {
-        id: quotation.id,
-        subtotal: newSubtotal,
-        discountAmount: effectiveDiscountAmount,
-        discount_amount: effectiveDiscountAmount,
-        totalAmount: persistedTotalAmount,
-        finalAmount: persistedFinalAmount,
-        remaining,
-        remainingAmount: remaining,
-        pricing: {
-          subtotal: newSubtotal,
+    const patch = {}
+    if (body.paymentStatus) patch.paymentStatus = String(body.paymentStatus).toLowerCase()
+    if (body.paymentType) patch.paymentType = String(body.paymentType).toLowerCase()
+    if (body.paymentMode) patch.paymentMode = String(body.paymentMode).toLowerCase()
+    if (body.remaining !== undefined) patch.remaining = round(body.remaining)
+    if (body.remainingAmount !== undefined) patch.remainingAmount = round(body.remainingAmount)
+
+    if (body.finalSettlementApplied === true) {
+      patch.finalSettlementApplied = true
+      if (body.finalSettlementAmount !== undefined) {
+        patch.finalSettlementAmount = round(body.finalSettlementAmount)
+      }
+      patch.finalSettlementAt = new Date()
+      patch.finalSettlementBy = user?.id || null
+      // Persist the write-off into discount if pricing PATCH did not run.
+      const existing = existingDiscountAmount(quotation)
+      const settlement = round(body.finalSettlementAmount ?? 0)
+      const amountAfterSubsidy = pickAmountAfterSubsidy(quotation)
+      // Idempotent: only add if discount does not already cover the write-off.
+      if (settlement > 0 && existing < settlement) {
+        const discountAmount = Math.min(amountAfterSubsidy, existing + settlement)
+        patch.discount = discountAmount
+        patch.discountAmount = discountAmount
+        patch.finalAmount = Math.max(0, amountAfterSubsidy - discountAmount)
+        patch.totalAmount = patch.finalAmount
+        patch.pricing = {
+          ...(quotation.pricing || {}),
+          discountAmount,
+          totalAmount: patch.finalAmount,
+          finalAmount: patch.finalAmount,
           amountAfterSubsidy,
-          discountAmount: effectiveDiscountAmount,
-          totalAmount: persistedTotalAmount,
-          finalAmount: persistedFinalAmount
+          finalSettlementApplied: true,
         }
       }
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, error: { code: 'SYS_001', message: 'Internal server error' } });
-  }
-};
+      patch.remaining = 0
+      patch.remainingAmount = 0
+      patch.paymentStatus = "completed"
+    }
 
-/* -----------------------------------------------------------------------------
- * 2b) PATCH /api/quotations/:id/payment-details   (status-only, NO phases)
- * ---------------------------------------------------------------------------*/
+    // Installment rows are intentionally left untouched here.
+    const before = snapshotQuotation(quotation)
+    logFS("① BEFORE (db state)", before)
+    logFS("⚙ PATCH body", patch)
+    await quotation.update(patch)
+    await quotation.reload()
+    const after = snapshotQuotation(quotation)
+    logFS("② AFTER (db state)", after)
+    logFS("③ DIFF (what changed)", diffSnapshots(before, after))
+    if (body.finalSettlementApplied === true && after.finalSettlementApplied !== true) {
+      logFS("⚠ WARN finalSettlementApplied did NOT persist — check migration/model mapping", {
+        quotationId,
+      })
+    }
+    if (after.paidSum !== before.paidSum || after.installmentsCount !== before.installmentsCount) {
+      logFS("⚠ WARN installment rows changed during status-only update (should be untouched)", {
+        quotationId,
+      })
+    }
+    logFS("◀ OUT 200", { quotationId })
+    return res.json({ success: true, data: quotationToApiJson(quotation) })
+  } catch (e) {
+    logFS("✖ ERROR PATCH /payment-details", { quotationId, message: e?.message, stack: e?.stack })
+    return res.status(500).json({ success: false, error: { code: "SYS_001", message: "Internal error" } })
+  }
+}
+
+// -----------------------------------------------------------------------------
+// 2c) LAST FALLBACK — PATCH /api/quotations/:id/discount  (absolute INR)
+// -----------------------------------------------------------------------------
 /**
- * Body (status-only): { "paymentStatus": "completed", "remaining": 0,
- *                       "finalSettlementAmount": 2000, "finalSettlementApplied": true,
- *                       "replaceInstallments": false }
+ * Body: { "discount": 2000 }
+ *   0 < discount <= 100  → percentage (legacy)
+ *   discount > 100       → ABSOLUTE INR (Final Settlement uses this)
  *
- * When NO phases/installments array is present:
- *   - update status / remaining / finalSettlement flags ONLY
- *   - NEVER run the "total paid cannot exceed payable after discount" check
- *     (that VAL_012 caused the 290000-vs-212000 error when phases were re-sent)
- *   - NEVER delete/replace installment rows (paid stays 290000)
- *
- * When phases ARE present: delegate to the existing replace/upsert flow (§AB).
- * Refuse `completed` when an unpaid gap still exists without discount (VAL_013).
+ * When absolute, treat it the same as a pricing settlement update.
  */
-export const patchPaymentDetailsStatusOnly = async (req: Request, res: Response): Promise<void> => {
+export async function patchDiscountAbsolute(req, res) {
+  const user = requireAmUser(req, res)
+  if (!user) return
+  const quotationId = req.params.quotationId || req.params.id
+  logFS("▶ IN  PATCH /discount", { quotationId, user: user?.id, role: user?.role, body: req.body })
   try {
-    const role = req.user?.role;
-    const isAccountManager = role === 'account-management';
-    const isInventoryAdmin = role === 'admin';
-    const isQuotationAdmin = req.dealer && req.dealer.role === 'admin';
-    if (!isAccountManager && !isInventoryAdmin && !isQuotationAdmin) {
-      res.status(403).json({ success: false, error: { code: 'AUTH_004', message: 'Insufficient permissions' } });
-      return;
-    }
-
-    const { quotationId } = req.params;
-    const {
-      paymentMode,
-      paymentType,
-      paymentStatus: paymentStatusFromBody,
-      remaining: remainingFromBody,
-      remainingAmount: remainingAmountFromBody,
-      finalSettlementAmount,
-      finalSettlementApplied
-    } = req.body;
-
-    const phasePayload = req.body.phases ?? req.body.installments ?? req.body.paymentPhases;
-    const hasPhasePayload = Array.isArray(phasePayload); // Final Settlement omits this.
-
-    const quotation = await Quotation.findOne({ where: { id: quotationId, status: 'approved' } });
+    const quotation = await Quotation.findByPk(quotationId)
     if (!quotation) {
-      res.status(404).json({ success: false, error: { code: 'RES_001', message: 'Quotation not found' } });
-      return;
+      logFS("◀ OUT 404", { quotationId })
+      return res.status(404).json({ success: false, error: { code: "RES_001", message: "Not found" } })
     }
 
-    const discountAmt = Number(quotation.discountAmount || 0);
-    const amountAfterSubsidy = resolveAmountAfterSubsidy(quotation);
+    const raw = N((req.body || {}).discount)
+    const amountAfterSubsidy = pickAmountAfterSubsidy(quotation)
+    const isPercent = raw > 0 && raw <= 100
+    const discountAmount = isPercent ? round((raw / 100) * amountAfterSubsidy) : round(raw)
+    logFS("⚙ discount interpret", { raw, mode: isPercent ? "percent" : "absolute", discountAmount, amountAfterSubsidy })
 
-    const settlementFields = {
-      ...(finalSettlementAmount !== undefined ? { finalSettlementAmount: Number(finalSettlementAmount) } : {}),
-      ...(finalSettlementApplied !== undefined
-        ? { finalSettlementApplied: !!finalSettlementApplied, ...(finalSettlementApplied ? { finalSettlementAt: new Date() } : {}) }
-        : {})
-    };
-
-    if (hasPhasePayload) {
-      // --- Phases present: existing replace/upsert path (VAL_012 still enforced here) ---
-      const normalized = normalizePaymentPhases(phasePayload, req.user?.id);
-      if (shouldReplacePaymentPhases(req, true)) {
-        await replaceQuotationPaymentPhases(quotation.id, normalized, req.user?.id);
-      } else {
-        await upsertQuotationPaymentPhases(quotation.id, normalized, req.user?.id);
-      }
-      const merged = await loadQuotationPaymentPhases(quotation.id);
-      const totalPaid = sumPhasePaidAmounts(merged);
-      const payableCap = effectivePayableCap(amountAfterSubsidy, discountAmt);
-      if (totalPaid > payableCap + 0.01) {
-        res.status(400).json({
-          success: false,
-          error: { code: 'VAL_012', message: `Total paid (${totalPaid}) cannot exceed payable after discount (${payableCap})` }
-        });
-        return;
-      }
-      const rec = reconcilePaymentRemainingStatus(paymentStatusFromBody ?? quotation.paymentStatus, amountAfterSubsidy, totalPaid, discountAmt);
-      if (paymentStatusFromBody === 'completed' && rec.remaining > 0.01) {
-        res.status(400).json({ success: false, error: { code: 'VAL_013', message: `Cannot mark completed while remaining (${rec.remaining}) exists. Apply discount via PATCH /pricing first.` } });
-        return;
-      }
-      await quotation.update({
-        paymentMode: paymentMode ?? quotation.paymentMode,
-        paymentType: paymentType ?? quotation.paymentType,
-        paymentStatus: paymentStatusFromBody === 'completed' && rec.remaining <= 0.01 ? 'completed' : rec.paymentStatus,
-        paidAmount: totalPaid,
-        paymentPhases: merged,
-        remainingAmount: rec.remaining,
-        ...settlementFields
-      });
-    } else {
-      // --- STATUS-ONLY: do not touch installments; skip VAL_012 entirely ---
-      const paid = Number(quotation.paidAmount || 0);
-      const rec = reconcilePaymentRemainingStatus(paymentStatusFromBody ?? quotation.paymentStatus, amountAfterSubsidy, paid, discountAmt);
-
-      if (paymentStatusFromBody === 'completed' && rec.remaining > 0.01) {
-        res.status(400).json({
-          success: false,
-          error: { code: 'VAL_013', message: `Cannot mark completed while remaining (${rec.remaining}) exists. Apply remaining as discountAmount via PATCH /pricing first.` }
-        });
-        return;
-      }
-
-      const bodyRemaining =
-        remainingFromBody !== undefined ? Number(remainingFromBody)
-        : remainingAmountFromBody !== undefined ? Number(remainingAmountFromBody)
-        : undefined;
-
-      const remainingStored =
-        paymentStatusFromBody === 'completed' || (bodyRemaining !== undefined && bodyRemaining <= 0.01) ? 0
-        : bodyRemaining !== undefined ? Math.max(0, bodyRemaining)
-        : rec.remaining;
-
-      const resolvedStatus =
-        paymentStatusFromBody === 'completed' && remainingStored <= 0.01 ? 'completed'
-        : paymentStatusFromBody !== undefined ? paymentStatusFromBody
-        : rec.paymentStatus;
-
-      await quotation.update({
-        paymentMode: paymentMode ?? quotation.paymentMode,
-        paymentType: paymentType ?? quotation.paymentType,
-        ...(paymentStatusFromBody !== undefined || bodyRemaining !== undefined || finalSettlementApplied !== undefined
-          ? { paymentStatus: resolvedStatus, remainingAmount: remainingStored }
-          : {}),
-        ...settlementFields
-      });
-    }
-
-    await quotation.reload();
-    const responsePhases = await loadQuotationPaymentPhases(quotation.id);
-    res.json({ success: true, data: buildSettlementResponse(quotation, responsePhases) });
-  } catch (error) {
-    res.status(500).json({ success: false, error: { code: 'SYS_001', message: 'Internal server error' } });
+    const s = computeSettlement(quotation, { discountAmount })
+    await applySettlement(quotation, s, user)
+    logFS("◀ OUT 200", { quotationId, discountAmount: s.discountAmount })
+    return res.json({ success: true, data: quotationToApiJson(quotation) })
+  } catch (e) {
+    logFS("✖ ERROR PATCH /discount", { quotationId, message: e?.message, stack: e?.stack })
+    return res.status(500).json({ success: false, error: { code: "SYS_001", message: "Internal error" } })
   }
-};
+}
 
-/* -----------------------------------------------------------------------------
- * 3) PATCH /api/quotations/:id/discount   (last fallback — absolute INR)
- * ---------------------------------------------------------------------------*/
-/** Body: { "discount": 2000 }  →  discount > 100 = absolute INR (stored on discountAmount). */
-export const patchDiscountAbsolute = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const isAccountManager = req.user && (req.user.role === 'account-management' || req.user.role === 'hr');
-    const isInventoryAdmin = req.user && ['admin', 'super-admin', 'super-admin-manager'].includes(req.user.role);
-    if (!req.dealer && !isAccountManager && !isInventoryAdmin) {
-      res.status(401).json({ success: false, error: { code: 'AUTH_003', message: 'User not authenticated' } });
-      return;
-    }
-
-    const { quotationId } = req.params;
-    const where: any = { id: quotationId };
-    if (isAccountManager) where.status = 'approved';
-    else if (req.dealer && req.dealer.role !== 'admin') where.dealerId = req.dealer.id;
-
-    const quotation = await Quotation.findOne({ where, include: [{ model: QuotationProduct, as: 'products' }] });
-    if (!quotation) {
-      res.status(404).json({ success: false, error: { code: 'RES_001', message: 'Quotation not found' } });
-      return;
-    }
-
-    const raw = req.body.discountAmount ?? req.body.discount;
-    const value = raw !== undefined && raw !== null && raw !== '' ? Number(raw) : NaN;
-    if (!Number.isFinite(value) || value < 0) {
-      res.status(400).json({ success: false, error: { code: 'VAL_001', message: 'Discount must be a non-negative number' } });
-      return;
-    }
-
-    const amountAfterSubsidy = resolveAmountAfterSubsidy(quotation, quotation.products);
-    // discount ≤ 100 = percentage; > 100 (or discountAmount) = absolute INR.
-    const isAbsolute = req.body.discountAmount !== undefined || value > 100;
-    const discountAmount = isAbsolute ? value : (amountAfterSubsidy * value) / 100;
-    const newTotal = Math.max(0, amountAfterSubsidy - discountAmount);
-    const remaining = remainingAgainstAmountAfterSubsidy(amountAfterSubsidy, Number(quotation.paidAmount || 0), discountAmount);
-
-    await quotation.update({
-      discount: isAbsolute ? discountAmount : value,
-      discountAmount,
-      totalAmount: newTotal,
-      finalAmount: newTotal,
-      remainingAmount: remaining
-    });
-    await quotation.reload();
-
-    res.json({
-      success: true,
-      data: {
-        id: quotation.id,
-        discount: quotation.discount,
-        discountAmount,
-        discount_amount: discountAmount,
-        totalAmount: newTotal,
-        finalAmount: newTotal,
-        remaining,
-        remainingAmount: remaining
-      }
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, error: { code: 'SYS_001', message: 'Internal server error' } });
-  }
-};
-
-/* -----------------------------------------------------------------------------
- * GET extension — keep the button hidden after refresh
- * ---------------------------------------------------------------------------*/
+// -----------------------------------------------------------------------------
+// 3) GET must return the settled state (keeps the button hidden after refresh)
+// -----------------------------------------------------------------------------
 /**
- * Merge into every approved list-row and detail payload for GET /api/quotations
- * and GET /api/quotations/:id. Ensures the settled flag + reconciled remaining
- * survive reload on any device/role.
+ * Ensure `quotationToApiJson` (used by GET /quotations and GET /quotations/:id)
+ * includes ALL of the following so the SPA hides "Submit final settlement":
+ *
+ *   {
+ *     "subtotal": 292000,
+ *     "amountAfterSubsidy": 292000,
+ *     "discountAmount": 2000,               // and pricing.discountAmount
+ *     "remaining": 0,                       // and remainingAmount
+ *     "paymentStatus": "completed",
+ *     "finalSettlementApplied": true,       // <-- authoritative flag read by SPA
+ *     "finalSettlementAmount": 2000,        // <-- SPA also treats > 0 as settled
+ *     "pricing": {
+ *       "amountAfterSubsidy": 292000,
+ *       "discountAmount": 2000,
+ *       "finalAmount": 290000,
+ *       "finalSettlementApplied": true
+ *     },
+ *     "installments": [ ...unchanged paid rows... ]   // still sum to 290000
+ *   }
+ *
+ * The SPA (getQuotationFinalSettlementApplied / isFinalSettlementApplied) hides the
+ * button when ANY of these is true, in order:
+ *   1. finalSettlementApplied === true  (or final_settlement_applied, or pricing.finalSettlementApplied)
+ *   2. finalSettlementAmount > 0        (or final_settlement_amount)
+ *   3. discountAmount > 0 AND (originalSubtotal - paid) <= discountAmount
+ *
+ * Persist at least (1)+discountAmount so refresh across devices keeps it hidden.
  */
-export const extendQuotationJsonForSettlement = (quotation, phases = []) => {
-  const totalPaid = phases.length > 0 ? sumPhasePaidAmounts(phases) : Number(quotation.paidAmount || 0);
-  const amountAfterSubsidy = resolveAmountAfterSubsidy(quotation, quotation.products);
-  const discountAmount = Number(quotation.discountAmount || 0);
-  const { remaining, paymentStatus } = reconcilePaymentRemainingStatus(
-    quotation.paymentStatus,
-    amountAfterSubsidy,
-    totalPaid,
-    discountAmount
-  );
+export function extendQuotationJsonForSettlement(json, quotation) {
   return {
-    discountAmount,
-    discount_amount: discountAmount,
-    remaining,
-    remainingAmount: remaining,
-    paymentStatus,
-    // Persisted audit flags — the frontend hides the button when either is truthy.
-    finalSettlementApplied: !!quotation.finalSettlementApplied,
-    finalSettlementAmount: quotation.finalSettlementAmount != null ? Number(quotation.finalSettlementAmount) : null,
-    finalSettlementAt: quotation.finalSettlementAt || null,
-    finalSettlementBy: quotation.finalSettlementBy || null,
+    ...json,
+    finalSettlementApplied: quotation.finalSettlementApplied === true,
+    finalSettlementAmount: N(quotation.finalSettlementAmount),
+    remaining: N(json.remaining ?? quotation.remaining ?? quotation.remainingAmount),
+    remainingAmount: N(json.remainingAmount ?? quotation.remainingAmount ?? quotation.remaining),
     pricing: {
-      amountAfterSubsidy,
-      discountAmount,
-      totalAmount: Number(quotation.totalAmount || 0),
-      finalAmount: Number(quotation.finalAmount || 0)
-    }
-  };
-};
-
-/** Shared response builder for settlement + payment-details write endpoints. */
-const buildSettlementResponse = (quotation, phases = []) => {
-  const qAny = quotation as any;
-  return {
-    id: quotation.id,
-    quotationId: quotation.id,
-    subtotal: Number(quotation.subtotal || 0),
-    ...extendQuotationJsonForSettlement(quotation, phases),
-    installments: phases,
-    paymentPhases: phases,
-    payment_phases: phases,
-    paidAmount: qAny.paidAmount != null ? Number(qAny.paidAmount) : (phases.length ? sumPhasePaidAmounts(phases) : 0),
-    updatedAt: quotation.updatedAt
-  };
-};
-
-/* -----------------------------------------------------------------------------
- * ROUTE REGISTRATION (routes/quotationRoutes.ts)
- * ---------------------------------------------------------------------------*/
-/*
-import { validate } from '../middleware/validate';
-import {
-  finalSettlementSchema,
-  updatePricingSchema,
-  updatePaymentDetailsSchema,
-  updateDiscountSchema
-} from '../validations/quotationValidations';
-
-// authorizeDealerOrAccountManager allows dealer JWT, account-management, hr, inventory admin.
-router.post ('/:quotationId/final-settlement', authorizeDealerOrAccountManager, validate(finalSettlementSchema),     postFinalSettlement);
-router.patch('/:quotationId/pricing',          authorizeDealerOrAccountManager, validate(updatePricingSchema),        patchPricingWithSettlement);
-router.patch('/:quotationId/payment-details',  authorizeDealerOrAccountManager, validate(updatePaymentDetailsSchema), patchPaymentDetailsStatusOnly);
-router.patch('/:quotationId/discount',         authorizeDealerOrAccountManager, validate(updateDiscountSchema),       patchDiscountAbsolute);
-*/
-
-/* -----------------------------------------------------------------------------
- * VALIDATION (validations/quotationValidations.ts) — key points
- * ---------------------------------------------------------------------------*/
-/*
-// finalSettlementSchema: { amount? , finalSettlementAmount? } — at least one required.
-// updatePricingSchema:   subtotal OPTIONAL; discountAmount / finalAmount / totalAmount optional numbers.
-// updatePaymentDetailsSchema:
-//   - phases/installments/paymentPhases OPTIONAL
-//   - accept status-only payload: paymentStatus / remaining / remainingAmount /
-//     finalSettlementAmount / finalSettlementApplied
-//   - CRITICAL: when no phase array is sent, OMIT `phases` from the parsed output
-//     (do not coerce to []), so the controller takes the status-only branch and skips VAL_012.
-*/
-
-/* -----------------------------------------------------------------------------
- * MIGRATION (database/migrations/XXXXXXXXXXXXXX-final-settlement-fields.js)
- * ---------------------------------------------------------------------------*/
-/*
-'use strict';
-module.exports = {
-  async up(queryInterface, Sequelize) {
-    const table = await queryInterface.describeTable('quotations');
-    const add = async (col, spec) => { if (!table[col]) await queryInterface.addColumn('quotations', col, spec); };
-    await add('finalSettlementAmount',  { type: Sequelize.DECIMAL(14, 2), allowNull: true });
-    await add('finalSettlementApplied', { type: Sequelize.BOOLEAN, allowNull: false, defaultValue: false });
-    await add('finalSettlementAt',      { type: Sequelize.DATE, allowNull: true });
-    await add('finalSettlementBy',      { type: Sequelize.STRING(50), allowNull: true });
-  },
-  async down(queryInterface) {
-    for (const col of ['finalSettlementBy', 'finalSettlementAt', 'finalSettlementApplied', 'finalSettlementAmount']) {
-      await queryInterface.removeColumn('quotations', col).catch(() => {});
-    }
+      ...(json.pricing || {}),
+      finalSettlementApplied: quotation.finalSettlementApplied === true,
+    },
   }
-};
+}
 
-// This repo uses camelCase (quoted) columns. If your DB uses snake_case, the equivalent is:
-//   ALTER TABLE quotations
-//     ADD COLUMN IF NOT EXISTS final_settlement_applied BOOLEAN DEFAULT FALSE,
-//     ADD COLUMN IF NOT EXISTS final_settlement_amount  NUMERIC(12,2) DEFAULT 0,
-//     ADD COLUMN IF NOT EXISTS final_settlement_at      TIMESTAMPTZ NULL,
-//     ADD COLUMN IF NOT EXISTS final_settlement_by      UUID NULL,
-//     ADD COLUMN IF NOT EXISTS remaining_amount         NUMERIC(12,2) DEFAULT 0;
-//
-// Sequelize model attrs (models/Quotation.ts):
-//   finalSettlementAmount:  { type: DataTypes.DECIMAL(14, 2), allowNull: true }
-//   finalSettlementApplied: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false }
-//   finalSettlementAt:      { type: DataTypes.DATE, allowNull: true }
-//   finalSettlementBy:      { type: DataTypes.STRING(50), allowNull: true }
-*/
-
-/* -----------------------------------------------------------------------------
- * QA CHECKLIST
- * ---------------------------------------------------------------------------*/
+// -----------------------------------------------------------------------------
+// 4) Route registration (Express)
+// -----------------------------------------------------------------------------
 /*
-1. Remaining ₹2,000 → POST /final-settlement { amount: 2000 } → discountAmount +2000, remaining 0,
-   paymentStatus completed, finalSettlementApplied true.
-2. Call POST /final-settlement twice → discountAmount does NOT double (idempotent).
-2b. SUSHILA mismatch: server amountAfterSubsidy 189000, paid 189000 (remaining 0), settle 1000
-    → 200, NO "Settlement amount (1000) cannot exceed remaining (0)"; marks completed, remaining 0,
-    finalSettlementApplied true, finalSettlementAmount 1000 (audit). discount capped at
-    amountAfterSubsidy − paid (= 0 here), so paid never exceeds payable.
-3. PATCH /pricing { discountAmount: 2000 } with NO subtotal → 200 (no "subtotal required").
-4. PATCH /pricing with finalAmount ≤ amountAfterSubsidy → no "Final amount must be between 0 and
-   amount after subsidy".
-5. PATCH /payment-details status-only (no phases) → 200; NEVER returns VAL_012 (290000 vs 212000);
-   installment rows unchanged (paid stays 290000).
-6. Paid 150000 of 185000, no discount → GET remaining 35000, paymentStatus partial
-   (NOT remaining 0 / completed).
-7. After settle → hard refresh (any device/role) → GET returns finalSettlementApplied true,
-   remaining 0, completed → button stays hidden.
-8. API on but not persisted → frontend shows "Settlement not saved" and button remains
-   (no localStorage fallback). Backend MUST persist.
+router.post ("/quotations/:id/final-settlement", authRequired, postFinalSettlement)
+router.patch("/quotations/:id/pricing",          authRequired, patchPricingWithSettlement)
+router.patch("/quotations/:id/payment-details",  authRequired, patchPaymentDetailsStatusOnly) // routes to replace flow when phases present
+router.patch("/quotations/:id/discount",         authRequired, patchDiscountAbsolute)
 */
 
-export {};
+// -----------------------------------------------------------------------------
+// 5) DB migration (PostgreSQL)
+// -----------------------------------------------------------------------------
+/*
+ALTER TABLE quotations
+  ADD COLUMN IF NOT EXISTS final_settlement_applied BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS final_settlement_amount  NUMERIC(12,2) DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS final_settlement_at      TIMESTAMPTZ NULL,
+  ADD COLUMN IF NOT EXISTS final_settlement_by      UUID NULL,
+  ADD COLUMN IF NOT EXISTS remaining_amount         NUMERIC(12,2) DEFAULT 0;
+
+-- CRITICAL: settlement stores the ABSOLUTE INR write-off in `discount` too. If `discount`
+-- is numeric(5,2) (legacy percentage column, max 999.99), writing e.g. 7000 throws
+-- "numeric field overflow" → 500 on settle. Widen it to match the money columns:
+ALTER TABLE quotations ALTER COLUMN discount TYPE NUMERIC(12,2);
+
+-- This repo uses camelCase (quoted) columns; equivalent Sequelize migrations already applied:
+--   20260720140000-final-settlement-fields.js  (finalSettlementAmount/Applied/At)
+--   20260721120000-final-settlement-by.js       (finalSettlementBy)
+--   20260721170000-widen-discount-column.js     (discount 5,2 → 12,2 — fixes the 500)
+
+-- Sequelize model attributes:
+--   finalSettlementApplied: { type: DataTypes.BOOLEAN, defaultValue: false, field: 'final_settlement_applied' }
+--   finalSettlementAmount:  { type: DataTypes.DECIMAL(12,2), defaultValue: 0, field: 'final_settlement_amount' }
+--   finalSettlementAt:      { type: DataTypes.DATE, allowNull: true, field: 'final_settlement_at' }
+--   finalSettlementBy:      { type: DataTypes.UUID, allowNull: true, field: 'final_settlement_by' }
+*/
+
+// -----------------------------------------------------------------------------
+// 6) QA checklist
+// -----------------------------------------------------------------------------
+/*
+ 1. JITENDRA: paid 290000, remaining 2000 → POST /final-settlement { amount:2000 }
+    → 200; GET returns discountAmount 2000, remaining 0, paymentStatus completed,
+      finalSettlementApplied true, installments still sum 290000.
+ 2. Refresh (and OTHER login / device / role): button stays hidden, remaining 0, `d` shows —
+    because `final_settlement_applied` + `final_settlement_amount` are PERSISTED and returned
+    on GET. This is the "make it global, not local cache" requirement.
+ 2b. Mismatch case (SUSHILA: subtotal 190000 > amountAfterSubsidy 189000, server remaining 0):
+    the FLAG-ONLY PATCH /payment-details (attempt 4) must still 200 and persist
+    final_settlement_applied=true so all logins see it — do NOT 400 with "cannot exceed remaining".
+ 3. Idempotent: POST /final-settlement twice → discount stays 2000 (no double-add), still 200.
+ 4. NO "total paid cannot exceed payable after discount" for settlement calls.
+ 5. NO "Final amount must be between 0 and amount after subsidy" on pricing PATCH.
+ 6. Ram lal: paid 150000 / cap 185000 / discount 0 → BEFORE settle GET remaining 35000,
+    partial; AFTER settle 35000 → completed, discountAmount 35000, finalSettlementApplied true.
+ 7. Normal installment Submit WITH phases still replaces rows (BACKEND_INSTALLMENT_REPLACE.ts).
+ 8. Auth: dealer/installer/metering roles get 403 on all four endpoints.
+*/
+
+export {}

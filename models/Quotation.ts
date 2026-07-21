@@ -252,7 +252,7 @@ Quotation.init(
       defaultValue: 'pending'
     },
     discount: {
-      type: DataTypes.DECIMAL(5, 2),
+      type: DataTypes.DECIMAL(12, 2),
       defaultValue: 0
     },
     subtotal: {

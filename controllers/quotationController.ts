@@ -3018,6 +3018,7 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
       return;
     }
 
+    const { actorId } = resolveActorForAudit(req);
     const settlementFields = {
       ...(finalSettlementAmount !== undefined
         ? { finalSettlementAmount: Number(finalSettlementAmount) }
@@ -3025,12 +3026,13 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
       ...(finalSettlementApplied !== undefined
         ? {
             finalSettlementApplied: !!finalSettlementApplied,
-            ...(finalSettlementApplied ? { finalSettlementAt: new Date() } : {})
+            ...(finalSettlementApplied
+              ? { finalSettlementAt: new Date(), finalSettlementBy: actorId }
+              : {})
           }
         : {})
     };
 
-    const { actorId } = resolveActorForAudit(req);
     if (hasPhasePayload) {
       const normalizedPhases = normalizePaymentPhases(phasePayload, actorId);
       const replacePhases = shouldReplacePaymentPhases(req, true);
@@ -3102,8 +3104,48 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
         paymentPlanUpdatedBy: actorId,
         paymentPlanUpdatedAt: new Date()
       });
+    } else if (finalSettlementApplied === true) {
+      // Flag-only Final Settlement (fallback attempt): persist the write-off itself so this
+      // call alone settles even if PATCH /pricing never ran. Do NOT touch installments; skip
+      // VAL_012; never reject with "cannot exceed remaining". Grow discount only up to
+      // amountAfterSubsidy − paid so payable never drops below paid (subtotal-vs-AAS mismatch).
+      const existingDiscount = Number((quotation as any).discountAmount || 0);
+      const amountAfterSubsidyCap = resolveAmountAfterSubsidy(quotation as any);
+      const paidAmt = Number(quotation.paidAmount || 0);
+      const discountToClear = Math.max(
+        0,
+        amountAfterSubsidyCap - Math.min(paidAmt, amountAfterSubsidyCap)
+      );
+      const newDiscount = Math.min(
+        amountAfterSubsidyCap,
+        Math.max(existingDiscount, discountToClear)
+      );
+      const newFinalAmount = Math.max(0, amountAfterSubsidyCap - newDiscount);
+      // Audit: record what AM asked to write off (may exceed applied discount in mismatch case).
+      const auditSettlement =
+        finalSettlementAmount !== undefined
+          ? Number(finalSettlementAmount)
+          : Math.max(0, amountAfterSubsidyCap - existingDiscount - paidAmt);
+
+      await quotation.update({
+        paymentMode: paymentMode !== undefined ? paymentMode : quotation.paymentMode,
+        paymentType: paymentType !== undefined ? paymentType : (quotation as any).paymentType,
+        discount: newDiscount,
+        discountAmount: newDiscount,
+        totalAmount: newFinalAmount,
+        finalAmount: newFinalAmount,
+        remainingAmount: 0,
+        paymentStatus: 'completed',
+        finalSettlementApplied: true,
+        finalSettlementAmount: auditSettlement,
+        finalSettlementAt: new Date(),
+        finalSettlementBy: actorId,
+        ...(subsidyCheques !== undefined ? { subsidyCheques } : {}),
+        paymentPlanUpdatedBy: actorId,
+        paymentPlanUpdatedAt: new Date()
+      });
     } else {
-      // Status-only Final Settlement — do not touch installments; skip VAL_012.
+      // Status-only update (no settlement flag) — do not touch installments; skip VAL_012.
       const discountAmt = Number((quotation as any).discountAmount || 0);
       const amountAfterSubsidyCap = resolveAmountAfterSubsidy(quotation as any);
       const paidAmt = Number(quotation.paidAmount || 0);
@@ -3114,13 +3156,14 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
         discountAmt
       );
 
+      // Guard: don't fake completion when an unpaid gap exists and no settlement flag was sent.
       if (paymentStatusFromBody === 'completed' && reconciled.remaining > 0.01) {
         res.status(400).json({
           success: false,
           error: {
             code: 'VAL_013',
             message:
-              `Cannot mark payment completed while unpaid remaining (${reconciled.remaining}) exists. Apply remaining as discountAmount via PATCH /pricing first.`
+              `Cannot mark payment completed while unpaid remaining (${reconciled.remaining}) exists. Apply remaining as discountAmount via PATCH /pricing first, or send finalSettlementApplied: true.`
           }
         });
         return;
@@ -3150,7 +3193,7 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
       await quotation.update({
         paymentMode: paymentMode !== undefined ? paymentMode : quotation.paymentMode,
         paymentType: paymentType !== undefined ? paymentType : (quotation as any).paymentType,
-        ...(paymentStatusFromBody !== undefined || bodyRemaining !== undefined || finalSettlementApplied !== undefined
+        ...(paymentStatusFromBody !== undefined || bodyRemaining !== undefined
           ? { paymentStatus: resolvedPaymentStatus, remainingAmount: remainingStored }
           : {}),
         ...settlementFields,
