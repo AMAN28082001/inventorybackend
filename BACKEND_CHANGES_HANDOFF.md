@@ -71,6 +71,7 @@ Optional: `TZ=Asia/Kolkata` if weekly HR reports must match SPA Mon–Sun in IST
 | PATCH payment phases → next GET shows updated phase array | ✅ `updateQuotationPaymentDetails` + `fetchPaymentPhasesByQuotationIds` |
 | **Installment remove persists** (`replaceInstallments` / `PUT /installments` deletes orphans) | ✅ `utils/quotationPaymentPhases.ts` — see `BACKEND_INSTALLMENT_REPLACE.ts` |
 | **Payment Excel journey columns** (`installationStatus`, metering fields on approved list) | ✅ `utils/paymentExcelJourneyStatus.ts` — see `BACKEND_PAYMENT_EXCEL_JOURNEY_STATUS.ts` |
+| **Final Settlement** (remaining → `discountAmount`; `POST /final-settlement` atomic; status-only payment-details; persisted `finalSettlementApplied`) | ✅ `BACKEND_FINAL_SETTLEMENT.md` + `BACKEND_FINAL_SETTLEMENT.ts` / §AD |
 | **Super Admin quotation login + inventory JWT** (`role: super-admin` shared token) | ✅ `utils/inventoryRole.ts` — see `BACKEND_SUPER_ADMIN_QUOTATION_LOGIN.ts` / §AD |
 | `?dealerId=` / `?installmentCount=` on approved list | ❌ Optional |
 | `GET /admin/overview/dealer-stats` | ❌ Optional |
@@ -819,11 +820,13 @@ On multipart routes (quotation documents, visitor/dealer visit complete, meterin
 - **Response:** `resolveQuotationDocumentUrls` — presigned GET URLs for UI “View file”.
 - **Validation:** `phoneNumber`, `emailId`, `electricityKno` when provided; **`VALIDATION_ERROR`** + `details[]` on bad input; S3/DB errors mapped to **400**/**413** where possible.
 
-**File fields (KYC):** `aadharFront`, `aadharBack`, `compliantAadharFront`, `compliantAadharBack`, `compliantPanImage`, `compliantBankPassbookImage`, `panImage`, `electricityBillImage`, `bankPassbookImage`, `geotagRoofPhoto`, `customerWithHousePhoto`, `propertyDocumentPdf`.
+**File fields (KYC):** `aadharFront`, `aadharBack`, `compliantAadharFront`, `compliantAadharBack`, `compliantPanImage`, `compliantBankPassbookImage`, `panImage`, `electricityBillImage`, `bankPassbookImage`, `geotagRoofPhoto`, `customerWithHousePhoto`, `propertyDocumentPdf` (**PDF optional** — Jul 2026; omit on submit without **400**).
 
 **Final confirmation (use §20 POST — not KYC PATCH):** `customerFinalBillFile`, `panelWarrantyFile`, `inverterWarrantyFile`, `workCompletionWarrantyFile`.
 
 **Text fields:** `isCompliantSenior`, `aadharNumber`, `phoneNumber`, `emailId`, `panNumber`, `electricityKno`, bank block, compliant block, etc.
+
+**Partial updates:** missing file part on PATCH → keep existing stored key/URL. `propertyDocumentPdf` may remain null if never uploaded.
 
 **Electricity bill:** `electricityBillImage` — **PDF only** (`application/pdf`, `.pdf`), max **30 MB** per file (multer limit).
 
@@ -906,6 +909,16 @@ Dropdown filters (`All Dealers` / specific dealer / `Unassigned`) run in the bro
 | `?installmentCount=2` | Exact phase-row count match |
 
 **Code:** `controllers/quotationController.ts` → `getQuotations`, `updateQuotationPaymentDetails`.
+
+### 12.6 — Final Settlement (July 2026)
+
+**Spec:** [`BACKEND_FINAL_SETTLEMENT.md`](./BACKEND_FINAL_SETTLEMENT.md) · **Copy-paste controllers:** [`BACKEND_FINAL_SETTLEMENT.ts`](./BACKEND_FINAL_SETTLEMENT.ts) · `BACKEND_CHANGES_REQUIRED.md` §AD
+
+Client calls **`api.quotations.finalizeSettlement`**, which **persists to the DB and throws if nothing saved** (no localStorage fallback when the API is on). Settlement amount = **Remaining only** → `discountAmount` (`d`).
+
+**Try-order:** (1) **`POST /final-settlement`** (preferred, atomic, idempotent) → else (2) `PATCH /pricing` (absolute `discountAmount`, no `subtotal`) + `PATCH /payment-details` **without phases** (`paymentStatus=completed`, `remaining=0`, `finalSettlementAmount`) → else (3) `PATCH /discount` (absolute INR).
+
+**Do not** re-PUT installments (that caused `Total paid (290000) cannot exceed payable after discount (212000)`). GET must return **`finalSettlementApplied: true`** (and/or `finalSettlementAmount > 0`) so the button stays hidden after refresh on any device/role. Never return `remaining:0`/`completed` while an unpaid gap exists without discount.
 
 ---
 

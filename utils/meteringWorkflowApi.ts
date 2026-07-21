@@ -51,11 +51,14 @@ export const meteringWorkflowApiFields = (q: {
   mcoAt?: Date | string | null;
   completionAt?: Date | string | null;
   meterInstallationPendingAt?: Date | string | null;
+  meteringWccAfterDiscom?: boolean | null;
+  meteringWccAfterDiscomAt?: Date | string | null;
 }) => {
   const rawInst = q.installationStatus ?? null;
   const normalized = normalizeMeteringWorkflowStatus(rawInst) || rawInst;
   const meteringStatus = deriveMeteringStatus(rawInst);
   const mcoStatus = normalized === 'mco' ? 'mco' : null;
+  const wccAfterDiscom = Boolean(q.meteringWccAfterDiscom);
 
   return {
     installationStatus: normalized,
@@ -70,9 +73,25 @@ export const meteringWorkflowApiFields = (q: {
     metering_approved_at: q.meteringApprovedAt ?? null,
     meterInstallationPendingAt: q.meterInstallationPendingAt ?? null,
     meter_installation_pending_at: q.meterInstallationPendingAt ?? null,
+    meteringWccAfterDiscom: wccAfterDiscom,
+    metering_wcc_after_discom: wccAfterDiscom,
+    meteringWccAfterDiscomAt: q.meteringWccAfterDiscomAt ?? null,
+    metering_wcc_after_discom_at: q.meteringWccAfterDiscomAt ?? null,
     mcoAt: q.mcoAt ?? null,
     mco_at: q.mcoAt ?? null,
     completionAt: q.completionAt ?? null,
     completion_at: q.completionAt ?? null
   };
+};
+
+/** Parse post-Discom WCC flag from request body (camel / snake). */
+export const parseMeteringWccAfterDiscomFlag = (
+  body: Record<string, unknown> | null | undefined
+): boolean | undefined => {
+  if (!body) return undefined;
+  const raw = body.meteringWccAfterDiscom ?? body.metering_wcc_after_discom;
+  if (raw === undefined || raw === null || raw === '') return undefined;
+  if (raw === true || raw === 'true' || raw === 1 || raw === '1') return true;
+  if (raw === false || raw === 'false' || raw === 0 || raw === '0') return false;
+  return undefined;
 };

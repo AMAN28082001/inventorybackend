@@ -382,7 +382,9 @@ const getWorkflowQueue = async (
               meteringApprovedAt: q.meteringApprovedAt,
               mcoAt: q.mcoAt,
               completionAt: q.completionAt,
-              meterInstallationPendingAt: (q as any).meterInstallationPendingAt
+              meterInstallationPendingAt: (q as any).meterInstallationPendingAt,
+              meteringWccAfterDiscom: (q as any).meteringWccAfterDiscom,
+              meteringWccAfterDiscomAt: (q as any).meteringWccAfterDiscomAt
             }),
             ...(await buildMeterInstallationPendingPhotoApiFields({
               meterInstallationPhotoUrl: (q as any).meterInstallationPhotoUrl,
@@ -629,6 +631,8 @@ export const meteringStatusUpdate = async (req: Request, res: Response): Promise
       if (action === 'send_to_mco') {
         patch.installationStatus = 'mco';
         patch.mcoAt = new Date();
+        patch.meteringWccAfterDiscom = false;
+        patch.meteringWccAfterDiscomAt = null;
       }
       if (action === 'mark_completed') {
         const docs = await QuotationInstallationDoc.findAll({
@@ -737,6 +741,8 @@ export const meteringStatusUpdate = async (req: Request, res: Response): Promise
         if (!(quotation as any).meterInstallationPendingAt) {
           patch.meterInstallationPendingAt = new Date();
         }
+        patch.meteringWccAfterDiscom = false;
+        patch.meteringWccAfterDiscomAt = null;
       } else if (target === 'mco') {
         if (!valid.send_to_mco.includes(current)) {
           res.status(409).json({
@@ -747,6 +753,8 @@ export const meteringStatusUpdate = async (req: Request, res: Response): Promise
         }
         patch.installationStatus = 'mco';
         patch.mcoAt = new Date();
+        patch.meteringWccAfterDiscom = false;
+        patch.meteringWccAfterDiscomAt = null;
       }
     }
 
@@ -762,7 +770,9 @@ export const meteringStatusUpdate = async (req: Request, res: Response): Promise
           meteringApprovedAt: quotation.meteringApprovedAt,
           mcoAt: quotation.mcoAt,
           completionAt: quotation.completionAt,
-          meterInstallationPendingAt: (quotation as any).meterInstallationPendingAt
+          meterInstallationPendingAt: (quotation as any).meterInstallationPendingAt,
+          meteringWccAfterDiscom: (quotation as any).meteringWccAfterDiscom,
+          meteringWccAfterDiscomAt: (quotation as any).meteringWccAfterDiscomAt
         }),
         meteringId: quotation.meteringId || null,
         meteringActionAt: quotation.meteringActionAt || null,

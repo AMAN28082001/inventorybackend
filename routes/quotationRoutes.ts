@@ -17,6 +17,7 @@ import {
   updateQuotationProducts,
   updateQuotationPricing,
   updateQuotationPaymentDetails,
+  submitQuotationFinalSettlement,
   updateQuotationInstallationRelease,
   updateQuotationInstallationScheduledAt,
   downloadQuotationsExcel,
@@ -59,7 +60,7 @@ import {
 } from '../middleware/authQuotation';
 import { validate } from '../middleware/validate';
 import { logRequestBeforeValidation, logRequestAfterValidation } from '../middleware/requestLogger';
-import { createQuotationSchema, updateDiscountSchema, updateProductsSchema, updatePricingSchema, updatePaymentDetailsSchema, updatePaymentModeSchema, updateInstallationReleaseSchema, updateInstallationScheduledAtSchema } from '../validations/quotationValidations';
+import { createQuotationSchema, updateDiscountSchema, updateProductsSchema, updatePricingSchema, updatePaymentDetailsSchema, updatePaymentModeSchema, updateInstallationReleaseSchema, updateInstallationScheduledAtSchema, finalSettlementSchema } from '../validations/quotationValidations';
 import { patchQuotationInstallationTeamSchema } from '../validations/adminValidations';
 import {
   meteringDetailsSchema,
@@ -650,7 +651,7 @@ router.get('/:quotationId', authorizeDealerAdminOrVisitor, getQuotationById);
  *       401:
  *         description: Unauthorized
  */
-router.patch('/:quotationId/discount', authorizeDealer, validate(updateDiscountSchema), updateQuotationDiscount);
+router.patch('/:quotationId/discount', authorizeDealerOrAccountManager, validate(updateDiscountSchema), updateQuotationDiscount);
 
 /**
  * @swagger
@@ -852,6 +853,7 @@ router.patch('/:quotationId/products', authorizeDealerOrAccountManager, validate
  *         description: Unauthorized
  */
 router.patch('/:quotationId/pricing', authorizeDealerOrAccountManager, validate(updatePricingSchema), updateQuotationPricing);
+router.post('/:quotationId/final-settlement', authorizeDealerOrAccountManager, validate(finalSettlementSchema), submitQuotationFinalSettlement);
 router.patch('/:quotationId/payment-details', authorizeDealerOrAccountManager, validate(updatePaymentDetailsSchema), updateQuotationPaymentDetails);
 router.patch('/:quotationId/installments', authorizeDealerOrAccountManager, validate(updatePaymentDetailsSchema), updateQuotationPaymentDetails);
 router.put('/:quotationId/installments', authorizeDealerOrAccountManager, validate(updatePaymentDetailsSchema), updateQuotationPaymentDetails);

@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { Quotation, QuotationPaymentPhase, QuotationInstallationDoc, QuotationProduct, CustomPanel, Dealer, Customer, Visitor } from '../models/index-quotation';
+import { Quotation, QuotationPaymentPhase, QuotationInstallationDoc, QuotationProduct, CustomPanel, Dealer, Customer, Visitor, Visit } from '../models/index-quotation';
 import { Op } from 'sequelize';
 import { logError, logInfo } from '../utils/loggerHelper';
 import { normalizePaymentModeInput } from '../utils/paymentMode';
@@ -31,7 +31,8 @@ import {
 import {
   METER_INSTALLATION_PENDING_STATUS,
   meteringWorkflowApiFields,
-  normalizeMeteringWorkflowStatus
+  normalizeMeteringWorkflowStatus,
+  parseMeteringWccAfterDiscomFlag
 } from '../utils/meteringWorkflowApi';
 import {
   INSTALLATION_PARTIAL_STATUS,
@@ -39,6 +40,14 @@ import {
   isInstallationPartialApprovedStatus,
   meteringDetailsEchoFields
 } from '../utils/installationPartialApi';
+import {
+  buildAdminListCustomerFields,
+  adminQuotationLocationApiFields,
+  adminQuotationStatusUpdatedAtFields,
+  adminQuotationPricingNestedFields,
+  deriveLoanCashAmountFields,
+  buildPrimaryVisitLocationByQuotationId
+} from '../utils/adminQuotationListApi';
 import { persistQuotationSystemKw } from '../utils/persistQuotationSystemKw';
 
 const sumPhasePaidAmounts = (phases: { paidAmount?: number }[]): number =>
@@ -65,11 +74,43 @@ const SEND_TO_METERING_FROM_STATUSES = new Set([
   'metering_in_progress'
 ]);
 
-const remainingAgainstSubtotal = (subtotal: number | null | undefined, totalPaid: number): number => {
-  const base = Number(subtotal) || 0;
+/**
+ * Remaining = amountAfterSubsidy − discountAmount − total paid.
+ * Final Settlement writes off unpaid balance via discountAmount so remaining reaches 0.
+ */
+const remainingAgainstSubtotal = (
+  amountAfterSubsidyOrSubtotal: number | null | undefined,
+  totalPaid: number,
+  discountAmount: number | null | undefined = 0
+): number => {
+  const base = Number(amountAfterSubsidyOrSubtotal) || 0;
+  const discount = Math.max(0, Number(discountAmount) || 0);
   const paid = Number(totalPaid);
   const safePaid = isNaN(paid) ? 0 : paid;
-  return Math.max(0, base - safePaid);
+  return Math.max(0, base - discount - safePaid);
+};
+
+const resolveAmountAfterSubsidyForRemaining = (q: {
+  subtotal?: number | null;
+  amountAfterSubsidy?: number | null;
+  centralSubsidy?: number | null;
+  stateSubsidy?: number | null;
+  products?: { centralSubsidy?: number | null; stateSubsidy?: number | null } | null;
+}): number => {
+  const subtotal = Number(q.subtotal || 0);
+  const rawStored = q.amountAfterSubsidy;
+  const stored = Number(rawStored);
+  if (
+    rawStored !== undefined &&
+    rawStored !== null &&
+    Number.isFinite(stored) &&
+    !(stored === 0 && subtotal > 0)
+  ) {
+    return Math.max(0, stored);
+  }
+  const central = Number(q.products?.centralSubsidy ?? q.centralSubsidy ?? 0);
+  const state = Number(q.products?.stateSubsidy ?? q.stateSubsidy ?? 0);
+  return Math.max(0, subtotal - central - state);
 };
 
 const resolveDealerIdForInventoryUser = async (userId: string, username?: string): Promise<string | null> => {
@@ -271,7 +312,17 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
         {
           model: Customer,
           as: 'customer',
-          attributes: ['firstName', 'lastName', 'mobile']
+          attributes: [
+            'id',
+            'firstName',
+            'lastName',
+            'mobile',
+            'email',
+            'streetAddress',
+            'city',
+            'state',
+            'pincode'
+          ]
         },
         {
           model: QuotationProduct,
@@ -296,6 +347,22 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
     });
     const installationDocMap = await batchLoadInstallationDocsByQuotationId(
       quotations.rows.map((q: any) => String(q.id))
+    );
+    const quotationIds = quotations.rows.map((q: any) => String(q.id));
+    const visitRows = quotationIds.length
+      ? await Visit.findAll({
+          where: { quotationId: { [Op.in]: quotationIds } },
+          attributes: ['quotationId', 'location', 'visitDate', 'visitTime'],
+          order: [
+            ['visitDate', 'ASC'],
+            ['visitTime', 'ASC']
+          ]
+        })
+      : [];
+    const visitLocationByQuotationId = buildPrimaryVisitLocationByQuotationId(
+      visitRows.map((v) =>
+        typeof (v as any).toJSON === 'function' ? (v as any).toJSON() : v
+      )
     );
 
     const phaseMap = new Map<string, any[]>();
@@ -322,10 +389,27 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
         quotations: await Promise.all(quotations.rows.map(async (q) => {
           const qAny = q as any;
           const phases = phaseMap.get(String(q.id)) || qAny.paymentPhases || [];
-          const subtotalNum = Number(q.subtotal || 0);
+          const amountAfterSubsidyNum = resolveAmountAfterSubsidyForRemaining({
+            ...(q as any),
+            products: qAny.products
+          });
           const totalPaidForRemaining =
             phases.length > 0 ? sumPhasePaidAmounts(phases) : Number(q.paidAmount || 0);
-          const remainingAmount = remainingAgainstSubtotal(subtotalNum, totalPaidForRemaining);
+          const discountAmt = Number((q as any).discountAmount || 0);
+          let remainingAmount = remainingAgainstSubtotal(
+            amountAfterSubsidyNum,
+            totalPaidForRemaining,
+            discountAmt
+          );
+          let paymentStatusOut = q.paymentStatus;
+          if (remainingAmount > 0.01) {
+            paymentStatusOut = totalPaidForRemaining <= 0.01 ? 'pending' : 'partial';
+          } else if (q.paymentStatus === 'completed') {
+            remainingAmount = 0;
+            paymentStatusOut = 'completed';
+          } else {
+            remainingAmount = 0;
+          }
           const row =
             typeof qAny.get === 'function'
               ? (qAny.get({ plain: true }) as Record<string, unknown>)
@@ -343,6 +427,10 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
             q.systemType,
             (q as any).systemKw ?? row.system_kw
           );
+          const amountFields = quotationAmountApiFields(row);
+          const filePaymentType = String(
+            (q as any).filePaymentType ?? (q as any).file_payment_type ?? ''
+          ).trim();
           return {
             id: q.id,
             dealerId: q.dealerId,
@@ -356,17 +444,27 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
               username: qAny.dealer.username ?? null,
               role: qAny.dealer.role ?? null
             } : null,
-            customer: qAny.customer ? {
-              firstName: qAny.customer.firstName,
-              lastName: qAny.customer.lastName,
-              mobile: qAny.customer.mobile
-            } : null,
+            ...buildAdminListCustomerFields(qAny.customer),
+            ...adminQuotationLocationApiFields(
+              visitLocationByQuotationId.get(String(q.id)),
+              qAny.customer
+            ),
             ...productListFields,
             systemType: q.systemType,
             ...quotationPaymentApiFields(row),
             ...quotationAdminMetadataFields(row),
-            ...quotationAmountApiFields(row),
-            paymentStatus: (q as any).paymentStatus || null,
+            ...amountFields,
+            ...adminQuotationPricingNestedFields(amountFields),
+            ...deriveLoanCashAmountFields(filePaymentType, amountFields.subtotal, phases),
+            ...adminQuotationStatusUpdatedAtFields({
+              updatedAt: (q as any).updatedAt,
+              meteringActionAt: (q as any).meteringActionAt,
+              meteringApprovedAt: (q as any).meteringApprovedAt,
+              installerApprovedAt: (q as any).installerApprovedAt,
+              approvedAt: (q as any).approvedAt,
+              mcoAt: (q as any).mcoAt
+            }),
+            paymentStatus: paymentStatusOut || null,
             paidAmount: q.paidAmount !== undefined && q.paidAmount !== null ? Number(q.paidAmount) : null,
             remaining: remainingAmount,
             remainingAmount,
@@ -388,7 +486,9 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
               meteringApprovedAt: (q as any).meteringApprovedAt,
               mcoAt: (q as any).mcoAt,
               completionAt: (q as any).completionAt,
-              meterInstallationPendingAt: (q as any).meterInstallationPendingAt
+              meterInstallationPendingAt: (q as any).meterInstallationPendingAt,
+              meteringWccAfterDiscom: (q as any).meteringWccAfterDiscom,
+              meteringWccAfterDiscomAt: (q as any).meteringWccAfterDiscomAt
             }),
             dealerName: qAny.dealer
               ? `${qAny.dealer.firstName || ''} ${qAny.dealer.lastName || ''}`.trim() || null
@@ -650,8 +750,9 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
       pickStatus('installationStatus', 'installation_status') ||
       pickStatus('meteringStatus', 'metering_status', 'status') ||
       null;
+    const wccAfterDiscomFlag = parseMeteringWccAfterDiscomFlag(body);
 
-    if (!requested) {
+    if (!requested && wccAfterDiscomFlag === undefined) {
       res.status(400).json({
         success: false,
         error: { code: 'VAL_001', message: 'installationStatus is required' }
@@ -668,9 +769,95 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
       return;
     }
 
-    const nextStatus =
-      normalizeMeteringWorkflowStatus(requested) || requested;
     const currentStatus = String(quotation.installationStatus || 'pending_installer').trim();
+    const now = new Date();
+
+    const installationApprovedForPostDiscomWcc = (): boolean => {
+      if (
+        isInstallationPartialApprovedStatus(quotation.installationStatus) ||
+        Boolean((quotation as any).installationPartialApproved)
+      ) {
+        return false;
+      }
+      return Boolean(quotation.installerApprovedAt);
+    };
+
+    const applyWccAfterDiscomPatch = (
+      patch: Record<string, unknown>,
+      flag: boolean,
+      stageForGate: string = currentStatus
+    ): { ok: true } | { ok: false; message: string } => {
+      if (flag) {
+        if (stageForGate !== 'metering_approved') {
+          return {
+            ok: false,
+            message: 'meteringWccAfterDiscom can only be set when stage is metering_approved'
+          };
+        }
+        if (!installationApprovedForPostDiscomWcc()) {
+          return {
+            ok: false,
+            message:
+              'Customer installation must be completed and approved before moving to WCC Pending (installer_partial_approved is not allowed)'
+          };
+        }
+        patch.meteringWccAfterDiscom = true;
+        patch.meteringWccAfterDiscomAt =
+          (quotation as any).meteringWccAfterDiscomAt || now;
+      } else {
+        patch.meteringWccAfterDiscom = false;
+        patch.meteringWccAfterDiscomAt = null;
+      }
+      return { ok: true };
+    };
+
+    const respondWithQuotation = async () => {
+      await quotation.reload();
+      res.json({
+        success: true,
+        data: {
+          id: quotation.id,
+          ...meteringWorkflowApiFields({
+            installationStatus: quotation.installationStatus,
+            meteringApprovedAt: quotation.meteringApprovedAt,
+            mcoAt: quotation.mcoAt,
+            completionAt: quotation.completionAt,
+            meterInstallationPendingAt: (quotation as any).meterInstallationPendingAt,
+            meteringWccAfterDiscom: (quotation as any).meteringWccAfterDiscom,
+            meteringWccAfterDiscomAt: (quotation as any).meteringWccAfterDiscomAt
+          }),
+          ...installationPartialApiFields({
+            installationStatus: quotation.installationStatus,
+            installationPartialApproved: (quotation as any).installationPartialApproved,
+            installationPartialApprovedAt: (quotation as any).installationPartialApprovedAt
+          }),
+          updatedAt: quotation.updatedAt
+        }
+      });
+    };
+
+    // Flag-only update (stay on metering_approved / clear flag)
+    if (!requested && wccAfterDiscomFlag !== undefined) {
+      const patch: Record<string, unknown> = {};
+      const applied = applyWccAfterDiscomPatch(patch, wccAfterDiscomFlag);
+      if (!applied.ok) {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'VAL_001',
+            message: applied.message,
+            details: [{ field: 'meteringWccAfterDiscom', message: applied.message }]
+          }
+        });
+        return;
+      }
+      await quotation.update(patch as any);
+      await respondWithQuotation();
+      return;
+    }
+
+    const nextStatus =
+      normalizeMeteringWorkflowStatus(requested) || requested!;
 
     if (nextStatus === METER_INSTALLATION_PENDING_STATUS) {
       if (
@@ -719,20 +906,7 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
 
     if (nextStatus === 'pending_metering') {
       if (currentStatus === 'pending_metering') {
-        res.json({
-          success: true,
-          data: {
-            id: quotation.id,
-            ...meteringWorkflowApiFields({
-              installationStatus: quotation.installationStatus,
-              meteringApprovedAt: quotation.meteringApprovedAt,
-              mcoAt: quotation.mcoAt,
-              completionAt: quotation.completionAt,
-              meterInstallationPendingAt: (quotation as any).meterInstallationPendingAt
-            }),
-            updatedAt: quotation.updatedAt
-          }
-        });
+        await respondWithQuotation();
         return;
       }
       if (!SEND_TO_METERING_FROM_STATUSES.has(currentStatus)) {
@@ -754,18 +928,22 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
       }
     }
 
-    const now = new Date();
     const patch: Record<string, unknown> = {
       installationStatus: nextStatus
     };
 
     if (nextStatus === 'pending_metering') {
       patch.meteringActionAt = now;
+      patch.meteringWccAfterDiscom = false;
+      patch.meteringWccAfterDiscomAt = null;
     }
 
     if (nextStatus === METER_INSTALLATION_PENDING_STATUS) {
       patch.meterInstallationPendingAt =
         (quotation as any).meterInstallationPendingAt || now;
+      // Leave post-Discom WCC queue when entering Meter Installation Pending
+      patch.meteringWccAfterDiscom = false;
+      patch.meteringWccAfterDiscomAt = null;
     }
 
     if (nextStatus === 'mco') {
@@ -773,6 +951,8 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
       if (!quotation.meteringApprovedAt) {
         patch.meteringApprovedAt = now;
       }
+      patch.meteringWccAfterDiscom = false;
+      patch.meteringWccAfterDiscomAt = null;
     }
 
     const preMeteringApproved = new Set([
@@ -792,6 +972,8 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
       patch.meteringApprovedAt = null;
       patch.mcoAt = null;
       patch.meterInstallationPendingAt = null;
+      patch.meteringWccAfterDiscom = false;
+      patch.meteringWccAfterDiscomAt = null;
     }
 
     if (nextStatus === INSTALLATION_PARTIAL_STATUS) {
@@ -824,6 +1006,129 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
       patch.baldevActionAt = quotation.baldevActionAt || now;
     }
 
+    // Explicit post-Discom WCC flag on the same PATCH (e.g. stay metering_approved + flag true)
+    if (wccAfterDiscomFlag !== undefined) {
+      if (nextStatus === METER_INSTALLATION_PENDING_STATUS || nextStatus === 'mco') {
+        // already cleared above
+      } else if (nextStatus === 'metering_approved' || currentStatus === 'metering_approved') {
+        const stageForGate =
+          nextStatus === 'metering_approved' ? 'metering_approved' : currentStatus;
+        const applied = applyWccAfterDiscomPatch(patch, wccAfterDiscomFlag, stageForGate);
+        if (!applied.ok) {
+          res.status(400).json({
+            success: false,
+            error: {
+              code: 'VAL_001',
+              message: applied.message,
+              details: [{ field: 'meteringWccAfterDiscom', message: applied.message }]
+            }
+          });
+          return;
+        }
+      } else if (wccAfterDiscomFlag === true) {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'VAL_001',
+            message: 'meteringWccAfterDiscom can only be set when stage is metering_approved',
+            details: [{ field: 'meteringWccAfterDiscom', message: 'Requires metering_approved' }]
+          }
+        });
+        return;
+      } else {
+        patch.meteringWccAfterDiscom = false;
+        patch.meteringWccAfterDiscomAt = null;
+      }
+    }
+
+    await quotation.update(patch as any);
+    await respondWithQuotation();
+  } catch (error) {
+    logError('Update quotation installation status error', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal error' }
+    });
+  }
+};
+
+/**
+ * PATCH /admin/quotations/:quotationId/metering-wcc-after-discom
+ * Mark Meter in Discom → WCC Pending (server flag; survives refresh).
+ */
+export const updateMeteringWccAfterDiscom = async (req: Request, res: Response): Promise<void> => {
+  try {
+    if (!hasAdminQuotationAccess(req)) {
+      res.status(403).json({
+        success: false,
+        error: { code: 'AUTH_004', message: 'Insufficient permissions. Admin access required.' }
+      });
+      return;
+    }
+
+    const { quotationId } = req.params;
+    const flag = parseMeteringWccAfterDiscomFlag(req.body as Record<string, unknown>);
+    if (flag === undefined) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VAL_001',
+          message: 'meteringWccAfterDiscom is required',
+          details: [{ field: 'meteringWccAfterDiscom', message: 'boolean required' }]
+        }
+      });
+      return;
+    }
+
+    const quotation = await Quotation.findByPk(quotationId);
+    if (!quotation) {
+      res.status(404).json({
+        success: false,
+        error: { code: 'RES_001', message: 'Quotation not found' }
+      });
+      return;
+    }
+
+    const currentStatus = String(quotation.installationStatus || '').trim();
+    const now = new Date();
+    const patch: Record<string, unknown> = {};
+
+    if (flag) {
+      if (currentStatus !== 'metering_approved') {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'VAL_001',
+            message: 'meteringWccAfterDiscom can only be set when stage is metering_approved',
+            details: [{ field: 'meteringWccAfterDiscom', message: 'Requires metering_approved' }]
+          }
+        });
+        return;
+      }
+      if (
+        isInstallationPartialApprovedStatus(quotation.installationStatus) ||
+        Boolean((quotation as any).installationPartialApproved) ||
+        !quotation.installerApprovedAt
+      ) {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'VAL_001',
+            message:
+              'Customer installation must be completed and approved before moving to WCC Pending (installer_partial_approved is not allowed)',
+            details: [{ field: 'meteringWccAfterDiscom', message: 'Installation not fully approved' }]
+          }
+        });
+        return;
+      }
+      patch.meteringWccAfterDiscom = true;
+      patch.meteringWccAfterDiscomAt =
+        (quotation as any).meteringWccAfterDiscomAt || now;
+    } else {
+      patch.meteringWccAfterDiscom = false;
+      patch.meteringWccAfterDiscomAt = null;
+    }
+
     await quotation.update(patch as any);
     await quotation.reload();
 
@@ -836,18 +1141,15 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
           meteringApprovedAt: quotation.meteringApprovedAt,
           mcoAt: quotation.mcoAt,
           completionAt: quotation.completionAt,
-          meterInstallationPendingAt: (quotation as any).meterInstallationPendingAt
-        }),
-        ...installationPartialApiFields({
-          installationStatus: quotation.installationStatus,
-          installationPartialApproved: (quotation as any).installationPartialApproved,
-          installationPartialApprovedAt: (quotation as any).installationPartialApprovedAt
+          meterInstallationPendingAt: (quotation as any).meterInstallationPendingAt,
+          meteringWccAfterDiscom: (quotation as any).meteringWccAfterDiscom,
+          meteringWccAfterDiscomAt: (quotation as any).meteringWccAfterDiscomAt
         }),
         updatedAt: quotation.updatedAt
       }
     });
   } catch (error) {
-    logError('Update quotation installation status error', error);
+    logError('Update metering WCC after discom error', error);
     res.status(500).json({
       success: false,
       error: { code: 'SYS_001', message: 'Internal error' }
@@ -1077,10 +1379,27 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
       transactionId: phase.transactionId || null,
       note: phase.note || null
     }));
-    const subtotalNum = Number(quotation.subtotal || 0);
+    const amountAfterSubsidyNum = resolveAmountAfterSubsidyForRemaining({
+      ...(quotation as any),
+      products: quotationAny.products
+    });
     const totalPaidForRemaining =
       phases.length > 0 ? sumPhasePaidAmounts(phases) : Number(quotation.paidAmount || 0);
-    const remainingAmount = remainingAgainstSubtotal(subtotalNum, totalPaidForRemaining);
+    const discountAmt = Number((quotation as any).discountAmount || 0);
+    let remainingAmount = remainingAgainstSubtotal(
+      amountAfterSubsidyNum,
+      totalPaidForRemaining,
+      discountAmt
+    );
+    let paymentStatusOut = quotationAny.paymentStatus;
+    if (remainingAmount > 0.01) {
+      paymentStatusOut = totalPaidForRemaining <= 0.01 ? 'pending' : 'partial';
+    } else if (quotationAny.paymentStatus === 'completed') {
+      remainingAmount = 0;
+      paymentStatusOut = 'completed';
+    } else {
+      remainingAmount = 0;
+    }
     const row = quotation.get({ plain: true }) as unknown as Record<string, unknown>;
     const installationDocs = await QuotationInstallationDoc.findAll({
       where: { quotationId: quotation.id },
@@ -1119,7 +1438,7 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
         ...quotationPaymentApiFields(row),
         ...quotationAdminMetadataFields(row),
         ...quotationAmountApiFields(row),
-        paymentStatus: quotationAny.paymentStatus || null,
+        paymentStatus: paymentStatusOut || null,
         paidAmount: quotation.paidAmount !== undefined && quotation.paidAmount !== null ? Number(quotation.paidAmount) : null,
         remaining: remainingAmount,
         remainingAmount,
@@ -1142,7 +1461,9 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
           meteringApprovedAt: quotationAny.meteringApprovedAt,
           mcoAt: quotationAny.mcoAt,
           completionAt: quotationAny.completionAt,
-          meterInstallationPendingAt: quotationAny.meterInstallationPendingAt
+          meterInstallationPendingAt: quotationAny.meterInstallationPendingAt,
+          meteringWccAfterDiscom: quotationAny.meteringWccAfterDiscom,
+          meteringWccAfterDiscomAt: quotationAny.meteringWccAfterDiscomAt
         }),
         installationReadyForInstaller: Boolean(quotationAny.installationReadyForInstaller),
         installation_ready_for_installer: Boolean(quotationAny.installationReadyForInstaller),

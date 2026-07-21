@@ -61,6 +61,8 @@ export const meteringDetailsEchoFields = (q: {
     metering_remarks: remarks,
     authorizedRepresentative: authorized,
     authorized_representative: authorized,
+    assignedPersonName: authorized,
+    assigned_person_name: authorized,
     meteringAuthorizedRepresentative: authorized,
     metering_authorized_representative: authorized
   };

@@ -101,6 +101,23 @@ Single-file slot uploads also accept `POST /api/quotations/{quotationId}/install
 - To MCO: `meter_installation_pending` → `mco` (legacy from `metering_approved` still allowed).
 - Details POST accepts `meterInstallationPhoto` / `plantLivePhoto` (+ snake_case), `discomLocation`, WCC fields; echoes browsable URLs + names.
 
+### L.2 Meter in Discom → WCC Pending → Meter Installation Pending (Jul 2026) — IMPLEMENTED
+
+**Handoff:** `BACKEND_METERING_DISCOM_WCC_METER_INSTALL.md`.
+
+| # | Change | Status |
+|---|--------|--------|
+| 1 | Persist `meter_installation_pending` on ops PATCH; echo on GET | Done |
+| 2 | Allow `metering_approved` → `meter_installation_pending` (idempotent) | Done |
+| 3 | Allow `meter_installation_pending` → `mco` (no false `WF_003`) | Done |
+| 4 | Persist `meteringWccAfterDiscom` (+ At); clear on MIP / MCO / pending_metering | Done |
+| 5 | WCC save outcomes via status PATCH: entry → `pending_metering`; post-Discom → MIP | Done (accept both) |
+| 6 | Admin list row payload (Address, Discom, Remarks, Assigned, `pricing`, `statusUpdatedAt`) | Done — handoff §8 |
+
+**Set flag:** `PATCH /api/admin/quotations/{id}/metering-wcc-after-discom` `{ "meteringWccAfterDiscom": true }`  
+or same fields on `installation-status` / `workflow-status` while stage is `metering_approved`.  
+**Reject** if installation not fully approved (`installer_partial_approved` / missing `installerApprovedAt`).
+
 ---
 
 ## §X — Quotation PDF display (panel range keys, May 2026)
@@ -278,6 +295,8 @@ Frontend-only PDF display (see frontend `BACKEND_CHANGES_REQUIRED.md` §I):
 | **High** | Payment Management → Installation release | **Done** — §M.0, HANDOFF §17, `BACKEND_INSTALLATION_RELEASE.md` |
 | **High** | Final confirmation document uploads | **Done** — §M, HANDOFF §20 |
 | **High** | Quotations tab → Send to Metering (`pending_metering`) | **Done** — §L.1, HANDOFF §21 |
+| **High** | Meter in Discom → WCC → Meter Installation Pending | **Done** — §L.2, `BACKEND_METERING_DISCOM_WCC_METER_INSTALL.md` |
+| **High** | Final Settlement (absolute discountAmount + remaining) | **Done** — §AD, `BACKEND_FINAL_SETTLEMENT.md` |
 | **High** | Inventory decimal prices + `products.unit` + kg→pieces | **Done** — §N, HANDOFF §18, `BACKEND_CHANGES_DECIMAL_PRICE_KG_TO_PIECES.md` |
 | **Medium** | Admin Visitor Reports `GET /api/admin/visits` | **Done** — §Z, HANDOFF §19 |
 | **High** | Tata DCR + `tata_530_570` + `VAL_003` fix | **Done** — §X.6, HANDOFF §2.6 |
@@ -312,8 +331,25 @@ Until GET echoes `pdf_panel_range_key`, frontend overview/PDF may show wrong pan
 |---------|------|--------|
 | Complete visit | `PATCH /api/visits/{id}/complete` | S3 multipart, presigned URLs on GET |
 | KYC documents | `PATCH /api/quotations/{id}/documents` | Partial multipart, allowlisted fields |
-| Documents ZIP | `GET /api/quotations/{id}/documents/zip` | Server-side S3 fetch |
+| Documents ZIP | `GET /api/quotations/{id}/documents/zip` | Server-side S3 fetch; skips missing files |
 | Presign | `GET /api/quotations/{id}/documents/view-url` | Private bucket browse |
+
+### `propertyDocumentPdf` — optional (Jul 2026)
+
+Admin/dealer **Document Submission** may submit without Property Documents (PDF). **No new endpoint** — existing partial PATCH behavior.
+
+| Item | Backend behavior |
+|------|------------------|
+| Validation | `propertyDocumentPdf` is **not** required on document submit (`quotationDocumentsSchema` + controller) |
+| Partial update | Omitted file part → keep existing URL/key; never uploaded → `null` |
+| Storage | `quotation_documents.propertyDocumentPdf` nullable |
+| When uploaded | PDF only (`application/pdf`); replaces stored reference |
+| ZIP download | Skips missing property PDF (non-fatal; noted in manifest) |
+| Unchanged | Field name `propertyDocumentPdf` / `property_document_pdf`; other required fields (`phoneNumber`, `emailId`, `electricityKno` for dealer KYC) unchanged |
+
+**Quick test:** Submit from admin without Property Documents → expect **200**, not **400** mentioning property PDF.
+
+**If 400 persists:** Check error `details[]` — likely missing KYC text (`phoneNumber` / `emailId` / `electricityKno`), not the property PDF.
 
 ---
 
@@ -400,7 +436,24 @@ Removing installments and submitting caused deleted rows to return on refresh (u
 
 ---
 
-| 4 | Release-only PATCH | Installments unchanged |
+## §AD — Final Settlement (Account Management) — IMPLEMENTED
+
+**Handoff:** `BACKEND_FINAL_SETTLEMENT.md`.
+
+Settlement amount = **Remaining only** → absolute `discountAmount`. **Do not** rewrite installments.
+
+**FE call order:** (1) `PATCH /pricing` `{ discountAmount }` (no `subtotal`) → (2) `PATCH /payment-details` **without phases** (`paymentStatus=completed`, `remaining=0`, `finalSettlement*`) → refresh.
+
+| # | Behavior |
+|---|----------|
+| 1 | `PATCH /pricing` absolute `discountAmount`; `subtotal` optional |
+| 2 | Status-only `payment-details` skips VAL_012 (paid vs payable) — no phase rewrite |
+| 3 | `remaining = amountAfterSubsidy − discountAmount − paid` |
+| 4 | Never return `remaining:0` / `completed` while unpaid gap exists without discount |
+| 5 | GET returns `discountAmount`, remaining, `paymentStatus`, installments |
+| 6 | `account-management` on pricing + payment-details (+ optional `POST /final-settlement`) |
+
+Optional: `POST /quotations/{id}/final-settlement` `{ "amount": 2000 }`.
 
 ---
 

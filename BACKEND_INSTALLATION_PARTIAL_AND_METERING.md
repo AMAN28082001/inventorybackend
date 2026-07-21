@@ -14,6 +14,7 @@ Frontend is live for Admin Installation / Metering. Backend must persist the fie
 | **Metering labels** | UI only: Meter Pending / Meter in Discom | No rename required on API stage keys |
 | **Metering fields** | Discom + **Remarks** + **Authorized Representative** | Persist on metering details POST + return on GET |
 | **Install overdue UI** | Yellow ≥5 days / red ≥10 days; filters | **Frontend-only** (uses install date already stored) |
+| **Discom → WCC → Meter install** | See dedicated handoff | **`BACKEND_METERING_DISCOM_WCC_METER_INSTALL.md`** / §L.2 |
 
 ---
 

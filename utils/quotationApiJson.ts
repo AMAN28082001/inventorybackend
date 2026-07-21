@@ -91,6 +91,7 @@ export type QuotationPricingSlice = {
   subtotal?: number;
   totalAmount?: number;
   finalAmount?: number;
+  discountAmount?: number;
 };
 
 /**
@@ -124,12 +125,27 @@ export function quotationAmountApiFields(
         ? Number(pricing.finalAmount)
         : totalAmount;
 
+  const discountAmountRaw = row.discountAmount ?? row.discount_amount;
+  const discountAmount =
+    discountAmountRaw !== undefined && discountAmountRaw !== null
+      ? Number(discountAmountRaw)
+      : pricing?.discountAmount !== undefined
+        ? Number(pricing.discountAmount)
+        : 0;
+
+  const discountRaw = row.discount;
+  const discount =
+    discountRaw !== undefined && discountRaw !== null ? Number(discountRaw) : 0;
+
   return {
     subtotal,
     totalAmount,
     finalAmount,
     total_amount: totalAmount,
-    final_amount: finalAmount
+    final_amount: finalAmount,
+    discountAmount,
+    discount_amount: discountAmount,
+    discount
   };
 }
 
@@ -352,6 +368,16 @@ export function quotationPaymentApiFields(q: Record<string, unknown>) {
   ) as string | null;
   const bankName = (q.bankName ?? q.bank_name ?? null) as string | null;
   const bankIfsc = (q.bankIfsc ?? q.bank_ifsc ?? null) as string | null;
+  // Final Settlement audit flags — FE hides the "Submit final settlement" button when truthy.
+  const finalSettlementAppliedRaw = q.finalSettlementApplied ?? q.final_settlement_applied ?? false;
+  const finalSettlementApplied = finalSettlementAppliedRaw === true || finalSettlementAppliedRaw === 'true';
+  const finalSettlementAmountRaw = q.finalSettlementAmount ?? q.final_settlement_amount;
+  const finalSettlementAmount =
+    finalSettlementAmountRaw !== undefined && finalSettlementAmountRaw !== null
+      ? Number(finalSettlementAmountRaw)
+      : null;
+  const finalSettlementAt = (q.finalSettlementAt ?? q.final_settlement_at ?? null) as string | Date | null;
+  const finalSettlementBy = (q.finalSettlementBy ?? q.final_settlement_by ?? null) as string | null;
   return {
     paymentMode,
     payment_mode: paymentMode,
@@ -360,7 +386,15 @@ export function quotationPaymentApiFields(q: Record<string, unknown>) {
     bankName,
     bank_name: bankName,
     bankIfsc,
-    bank_ifsc: bankIfsc
+    bank_ifsc: bankIfsc,
+    finalSettlementApplied,
+    final_settlement_applied: finalSettlementApplied,
+    finalSettlementAmount,
+    final_settlement_amount: finalSettlementAmount,
+    finalSettlementAt,
+    final_settlement_at: finalSettlementAt,
+    finalSettlementBy,
+    final_settlement_by: finalSettlementBy
   };
 }
 

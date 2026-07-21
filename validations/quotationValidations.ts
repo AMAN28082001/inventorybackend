@@ -324,7 +324,8 @@ export const createQuotationSchema = z.preprocess(
 );
 
 export const updateDiscountSchema = z.object({
-  discount: numberOrStringNumber.pipe(z.number().min(0).max(100)).optional(),
+  // ≤100 = percentage; >100 = absolute INR (Final Settlement / quotation edit convention).
+  discount: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
   discountAmount: numberOrStringNumber.pipe(z.number().nonnegative()).optional()
 }).refine((data) => data.discount !== undefined || data.discountAmount !== undefined, {
   message: 'Either discount or discountAmount must be provided'
@@ -354,9 +355,11 @@ export const updatePricingSchema = z.object({
   subtotal: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
   stateSubsidy: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
   centralSubsidy: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
-  discount: numberOrStringNumber.pipe(z.number().min(0).max(100)).optional(),
+  // ≤100 = percentage; >100 allowed as absolute INR when discountAmount omitted.
+  discount: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
   discountAmount: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
   finalAmount: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
+  totalAmount: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
   paymentMode: paymentModeEnum.optional(),
   paidAmount: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
   paymentDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Payment date must be in YYYY-MM-DD format').optional(),
@@ -408,6 +411,13 @@ export const updatePaymentDetailsSchema = z
     paymentType: z.enum(['loan', 'cash', 'mix']).optional(),
     paymentMode: z.union([z.string(), z.null()]).optional(),
     paymentStatus: paymentStatusEnum.optional(),
+    /** Status-only Final Settlement may send remaining: 0 without rewriting phases. */
+    remaining: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
+    remainingAmount: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
+    finalSettlementAmount: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
+    final_settlement_amount: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
+    finalSettlementApplied: booleanOrString.optional(),
+    final_settlement_applied: booleanOrString.optional(),
     replaceInstallments: z.boolean().optional(),
     replace: z.boolean().optional(),
     phases: z.array(rawPaymentPhaseSchema).optional(),
@@ -417,18 +427,40 @@ export const updatePaymentDetailsSchema = z
     subsidy_cheques: z.array(subsidyChequeRowSchema).optional()
   })
   .refine(
-    (data) =>
-      Array.isArray(data.phases) ||
-      Array.isArray(data.installments) ||
-      Array.isArray(data.paymentPhases),
+    (data) => {
+      const hasPhases =
+        Array.isArray(data.phases) ||
+        Array.isArray(data.installments) ||
+        Array.isArray(data.paymentPhases);
+      const isStatusOnly =
+        data.paymentStatus !== undefined ||
+        data.remaining !== undefined ||
+        data.remainingAmount !== undefined ||
+        data.finalSettlementAmount !== undefined ||
+        data.final_settlement_amount !== undefined ||
+        data.finalSettlementApplied !== undefined ||
+        data.final_settlement_applied !== undefined;
+      const hasOther =
+        data.paymentType !== undefined ||
+        data.paymentMode !== undefined ||
+        data.subsidyCheques !== undefined ||
+        data.subsidy_cheques !== undefined;
+      return hasPhases || isStatusOnly || hasOther;
+    },
     {
-      message: 'phases (or installments/paymentPhases) is required',
+      message:
+        'Provide phases/installments, or a status-only payload (paymentStatus / remaining / finalSettlement*)',
       path: ['phases']
     }
   )
   .transform((data) => {
-    const rawList =
-      data.phases ?? data.installments ?? data.paymentPhases ?? [];
+    const hadPhaseInput =
+      Array.isArray(data.phases) ||
+      Array.isArray(data.installments) ||
+      Array.isArray(data.paymentPhases);
+    const rawList = hadPhaseInput
+      ? (data.phases ?? data.installments ?? data.paymentPhases ?? [])
+      : [];
     const topMode = normalizePaymentModeInput(data.paymentMode);
     let carry = topMode;
     const phases = rawList.map((p) => {
@@ -473,15 +505,43 @@ export const updatePaymentDetailsSchema = z
       data.subsidyCheques !== undefined || data.subsidy_cheques !== undefined
         ? normalizeSubsidyChequesFromRequestBody(data.subsidyCheques ?? data.subsidy_cheques ?? [])
         : undefined;
+    const finalSettlementAmount =
+      data.finalSettlementAmount !== undefined
+        ? Number(data.finalSettlementAmount)
+        : data.final_settlement_amount !== undefined
+          ? Number(data.final_settlement_amount)
+          : undefined;
+    const finalSettlementAppliedRaw =
+      data.finalSettlementApplied !== undefined
+        ? data.finalSettlementApplied
+        : data.final_settlement_applied;
+    const finalSettlementApplied =
+      finalSettlementAppliedRaw === undefined
+        ? undefined
+        : Boolean(finalSettlementAppliedRaw === true || String(finalSettlementAppliedRaw) === 'true' || String(finalSettlementAppliedRaw) === '1');
+    const remaining =
+      data.remaining !== undefined
+        ? Number(data.remaining)
+        : data.remainingAmount !== undefined
+          ? Number(data.remainingAmount)
+          : undefined;
     return {
       paymentType: data.paymentType,
       paymentMode: topMode,
       paymentStatus: data.paymentStatus,
-      phases,
+      remaining,
+      remainingAmount: remaining,
+      finalSettlementAmount,
+      finalSettlementApplied,
+      replaceInstallments: data.replaceInstallments,
+      replace: data.replace,
+      // Critical: omit phases when absent so status-only Final Settlement skips phase rewrite / VAL_012
+      ...(hadPhaseInput ? { phases } : {}),
       subsidyCheques
     };
   })
   .superRefine((data, ctx) => {
+    if (!Array.isArray(data.phases)) return;
     const nums = data.phases.map((p) => p.phaseNumber);
     if (new Set(nums).size !== nums.length) {
       ctx.addIssue({
@@ -522,6 +582,30 @@ export const updatePaymentDetailsSchema = z
       }
     });
   });
+
+export const finalSettlementSchema = z.object({
+  // Amount aliases — settlement = remaining only. Any one is accepted.
+  amount: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
+  settlementAmount: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
+  discountAmount: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
+  finalSettlementAmount: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
+  // Echo fields the client sends (validate middleware replaces req.body, so whitelist them).
+  finalAmount: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
+  paymentStatus: paymentStatusEnum.optional(),
+  remaining: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
+  remainingAmount: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
+  finalSettlementApplied: booleanOrString.optional()
+}).refine(
+  (data) =>
+    data.amount !== undefined ||
+    data.settlementAmount !== undefined ||
+    data.discountAmount !== undefined ||
+    data.finalSettlementAmount !== undefined,
+  {
+    message: 'amount (or settlementAmount / discountAmount / finalSettlementAmount) is required',
+    path: ['amount']
+  }
+);
 
 export const updatePaymentModeSchema = z.object({
   paymentMode: z

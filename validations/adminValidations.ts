@@ -50,19 +50,40 @@ export const updateInstallationStatusSchema = z.object({
   meteringStatus: installationStatusEnum.optional(),
   metering_status: installationStatusEnum.optional(),
   status: installationStatusEnum.optional(),
-  remarks: z.string().max(5000).optional()
+  remarks: z.string().max(5000).optional(),
+  // Post-Discom WCC Pending queue flag (§L.2)
+  meteringWccAfterDiscom: z.union([z.boolean(), z.string(), z.number()]).optional(),
+  metering_wcc_after_discom: z.union([z.boolean(), z.string(), z.number()]).optional()
 }).refine((data) => {
-  return Boolean(
+  const hasStatus = Boolean(
     data.installationStatus ||
       data.installation_status ||
       data.meteringStatus ||
       data.metering_status ||
       data.status
   );
+  const hasWccFlag =
+    data.meteringWccAfterDiscom !== undefined || data.metering_wcc_after_discom !== undefined;
+  return hasStatus || hasWccFlag;
 }, {
   message:
-    'One of installationStatus, installation_status, meteringStatus, metering_status, or status is required'
+    'One of installationStatus / meteringStatus / status, or meteringWccAfterDiscom, is required'
 });
+
+/** PATCH /admin/quotations/:id/metering-wcc-after-discom */
+export const meteringWccAfterDiscomSchema = z
+  .object({
+    meteringWccAfterDiscom: z.union([z.boolean(), z.string(), z.number()]).optional(),
+    metering_wcc_after_discom: z.union([z.boolean(), z.string(), z.number()]).optional()
+  })
+  .refine(
+    (data) =>
+      data.meteringWccAfterDiscom !== undefined || data.metering_wcc_after_discom !== undefined,
+    {
+      message: 'meteringWccAfterDiscom is required',
+      path: ['meteringWccAfterDiscom']
+    }
+  );
 
 /** PATCH /admin/quotations/:id/file-login — body validated loosely; controller enforces rules. */
 export const fileLoginSchema = z

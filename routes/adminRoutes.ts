@@ -4,6 +4,7 @@ import {
   getAdminQuotationById,
   updateQuotationStatus,
   updateQuotationInstallationStatus,
+  updateMeteringWccAfterDiscom,
   updateQuotationFileLogin,
   getAllDealers,
   updateDealer,
@@ -46,6 +47,7 @@ import { installerUploadMetaSchema } from '../validations/workflowValidations';
 import {
   updateStatusSchema,
   updateInstallationStatusSchema,
+  meteringWccAfterDiscomSchema,
   fileLoginSchema,
   createVisitorSchema,
   updateVisitorSchema,
@@ -146,6 +148,11 @@ router.post(
 );
 
 router.patch('/quotations/:quotationId/installation-status', validate(updateInstallationStatusSchema), updateQuotationInstallationStatus);
+router.patch(
+  '/quotations/:quotationId/metering-wcc-after-discom',
+  validate(meteringWccAfterDiscomSchema),
+  updateMeteringWccAfterDiscom
+);
 router.patch(
   '/quotations/:quotationId/installation-release',
   validate(updateInstallationReleaseSchema),
