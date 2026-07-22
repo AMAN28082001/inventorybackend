@@ -53,7 +53,12 @@ export const updateInstallationStatusSchema = z.object({
   remarks: z.string().max(5000).optional(),
   // Post-Discom WCC Pending queue flag (§L.2)
   meteringWccAfterDiscom: z.union([z.boolean(), z.string(), z.number()]).optional(),
-  metering_wcc_after_discom: z.union([z.boolean(), z.string(), z.number()]).optional()
+  metering_wcc_after_discom: z.union([z.boolean(), z.string(), z.number()]).optional(),
+  // Admin Send to Metering override flags (Jul 2026 — lib/api.ts → sendQuotationToMetering)
+  force: z.union([z.boolean(), z.string(), z.number()]).optional(),
+  adminOverride: z.union([z.boolean(), z.string(), z.number()]).optional(),
+  allowFromPendingInstaller: z.union([z.boolean(), z.string(), z.number()]).optional(),
+  source: z.string().optional()
 }).refine((data) => {
   const hasStatus = Boolean(
     data.installationStatus ||
@@ -69,6 +74,25 @@ export const updateInstallationStatusSchema = z.object({
   message:
     'One of installationStatus / meteringStatus / status, or meteringWccAfterDiscom, is required'
 });
+
+/**
+ * PATCH|POST /admin/quotations/:id/send-to-metering
+ * Body is optional — empty body still means "send to pending_metering".
+ */
+export const sendToMeteringSchema = z
+  .object({
+    installationStatus: installationStatusEnum.optional(),
+    installation_status: installationStatusEnum.optional(),
+    meteringStatus: installationStatusEnum.optional(),
+    metering_status: installationStatusEnum.optional(),
+    status: installationStatusEnum.optional(),
+    force: z.union([z.boolean(), z.string(), z.number()]).optional(),
+    adminOverride: z.union([z.boolean(), z.string(), z.number()]).optional(),
+    allowFromPendingInstaller: z.union([z.boolean(), z.string(), z.number()]).optional(),
+    source: z.string().optional(),
+    remarks: z.string().max(5000).optional()
+  })
+  .passthrough();
 
 /** PATCH /admin/quotations/:id/metering-wcc-after-discom */
 export const meteringWccAfterDiscomSchema = z

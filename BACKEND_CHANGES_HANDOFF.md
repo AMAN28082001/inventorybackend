@@ -1261,7 +1261,7 @@ OR installation_released_at IS NOT NULL
 
 ## 21. Quotations tab → Send to Metering (§L.1)
 
-**Status: implemented** — no new route. (Frontend handoff may reference this as **§11**.)
+**Status: implemented** — dedicated route + early handoff from `pending_installer` (Jul 2026).
 
 ### Symptom → fix
 
@@ -1270,15 +1270,22 @@ OR installation_released_at IS NOT NULL
 | PATCH returns **403** | Handler required quotation `req.dealer` admin only | Inventory admin JWT allowed via `hasAdminQuotationAccess()` |
 | PATCH **200** but Metering empty | Metering queue required PM release | `getMeteringQueue` — no release gate for metering pipeline rows |
 | Installation still shows row | Wrong filter | `pending_metering` ∉ `INSTALLER_RELEASE_STATUSES` |
+| **400** `Cannot send to metering from installation status 'pending_installer'` | Allowed-from set required `installer_approved` | Allow `pending_installer` / `installer_in_progress` for admin; preferred `.../send-to-metering` |
 
 ### Minimum deliverable
 
-`PATCH /api/admin/quotations/{quotationId}/installation-status`
+**Preferred:** `PATCH|POST /api/admin/quotations/{quotationId}/send-to-metering`
+
+**Fallback:** `PATCH /api/admin/quotations/{quotationId}/installation-status`
 
 ```json
 {
   "installationStatus": "pending_metering",
-  "meteringStatus": "pending_metering"
+  "meteringStatus": "pending_metering",
+  "force": true,
+  "adminOverride": true,
+  "allowFromPendingInstaller": true,
+  "source": "admin"
 }
 ```
 
@@ -1290,10 +1297,11 @@ OR installation_released_at IS NOT NULL
 | Early send | From `pending_installer` OK (no `installer_approved` required) |
 | Idempotent | Re-send → **200** |
 | Photo upload | `installer_approved` only until explicit PATCH |
+| Partial | `installer_partial_approved` still **400** |
 
 ### Frontend retry order
 
-`lib/api.ts` → `patchOperationalWorkflowStatus` → installation-status / workflow-status / metering-status aliases.
+`lib/api.ts` → `sendQuotationToMetering` → `/send-to-metering` → installation-status / workflow-status / metering-status aliases → 2-step promote.
 
 ### QA
 
@@ -1301,8 +1309,9 @@ OR installation_released_at IS NOT NULL
 2. `GET /api/metering/quotations?status=processing` includes row (without PM release).
 3. Absent from installer queue.
 4. Double Send → **200**.
+5. Admin Metering + Metering-role login both show Meter Pending.
 
-**Full spec:** `BACKEND_CHANGES_REQUIRED.md` §L.1. **Reference:** `BACKEND_ADMIN_QUOTATION_STATUS.ts` → `patchAdminQuotationInstallationStatus`.
+**Full spec:** `BACKEND_CHANGES_REQUIRED.md` §L.1. **Reference:** `BACKEND_SEND_TO_METERING.ts` (+ `BACKEND_ADMIN_QUOTATION_STATUS.ts`).
 
 ---
 

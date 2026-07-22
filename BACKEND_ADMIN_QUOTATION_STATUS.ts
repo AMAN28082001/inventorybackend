@@ -844,11 +844,12 @@ export async function postAdminFinalConfirmationDocuments(req, res) {
  *
  * Rules:
  * - Quotation dealer admin OR inventory admin JWT
- * - Allow from pending_installer / installer_* / baldev_* (early handoff OK)
+ * - Allow from pending_installer / installer_* / baldev_* (early handoff OK — Jul 2026)
  * - Idempotent when already pending_metering → 200
  * - Do NOT require Payment Management release for admin send
  * - meteringStatus on GET is derived from installationStatus (deriveMeteringStatus)
- * - Reject metering_approved / mco / completed → 400 VAL_001
+ * - Reject installer_partial_approved / metering_approved / mco / completed → 400 VAL_001
+ * - Preferred dedicated route: PATCH|POST .../send-to-metering (BACKEND_SEND_TO_METERING.ts)
  */
 export async function patchAdminQuotationInstallationStatus(req, res) {
   try {
@@ -906,6 +907,9 @@ export async function patchAdminQuotationInstallationStatus(req, res) {
     }
 
     const allowedFrom = new Set([
+      "pending_installer",
+      "installer_in_progress",
+      "installer_rejected",
       "installer_approved",
       "pending_baldev",
       "baldev_approved",

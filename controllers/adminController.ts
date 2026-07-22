@@ -65,14 +65,32 @@ const hasAdminQuotationAccess = (req: Request): boolean => {
   return isQuotationAdmin || isInventoryAdmin;
 };
 
-/** Admin Send to Metering — only after full installer approval (§ partial). */
+/**
+ * Admin Send to Metering — allowed from statuses.
+ * Jul 2026: include pending_installer / installer_in_progress so Admin → Quotations → All
+ * "Send to Metering" works while OPS is still Pending Installer (see BACKEND_SEND_TO_METERING.ts).
+ * installer_partial_approved stays blocked (Complete & Mark as Approved first).
+ */
 const SEND_TO_METERING_FROM_STATUSES = new Set([
+  'pending_installer',
+  'installer_in_progress',
+  'installer_rejected',
   'installer_approved',
   'pending_baldev',
   'baldev_approved',
   'baldev_rejected',
   'metering_in_progress'
 ]);
+
+/** Frontend always sends these on Admin Metering handoff (lib/api.ts → sendQuotationToMetering). */
+const isAdminSendToMeteringOverride = (body: Record<string, unknown> | null | undefined): boolean => {
+  if (!body) return false;
+  if (body.force === true || body.force === 'true' || body.force === 1) return true;
+  if (body.adminOverride === true || body.adminOverride === 'true') return true;
+  if (body.allowFromPendingInstaller === true || body.allowFromPendingInstaller === 'true') return true;
+  if (String(body.source || '').toLowerCase() === 'admin') return true;
+  return false;
+};
 
 /**
  * Remaining = amountAfterSubsidy − discountAmount − total paid.
@@ -909,7 +927,8 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
         await respondWithQuotation();
         return;
       }
-      if (!SEND_TO_METERING_FROM_STATUSES.has(currentStatus)) {
+      // Partial install must Complete & Approve before metering — never allow.
+      if (isInstallationPartialApprovedStatus(currentStatus)) {
         res.status(400).json({
           success: false,
           error: {
@@ -918,9 +937,48 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
             details: [{
               field: 'installationStatus',
               message:
-                isInstallationPartialApprovedStatus(currentStatus)
-                  ? 'Complete & Mark as Approved first (installer_partial_approved cannot go to metering)'
-                  : 'Send to Metering requires installer_approved (or later Baldev stages)'
+                'Complete & Mark as Approved first (installer_partial_approved cannot go to metering)'
+            }]
+          }
+        });
+        return;
+      }
+      // Terminal / past Meter Pending — reject even with admin force flags.
+      const tooLateForSendToMetering = new Set([
+        'metering_approved',
+        METER_INSTALLATION_PENDING_STATUS,
+        'mco',
+        'completed'
+      ]);
+      if (tooLateForSendToMetering.has(currentStatus)) {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'VAL_001',
+            message: `Cannot send to metering from installation status "${currentStatus}"`,
+            details: [{
+              field: 'installationStatus',
+              message: 'Quotation is already past Meter Pending'
+            }]
+          }
+        });
+        return;
+      }
+      // Jul 2026: pending_installer / installer_in_progress are in SEND_TO_METERING_FROM_STATUSES
+      // so Admin → Quotations → All → Send to Metering works without installer_approved.
+      // force / adminOverride / source:"admin" are accepted but not required (handler is admin-only).
+      if (!SEND_TO_METERING_FROM_STATUSES.has(currentStatus)) {
+        const adminOverride = isAdminSendToMeteringOverride(body);
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'VAL_001',
+            message: `Cannot send to metering from installation status "${currentStatus}"`,
+            details: [{
+              field: 'installationStatus',
+              message: adminOverride
+                ? 'Unsupported installation status for Send to Metering'
+                : 'Send to Metering requires pending_installer / installer_approved (or later Baldev stages)'
             }]
           }
         });
@@ -1050,6 +1108,30 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
       error: { code: 'SYS_001', message: 'Internal error' }
     });
   }
+};
+
+/**
+ * Preferred Admin "Send to Metering" endpoint (Jul 2026).
+ * PATCH|POST /admin/quotations/:quotationId/send-to-metering
+ *
+ * Always targets pending_metering and allows pending_installer → pending_metering
+ * so Admin → Quotations → All → Metering works while OPS is still Pending Installer.
+ * See BACKEND_SEND_TO_METERING.ts.
+ */
+export const sendQuotationToMetering = async (req: Request, res: Response): Promise<void> => {
+  // Normalize body so updateQuotationInstallationStatus takes the pending_metering path
+  // with admin override flags the frontend also sends on status patches.
+  const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>;
+  req.body = {
+    ...body,
+    installationStatus: 'pending_metering',
+    meteringStatus: 'pending_metering',
+    force: body.force ?? true,
+    adminOverride: body.adminOverride ?? true,
+    allowFromPendingInstaller: body.allowFromPendingInstaller ?? true,
+    source: body.source ?? 'admin'
+  };
+  await updateQuotationInstallationStatus(req, res);
 };
 
 /**

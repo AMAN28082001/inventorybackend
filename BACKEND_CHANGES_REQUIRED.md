@@ -695,19 +695,22 @@ Frontend fallback: `lib/api.ts` → `patchOperationalWorkflowStatus` (metering s
 
 | From | Allowed |
 |------|---------|
-| `installer_approved` | **Yes** (required minimum) |
+| `pending_installer`, `installer_in_progress` | **Yes** — Admin early handoff (Jul 2026; `BACKEND_SEND_TO_METERING.ts`) |
+| `installer_approved` | **Yes** |
 | `pending_baldev`, `baldev_*` | Yes |
 | `metering_in_progress` | Yes — reset to `pending_metering` |
 | `pending_metering` | Yes — idempotent **200** |
-| `pending_installer`, `installer_in_progress` | **No** — complete installer first |
 | `installer_partial_approved` | **No** — Complete & Mark as Approved first |
 | `metering_approved`, `mco`, `completed` | **400** `VAL_001` with clear message |
+
+**Preferred endpoint:** `PATCH|POST /api/admin/quotations/:id/send-to-metering`  
+**Fallback:** `PATCH .../installation-status` with `force` / `adminOverride` / `source: "admin"`.
 
 **Quotation `status`:** Admin may send while quotation is still `pending` (no block).
 
 **Release gate:** Admin override — PATCH does **not** require `installationReadyForInstaller` / `installationReleasedAt`.
 
-See also `BACKEND_INSTALLATION_PARTIAL_AND_METERING.md`.
+See also `BACKEND_SEND_TO_METERING.ts`, `BACKEND_INSTALLATION_PARTIAL_AND_METERING.md`.
 
 ### L.1.4 — Response (200)
 
@@ -741,7 +744,7 @@ See also `BACKEND_INSTALLATION_PARTIAL_AND_METERING.md`.
 4. Re-send PATCH → **200**, same state.
 5. Installer photo upload alone → `installer_approved`, not `pending_metering`.
 
-**Code:** `controllers/adminController.ts` → `updateQuotationInstallationStatus`; `controllers/workflowController.ts` → `getMeteringQueue`; `utils/meteringWorkflowApi.ts`.
+**Code:** `controllers/adminController.ts` → `sendQuotationToMetering`, `updateQuotationInstallationStatus`; `routes/adminRoutes.ts` → `PATCH|POST .../send-to-metering`; `controllers/workflowController.ts` → `getMeteringQueue`; `utils/meteringWorkflowApi.ts`. **Reference:** `BACKEND_SEND_TO_METERING.ts`.
 
 ---
 
