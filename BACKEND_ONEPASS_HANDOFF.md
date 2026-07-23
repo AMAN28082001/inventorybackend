@@ -67,6 +67,8 @@ Hard rules:
 - Do not reject with:
   - `cannot exceed remaining (0)`
   - `paid exceeds payable` (for no-phases status-only settlement)
+- Optional: reject loan-only (`paymentType`/`paymentMode` === `loan`) with 400
+  `Final settlement is only for Cash and Cash + loan` (allowed: `cash`, `mix`)
 
 Idempotency:
 - Repeated settlement calls must not double-add discount.

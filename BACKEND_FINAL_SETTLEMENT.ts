@@ -141,6 +141,31 @@ function requireAmUser(req, res) {
   return user
 }
 
+/**
+ * Optional server guard (Jul 2026): Final Settlement is Cash / Cash+loan (mix) only.
+ * FE already hides the button for Loan; this blocks API bypass.
+ * Prefer paymentType; fall back to paymentMode when type is missing.
+ */
+function rejectLoanOnlyFinalSettlement(quotation, res) {
+  const type = String(quotation?.paymentType ?? quotation?.payment_type ?? "")
+    .trim()
+    .toLowerCase()
+  const mode = String(quotation?.paymentMode ?? quotation?.payment_mode ?? "")
+    .trim()
+    .toLowerCase()
+  const key = type || mode
+  if (key !== "loan") return false
+  res.status(400).json({
+    success: false,
+    error: {
+      code: "VAL_016",
+      message: "Final settlement is only for Cash and Cash + loan",
+      details: [{ field: "paymentType", message: "Allowed: cash, mix" }],
+    },
+  })
+  return true
+}
+
 /** amountAfterSubsidy is the source of truth for the payable cap. Never shrink it. */
 function pickAmountAfterSubsidy(quotation) {
   const p = quotation.pricing || {}
@@ -311,6 +336,11 @@ export async function postFinalSettlement(req, res) {
       return res.json({ success: true, data: quotationToApiJson(quotation) })
     }
 
+    if (rejectLoanOnlyFinalSettlement(quotation, res)) {
+      logFS("◀ OUT 400 (loan-only)", { quotationId })
+      return
+    }
+
     // NEVER reject a settlement because the server's stored remaining is 0. AM may be
     // reconciling a subtotal-vs-amountAfterSubsidy gap; the correct result is simply
     // "completed, remaining 0" (with discount clamped so payable never drops below paid).
@@ -355,6 +385,11 @@ export async function patchPricingWithSettlement(req, res) {
     if (!quotation) {
       logFS("◀ OUT 404", { quotationId })
       return res.status(404).json({ success: false, error: { code: "RES_001", message: "Not found" } })
+    }
+
+    if (rejectLoanOnlyFinalSettlement(quotation, res)) {
+      logFS("◀ OUT 400 (loan-only)", { quotationId })
+      return
     }
 
     const body = req.body || {}
@@ -430,6 +465,11 @@ export async function patchPaymentDetailsStatusOnly(req, res) {
       // Delegate to the installment-replace controller.
       logFS("↪ DELEGATE PATCH /payment-details → replace flow (phases present)", { quotationId })
       return patchQuotationPaymentDetailsWithReplace(req, res)
+    }
+
+    if (body.finalSettlementApplied === true && rejectLoanOnlyFinalSettlement(quotation, res)) {
+      logFS("◀ OUT 400 (loan-only)", { quotationId })
+      return
     }
 
     const patch = {}
@@ -518,6 +558,11 @@ export async function patchDiscountAbsolute(req, res) {
     if (!quotation) {
       logFS("◀ OUT 404", { quotationId })
       return res.status(404).json({ success: false, error: { code: "RES_001", message: "Not found" } })
+    }
+
+    if (rejectLoanOnlyFinalSettlement(quotation, res)) {
+      logFS("◀ OUT 400 (loan-only)", { quotationId })
+      return
     }
 
     const raw = N((req.body || {}).discount)

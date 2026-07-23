@@ -10,7 +10,7 @@ import { Op, Sequelize } from 'sequelize';
 import { logError, logInfo } from '../utils/loggerHelper';
 import { deleteFileFromS3IfExists } from '../middleware/upload';
 import { decodeS3UrlPathToKey, generatePublicUrl, isPresignedS3GetUrl } from '../utils/s3Service';
-import { normalizePaymentModeInput } from '../utils/paymentMode';
+import { normalizePaymentModeInput, isLoanOnlyPaymentType, FINAL_SETTLEMENT_LOAN_ONLY_MESSAGE } from '../utils/paymentMode';
 import {
   quotationAmountApiFields,
   quotationPaymentApiFields,
@@ -428,6 +428,25 @@ const remainingPaymentAgainstSubtotal = (
   const paid = Number(totalPaid);
   const safePaid = isNaN(paid) ? 0 : paid;
   return Math.max(0, base - discount - safePaid);
+};
+
+/** Optional server guard: Final Settlement only for cash / mix (Cash + loan), not loan-only. */
+const rejectLoanOnlyFinalSettlement = (quotation: unknown, res: Response): boolean => {
+  if (!isLoanOnlyPaymentType(quotation as any)) return false;
+  res.status(400).json({
+    success: false,
+    error: {
+      code: 'VAL_016',
+      message: FINAL_SETTLEMENT_LOAN_ONLY_MESSAGE,
+      details: [
+        {
+          field: 'paymentType',
+          message: 'Allowed payment types for final settlement: cash, mix'
+        }
+      ]
+    }
+  });
+  return true;
 };
 
 /** Effective payable after subsidy + discount write-off (cap for paid totals). */
@@ -2264,6 +2283,18 @@ export const updateQuotationDiscount = async (req: Request, res: Response): Prom
       return;
     }
 
+    // Absolute INR discount used by Final Settlement fallback — block loan-only.
+    const rawForSettlementGuard = req.body.discount;
+    const absoluteInrDiscount =
+      (typeof rawForSettlementGuard === 'number' && rawForSettlementGuard > 100) ||
+      (typeof rawForSettlementGuard === 'string' &&
+        Number.isFinite(Number(rawForSettlementGuard)) &&
+        Number(rawForSettlementGuard) > 100) ||
+      req.body?.finalSettlementApplied === true;
+    if (absoluteInrDiscount && rejectLoanOnlyFinalSettlement(quotation, res)) {
+      return;
+    }
+
     // Handle both number and string inputs. Convention: discount ≤ 100 → %; > 100 → absolute INR.
     const rawDiscount = req.body.discount;
     let discount: number =
@@ -2721,6 +2752,17 @@ export const updateQuotationPricing = async (req: Request, res: Response): Promi
       return;
     }
 
+    // Settlement-style pricing write (FE finalizeSettlement fallback): block loan-only.
+    // FE sends { discountAmount, totalAmount, finalAmount } without subtotal.
+    const looksLikeSettlementPricing =
+      req.body?.finalSettlementApplied === true ||
+      (String(req.body?.paymentStatus || '').toLowerCase() === 'completed' &&
+        (Number(req.body?.remaining) === 0 || Number(req.body?.remainingAmount) === 0)) ||
+      (discountAmount !== undefined && subtotal === undefined && finalAmount !== undefined);
+    if (looksLikeSettlementPricing && rejectLoanOnlyFinalSettlement(quotation, res)) {
+      return;
+    }
+
     const quotationAny = quotation as any;
     const currentProducts = quotationAny.products || {};
 
@@ -3018,6 +3060,11 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
       return;
     }
 
+    // Loan-only cannot apply Final Settlement (cash / mix only) — even via payment-details flag.
+    if (finalSettlementApplied === true && rejectLoanOnlyFinalSettlement(quotation, res)) {
+      return;
+    }
+
     const { actorId } = resolveActorForAudit(req);
     const settlementFields = {
       ...(finalSettlementAmount !== undefined
@@ -3109,6 +3156,7 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
       // call alone settles even if PATCH /pricing never ran. Do NOT touch installments; skip
       // VAL_012; never reject with "cannot exceed remaining". Grow discount only up to
       // amountAfterSubsidy − paid so payable never drops below paid (subtotal-vs-AAS mismatch).
+      // (Loan-only already rejected above when finalSettlementApplied === true.)
       const existingDiscount = Number((quotation as any).discountAmount || 0);
       const amountAfterSubsidyCap = resolveAmountAfterSubsidy(quotation as any);
       const paidAmt = Number(quotation.paidAmount || 0);
@@ -3334,6 +3382,9 @@ export const submitQuotationFinalSettlement = async (req: Request, res: Response
       });
       return;
     }
+
+    // Optional server guard: Final Settlement only for Cash / Cash + loan (mix).
+    if (rejectLoanOnlyFinalSettlement(quotation, res)) return;
 
     const paid =
       phases.length > 0

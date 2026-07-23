@@ -15,6 +15,11 @@ API client: `lib/api.ts` → `finalizeSettlement` (persists to DB; throws if not
 >   `paymentStatus=completed`, and (c) return them on every `GET`. There is no client-side
 >   safety net anymore.
 
+**Visibility (frontend):** Submit final settlement is shown only for **Cash** and **Cash + loan** (`mix`). Hidden for **Loan**.
+
+**Optional backend guard:** if `paymentType` / `paymentMode` === `loan`, reject settlement writes with **400**  
+`Final settlement is only for Cash and Cash + loan` (`VAL_016`). Allowed: `cash`, `mix`.
+
 **Share this file with backend.** Copy-paste controllers with full logging: **`BACKEND_FINAL_SETTLEMENT.ts`**.
 
 ---
