@@ -13,8 +13,24 @@ export const uploadCallingLeadsSchema = z.object({
   activeLeadsLimit: z.preprocess((value) => {
     if (value !== undefined && value !== null && value !== '') return value;
     return undefined;
-  }, z.coerce.number().int().min(1).max(50).optional())
+  }, z.coerce.number().int().min(1).max(50).optional()),
+  /** §15-C — round_robin_all assigns every row (ignore active cap leftovers) */
+  assignmentMode: z.string().max(64).optional(),
+  assignment_mode: z.string().max(64).optional(),
+  mode: z.string().max(64).optional()
 });
+
+export const assignUnassignedLeadsSchema = z
+  .object({
+    assignmentMode: z.string().max(64).optional(),
+    assignment_mode: z.string().max(64).optional(),
+    dealerIds: z.preprocess((value) => {
+      if (value === undefined || value === null || value === '') return undefined;
+      if (Array.isArray(value)) return value;
+      return [value];
+    }, z.array(z.string().min(1)).optional())
+  })
+  .passthrough();
 
 const ALLOWED_STATUS_CATEGORIES = [
   'call_connectivity',

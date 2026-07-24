@@ -37,7 +37,9 @@
 | 25 | Medium | Admin Visitor Reports — `GET /api/admin/visits` | **Done** | §19 |
 | 26 | High | Final confirmation document uploads | **Done** | §20 / §M |
 | 27 | High | Quotations tab → Send to Metering | **Done** | §21 / §L.1 |
-| 28 | High | Admin Overview → Product Needed (installation-pending brands) | **Todo** | §28 / `BACKEND_ADMIN_PRODUCT_NEEDED.ts` |
+| 28 | High | Admin Overview → Product Needed (installation-pending brands) | **Done** | §13 / `BACKEND_ADMIN_PRODUCT_NEEDED.ts` |
+| 29 | High | Inventory Tally import — `POST /products` without serials + clear errors | **Done** | §14 |
+| 30 | High | Calling FCFS + `/current` never 500 + assign-unassigned (Unassigned→0) | **Done** | §15 / `BACKEND_ASSIGN_UNASSIGNED.ts` |
 
 **Deploy before QA:**
 
@@ -74,7 +76,8 @@ Optional: `TZ=Asia/Kolkata` if weekly HR reports must match SPA Mon–Sun in IST
 | **Payment Excel journey columns** (`installationStatus`, metering fields on approved list) | ✅ `utils/paymentExcelJourneyStatus.ts` — see `BACKEND_PAYMENT_EXCEL_JOURNEY_STATUS.ts` |
 | **Final Settlement** (remaining → `discountAmount`; `POST /final-settlement` atomic; status-only payment-details; persisted `finalSettlementApplied`) | ✅ `BACKEND_FINAL_SETTLEMENT.md` + `BACKEND_FINAL_SETTLEMENT.ts` / §AD |
 | **Super Admin quotation login + inventory JWT** (`role: super-admin` shared token) | ✅ `utils/inventoryRole.ts` — see `BACKEND_SUPER_ADMIN_QUOTATION_LOGIN.ts` / §AD |
-| **Admin Product Needed** (`GET /admin/product-needed?scope=installation_pending` + brand aggregates) | ❌ Optional route — SPA fallback: `GET /admin/quotations` — see §28 / `BACKEND_ADMIN_PRODUCT_NEEDED.ts` |
+| **Admin Product Needed** (`GET /admin/product-needed?scope=installation_pending` + brand aggregates) | ✅ `controllers/adminController.ts` → `getAdminProductNeeded` — see **§13** / `BACKEND_ADMIN_PRODUCT_NEEDED.ts` |
+| **Tally Purchase import** (`POST /products` without serials; attach serials on PUT) | ✅ `controllers/productController.ts` — see **§14** |
 | `?dealerId=` / `?installmentCount=` on approved list | ❌ Optional |
 | `GET /admin/overview/dealer-stats` | ❌ Optional |
 | Persist `system_kw` column on create/update | ✅ `persistQuotationSystemKw` + migration |
@@ -945,7 +948,7 @@ Client calls **`api.quotations.finalizeSettlement`**, which **persists to the DB
 
 ## 13. Admin Overview — total kW (capacity) by dealer (May 2026)
 
-> **Related (Jul 2026):** Admin Overview → **Product Needed** (installation-pending brand cards) is documented in **§28** — see `BACKEND_ADMIN_PRODUCT_NEEDED.ts`. Frontend handoffs may call Product Needed “§13”; do not confuse with this kW section.
+> **Related (Jul 2026):** Admin Overview → **Product Needed** is documented below as **§13b** (frontend §13). This section remains the kW / Dealers by Revenue contract.
 
 ### 13.1 — 0 kW bug — backend ticket (JAGDISH / revenue-only rows)
 
@@ -1529,119 +1532,179 @@ Admin **Final Confirmation** tab uploads fail with **400** `Invalid quotation do
 
 ---
 
-## 28. Admin — Product Needed (installation-pending brand dashboard) (Jul 2026)
+## 13b / §13 (frontend) — Admin Product Needed (installation-pending brand dashboard) (Jul 2026)
 
 **Frontend:** Admin Panel → Overview → **Product Needed**  
+**API:** `GET /admin/product-needed` via `api.admin.productNeeded.getAll`  
 **Reference:** [`BACKEND_ADMIN_PRODUCT_NEEDED.ts`](./BACKEND_ADMIN_PRODUCT_NEEDED.ts)  
-**Related FE:** `lib/admin-product-needed.ts`, `lib/operational-install-queue.ts`
+**Client:** `lib/admin-product-needed.ts`, `lib/load-admin-product-needed.ts`
 
-> Frontend handoffs may label this **§13**. In this repo the Admin Overview kW section already uses §13 — Product Needed is tracked here as **§28**.
+### Goal
 
-### What it is
+Procurement dashboard for **installation-pending jobs only** (same gate as Admin → Pending Installation):
 
-A brand dashboard for panels (and inverter summary) still needed on jobs that are in **Pending Installation**:
+- One **brand card** per panel brand with wattage / set lines
+- One **brand card** per inverter brand with kW / set lines
+- “As per the set” with missing qty → **1 set per job** (2 Tata jobs = **2 sets**)
 
-- Released from Payment Management to installer
-- Not yet `installer_approved`
-- Not in metering (`pending_metering`+)
+SPA already aggregates from `GET /admin/quotations` when this route is missing.
 
-Examples:
+### Required backend
 
-| Brand card | Lines |
-|------------|-------|
-| Waaree | 540W × 12, 560W × 8 |
-| Tata | As per the set × 1 (qty 0 on job → **1 set**) |
+1. **`GET /admin/product-needed`** (admin JWT only)
+2. Query params:
 
-### Preferred endpoint
+| Param | Notes |
+|-------|--------|
+| `scope` | `installation_pending` (default). **Do not** require `tab=file_login` |
+| `dealerId`, `search`, `startDate`, `endDate` | Optional |
+| `dateField` | `installation_released` (default) or `created` |
+| `page`, `limit` | Default 500, max 2000 |
 
-```http
-GET /api/admin/product-needed?scope=installation_pending
-Authorization: Bearer <admin JWT>
-```
+3. **Eligibility** (Pending Installation only):
+   - Released / sent to installer
+   - Status in `pending_installer`, `installer_in_progress`
+   - **Exclude** partial approved, `installer_approved`, metering, baldev/completed, `installerApprovedAt`
+4. Each row: structured **`panelLines`** + **`inverterBrand` / `inverterSize` / `inverterQuantity`**
+5. Optional **`data.aggregates`** on the **full filtered set** before pagination (`buildBrandAggregates`)
+6. Keep `GET /admin/quotations` release flags + products for SPA fallback
 
-**Auth:** same as `GET /admin/quotations` (quotation admin or inventory admin / super-admin — see `BACKEND_SUPER_ADMIN_QUOTATION_LOGIN.ts`).
-
-### Filter (must match Pending Installation)
-
-| Rule | Detail |
-|------|--------|
-| `status` | `approved` |
-| Released | `installationReadyForInstaller = true` **or** `installationReleasedAt != null` |
-| `installationStatus` | `pending_installer`, `installer_in_progress`, `installer_partial_approved` |
-| Exclude | `installer_approved`, metering stages, `mco`, `completed` |
-| Exclude | Unreleased approved quotes |
-
-### Response contract
+### Response shape (minimum)
 
 ```json
 {
   "success": true,
   "data": {
-    "scope": "installation_pending",
-    "quotations": [
+    "rows": [
       {
-        "id": "QT-…",
-        "installationStatus": "pending_installer",
-        "products": { "panelBrand": "Waaree", "panelSize": "540W", "panelQuantity": 10 },
-        "panelLines": [
-          { "brand": "Waaree", "size": "540W", "quantity": 10, "unit": "panel" }
-        ],
-        "inverter": { "brand": "Vsole/Xwatt", "size": "5kW", "quantity": 1 }
+        "quotationId": "QT-…",
+        "dealerId": "…",
+        "customerName": "…",
+        "customerMobile": "…",
+        "dealerName": "…",
+        "systemKw": "5kW",
+        "systemType": "DCR",
+        "panels": "Waaree 540W × 10",
+        "inverter": "Vsole/Xwatt · 5kW",
+        "panelLines": [{ "brand": "Waaree", "size": "540W", "quantity": 10 }],
+        "inverterBrand": "Vsole/Xwatt",
+        "inverterSize": "5kW",
+        "inverterQuantity": 1,
+        "installationReleasedAt": "2026-07-01T10:00:00.000Z",
+        "quotationStatus": "approved"
       }
     ],
-    "brandCards": [
-      {
-        "brand": "Waaree",
-        "totalQuantity": 10,
-        "jobCount": 1,
-        "lines": [{ "size": "540W", "quantity": 10, "unit": "panel", "jobs": 1 }]
-      }
-    ],
-    "totals": { "jobs": 1, "panelQuantity": 10 }
+    "aggregates": {
+      "jobCount": 22,
+      "totalPanels": 151,
+      "totalInverters": 22,
+      "panels": [
+        {
+          "brand": "Waaree",
+          "totalQuantity": 63,
+          "jobCount": 8,
+          "sizes": [
+            { "size": "540W", "quantity": 54, "jobCount": 7, "unit": "panels" },
+            { "size": "560W", "quantity": 9, "jobCount": 1, "unit": "panels" }
+          ]
+        },
+        {
+          "brand": "Tata",
+          "totalQuantity": 2,
+          "jobCount": 2,
+          "sizes": [
+            { "size": "As per the set", "quantity": 2, "jobCount": 2, "unit": "sets" }
+          ]
+        }
+      ],
+      "inverters": []
+    },
+    "pagination": { "page": 1, "limit": 2000, "total": 22, "totalPages": 1 }
   }
 }
 ```
 
-### Product line rules
-
-| Case | Behavior |
-|------|----------|
-| Normal panel | `brand` + `size` (wattage) + `quantity` |
-| BOTH system | Separate DCR + Non-DCR `panelLines` |
-| CUSTOMIZE | One line per `customPanels[]` row |
-| Tata / “As per the set” with qty `0` | Count **1 set per job** (`unit: "set"`) |
-| After Send to Metering | Row **leaves** Product Needed |
-
-### Fallback (until route ships)
-
-SPA keeps building from:
-
-```http
-GET /api/admin/quotations?status=approved&operationalView=installer&releasedToInstaller=true
-```
-
-List rows must still return `products` / `quotationProduct` with `panelBrand`, `panelSize`, `panelQuantity` (and BOTH / inverter fields). Optional: add `panelLines` on each list row via `extendAdminQuotationRowForProductNeeded`.
-
 ### Checklist
 
-- [ ] `GET /admin/product-needed?scope=installation_pending` registered (admin auth)
-- [ ] Filter = Pending Installation (released, not approved install, not metering)
-- [ ] Each row includes structured `panelLines` + inverter brand/size/qty
-- [ ] Optional `brandCards` aggregates (one card per brand, wattage/set lines inside)
-- [ ] “As per the set” qty 0 → 1 set per job
-- [ ] Metering / `installer_approved` rows excluded
-- [ ] Until route exists: `GET /admin/quotations` product fields remain complete
+- [ ] `GET /admin/product-needed?scope=installation_pending` → **200** (admin)
+- [ ] Dealer / visitor → **403**
+- [ ] Only Pending Installation jobs
+- [ ] `panelLines` + wattage normalized (`540W`)
+- [ ] Set packages qty `0` → **sets** (1 per job)
+- [ ] Optional `aggregates.panels` / `aggregates.inverters`
+- [ ] `dealerId` + date filters server-side
+- [ ] SPA works if route **404** (quotation-list fallback)
 
 ### QA
 
-1. Pending Installer job with Waaree 540W → appears under Waaree → 540W.
-2. Tata “As per the set” qty 0 → 1 set on Tata card.
-3. Send to Metering → disappears from Product Needed.
-4. Unreleased approved quote → not listed.
-5. Non-admin JWT → 403.
-6. Without dedicated route: Overview still builds cards from `/admin/quotations`.
+1. Send to installer → appears; approve installation → leaves.
+2. Two Adani jobs (540W×10, 620W×5) → **one Adani card**, two size lines.
+3. Two Tata “As per the set” qty 0 → **2 sets**.
+4. Filter by dealer → totals for that dealer only.
+5. Non-admin → **403**.
 
-**Code to copy:** `BACKEND_ADMIN_PRODUCT_NEEDED.ts` → `getAdminProductNeeded`, `buildPanelLines`, `aggregateBrandCards`.
+---
+
+## 14. Inventory — Tally Purchase import `POST /products` (Jul 2026)
+
+**Frontend:** Inventory → Add New Product → **Import stock from Tally Purchase JSON**  
+**Failing call (before fix):** `POST /api/products` → **500** `{ error: "Server error" }`
+
+### Frontend mitigation (already shipped)
+
+1. `POST /products` — name, model, category, qty, unit (`NOS`), cost — **no** `serial_numbers`
+2. `PUT /products/:id` — `stock_to_add: 0` + `serial_numbers` JSON string
+
+### Backend (implemented in this repo)
+
+| Change | File |
+|--------|------|
+| Allow create **without** serials for Panels/Inverters (attach on PUT) | `controllers/productController.ts` |
+| Accept `serial_numbers` as JSON **string or array** | `validations/productValidations.ts` |
+| Return real error message/`code` on create failure (not bare `"Server error"`) | `createProduct` catch |
+| Units `NOS` / `PCS` / `MTR` / `KGS` (+ display aliases) | `utils/productUnit.ts` |
+| Do not init S3 unless an image file is present | already |
+
+### Checklist
+
+- [x] `POST /products` JSON without image → **201**
+- [x] Create Inverter/Panel with qty and **no** serials → **201**
+- [x] `PUT /products/:id` with `serial_numbers` string → attaches serials
+- [x] Duplicate serial → **400** with clear message
+- [x] 500 responses include exception message / `code`
+
+### QA
+
+1. Import Tally Purchase JSON with Inverter + 2 serials → product + both serials.
+2. Same voucher twice → clear duplicate error (no opaque 500).
+3. Create without photo works when AWS is misconfigured.
+
+---
+
+## 28. Admin — Product Needed (alias)
+
+> Canonical section is **§13b / frontend §13** above. Kept for older links that pointed at §28.
+
+**Reference:** `BACKEND_ADMIN_PRODUCT_NEEDED.ts`
+
+---
+
+## 15. Calling / HR uploads — FCFS + Unassigned → 0 (Jul 2026)
+
+**Symptom:** `/current` 500; HR Unassigned badges (193, 97, …) stuck; dealers see empty Current Lead.
+
+**Shipped:**
+
+| Piece | Implementation |
+|-------|----------------|
+| `/current` + `/next` always **200** | `getDealerCallingQueueCurrent` / `Next` — empty on error, never SYS_001 |
+| FCFS allocate | `promoteQueuedLeadIfSlotAvailable` + SKIP LOCKED; stuck reclaim |
+| **`POST …/uploads/:uploadId/assign-unassigned`** | Round-robin all pool/unassigned leads → `unassignedCount === 0` |
+| Upload `assignmentMode=round_robin_all` | Assign **every** new row (ignore `activeLimitPerDealer` leftovers) |
+
+**Refs:** `BACKEND_ASSIGN_UNASSIGNED.ts`, `BACKEND_CALLING_QUEUE_CURRENT.ts`
+
+**QA:** HR Assign unassigned on batch with Unassigned 193 → badge **0**; new CSV with `round_robin_all` → Unassigned **0** at upload; dealer `/current` 200 with next assigned lead.
 
 ---
 
@@ -1657,8 +1720,12 @@ List rows must still return `products` / `quotationProduct` with `panelBrand`, `
 | `BACKEND_METER_INSTALLATION_PENDING.md` | Meter Installation Pending + WCC / MIP photos |
 | `BACKEND_CHANGES_DECIMAL_PRICE_KG_TO_PIECES.md` | Decimal prices + unit + kg→pieces |
 | `BACKEND_ADMIN_QUOTATION_STATUS.ts` | Reference contracts |
-| **`BACKEND_ADMIN_PRODUCT_NEEDED.ts`** | **§28** Admin Product Needed — installation-pending + brand aggregates |
+| **`BACKEND_ADMIN_PRODUCT_NEEDED.ts`** | **§13** Admin Product Needed — installation-pending + brand aggregates |
 | `BACKEND_SUPER_ADMIN_QUOTATION_LOGIN.ts` | Super-admin `/auth/login` + shared JWT for inventory |
 | `BACKEND_FINAL_SETTLEMENT.ts` / `.md` | Final Settlement persist + GET |
 | `BACKEND_SEND_TO_METERING.ts` | Admin pending_installer → pending_metering |
+| **§14** (this file) | Inventory Tally import — `POST /products` + serial attach on PUT |
+| **§15** (this file) | Calling `/current` 500 + FCFS + Unassigned → 0 |
+| **`BACKEND_ASSIGN_UNASSIGNED.ts`** | **§15-C** `POST …/assign-unassigned` + upload `round_robin_all` |
+| **`BACKEND_CALLING_QUEUE_CURRENT.ts`** | **§15** `/calling-queue/current` + `/next` (never SYS_001) |
 

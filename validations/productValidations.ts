@@ -40,11 +40,11 @@ export const createProductSchema = z.object({
   unit: optionalProductUnitSchema,
   product_name: z.string().max(255).optional(),
   product_category: z.string().max(255).optional(),
-  serial_numbers: z.string().optional(),
+  serial_numbers: z.union([z.string(), z.array(z.string())]).optional(),
   default_price: optionalDecimalPriceSchema,
   selling_price: optionalDecimalPriceSchema,
   cost_price: optionalDecimalPriceSchema,
-  serial_number_prices: z.string().optional(),
+  serial_number_prices: z.union([z.string(), z.record(z.string(), z.union([z.string(), z.number()]))]).optional(),
   quantity: z.preprocess(
     (val) => {
       if (val === '' || val === null || val === undefined) return 0;
@@ -54,7 +54,10 @@ export const createProductSchema = z.object({
     z.number().int().min(0, 'Quantity cannot be negative')
   ).default(0),
   unit_price: optionalNullableDecimalPriceSchema,
-  image: z.string().nullable().optional()
+  image: z.string().nullable().optional(),
+  /** Inventory users.id — used when quotation Admin JWT is not in `users` yet */
+  created_by: z.string().max(50).optional(),
+  createdBy: z.string().max(50).optional()
 });
 
 export const updateProductSchema = z.object({
@@ -88,10 +91,10 @@ export const updateProductSchema = z.object({
       .min(0)
       .optional()
   ),
-  serial_numbers: z.string().optional(),
+  serial_numbers: z.union([z.string(), z.array(z.string())]).optional(),
   default_price: optionalDecimalPriceSchema,
   cost_price: optionalDecimalPriceSchema,
-  serial_number_prices: z.string().optional(),
+  serial_number_prices: z.union([z.string(), z.record(z.string(), z.union([z.string(), z.number()]))]).optional(),
   quantity: z.preprocess(
     (val) => {
       if (val === '' || val === null || val === undefined) return undefined;

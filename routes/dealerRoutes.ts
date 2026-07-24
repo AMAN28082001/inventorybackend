@@ -306,6 +306,9 @@ router.get('/visitors', getVisitors);
 
 router.get('/me/calling-queue/next', getDealerCallingQueueNext);
 router.get('/me/calling-queue/current', getDealerCallingQueueCurrent);
+// SPA fallback aliases (§15)
+router.get('/me/lead-queue/next', getDealerCallingQueueNext);
+router.get('/me/lead-queue/current', getDealerCallingQueueCurrent);
 router.get('/me/calling-queue/scheduled', getDealerScheduledQueue);
 router.get('/me/calling-actions', getDealerCallingActions);
 router.get('/me/calling-queue/actions', getDealerCallingActions);

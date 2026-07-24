@@ -29,6 +29,12 @@ const CITY_KEYS = ['city'];
 const STATE_KEYS = ['state', 'data ref. / state', 'data ref/state', 'data ref state'];
 const NOTE_KEYS = ['customernote', 'customer note', 'note', 'notes', 'remark', 'remarks'];
 const DEFAULT_ACTIVE_LIMIT_PER_DEALER = Number(process.env.ACTIVE_LIMIT_PER_DEALER || 1);
+/** Hours after which stuck assigned/in_progress leads return to the unassigned pool (§15). */
+const CALLING_STUCK_RECLAIM_HOURS = Math.max(
+  1,
+  Number(process.env.CALLING_STUCK_ASSIGNMENT_HOURS || process.env.CALLING_IN_PROGRESS_TIMEOUT_HOURS || 4)
+);
+const POOL_UNASSIGNED_DEALER_ID = 'unassigned';
 const CALLING_ACTION_FILTER_RANGES = ['daily', 'weekly', 'monthly', 'last_month', 'custom', 'all'] as const;
 const REPORT_ACTIONS = ['called', 'follow_up', 'not_interested', 'rescheduled'] as const;
 const ALLOWED_STATUS_CATEGORIES = [
@@ -107,14 +113,145 @@ export const isValidHrCallingAssigneeDealerId = (dealerId: string | null | undef
 export const isPoolOrUnassignedAssigneeId = (dealerId: string | null | undefined): boolean =>
   !isValidHrCallingAssigneeDealerId(dealerId);
 
-const poolAssigneeDealerIdClause = () => {
-  const sentinels = Array.from(HR_UPLOAD_UNASSIGNED_DEALER_SENTINELS)
-    .map((value) => `'${value.replace(/'/g, "''")}'`)
-    .join(', ');
-  return Sequelize.literal(`
-    LOWER(TRIM("DealerLeadAssignment"."dealerId")) IN (${sentinels})
-  `);
+const normalizeActiveLimitPerDealer = (raw: unknown): number => {
+  const n = Number(raw);
+  if (Number.isFinite(n) && n > 0) return Math.floor(n);
+  return Math.max(1, DEFAULT_ACTIVE_LIMIT_PER_DEALER || 1);
 };
+
+/**
+ * dealer_lead_assignments.dealerId has FK → dealers(id) and is NOT NULL.
+ * Pool/unassigned leads must use a real dealers row with id = "unassigned".
+ * Without this, reclaim + overflow upload silently fail (FK violation).
+ */
+const ensureCallingPoolDealerExists = async (transaction?: any): Promise<void> => {
+  const existing = await Dealer.findByPk(POOL_UNASSIGNED_DEALER_ID, {
+    attributes: ['id'],
+    transaction
+  });
+  if (existing) return;
+
+  try {
+    await Dealer.create(
+      {
+        id: POOL_UNASSIGNED_DEALER_ID,
+        username: '__calling_pool_unassigned__',
+        // Locked sentinel — isActive=false; never used for login.
+        password: '!calling-pool-locked!',
+        firstName: 'Unassigned',
+        lastName: 'Pool',
+        email: 'calling-pool-unassigned@internal.invalid',
+        mobile: '0000000001',
+        company: 'SYSTEM',
+        gender: 'Other',
+        dateOfBirth: new Date('1970-01-01'),
+        fatherName: 'SYSTEM',
+        fatherContact: '0000000001',
+        governmentIdType: 'Passport',
+        governmentIdNumber: 'CALLING-POOL-UNASSIGNED',
+        addressStreet: 'SYSTEM',
+        addressCity: 'SYSTEM',
+        addressState: 'SYSTEM',
+        addressPincode: '000000',
+        role: 'dealer',
+        isActive: false,
+        emailVerified: false
+      },
+      { transaction }
+    );
+    logInfo('Created calling pool dealer sentinel', { dealerId: POOL_UNASSIGNED_DEALER_ID });
+  } catch (error) {
+    const again = await Dealer.findByPk(POOL_UNASSIGNED_DEALER_ID, {
+      attributes: ['id'],
+      transaction
+    });
+    if (again) return;
+    throw error;
+  }
+};
+
+/**
+ * §15 — reclaim stuck assigned / in_progress back to the FIFO pool so Assigned can drain to 0.
+ * Uses COALESCE(actionAt, updatedAt, assignedAt) older than CALLING_STUCK_RECLAIM_HOURS.
+ * Never throws — allocation must survive reclaim failures.
+ */
+const reclaimStuckCallingAssignments = async (transaction: any): Promise<number> => {
+  try {
+    await ensureCallingPoolDealerExists(transaction);
+
+    const cutoff = new Date(Date.now() - CALLING_STUCK_RECLAIM_HOURS * 60 * 60 * 1000);
+    const sentinels = Array.from(HR_UPLOAD_UNASSIGNED_DEALER_SENTINELS)
+      .map((value) => `'${value.replace(/'/g, "''")}'`)
+      .join(', ');
+
+    const [, meta] = await sequelize.query(
+      `
+      UPDATE "dealer_lead_assignments" AS dla
+      SET
+        "dealerId" = :poolDealerId,
+        "status" = 'queued',
+        "assignedAt" = NOW(),
+        "action" = NULL,
+        "callRemark" = NULL,
+        "nextFollowUpAt" = NULL,
+        "actionAt" = NULL,
+        "updatedAt" = NOW()
+      WHERE dla."id" IN (
+        SELECT stuck."id"
+        FROM "dealer_lead_assignments" AS stuck
+        WHERE stuck."status" IN ('assigned', 'active', 'in_progress')
+          AND LOWER(TRIM(stuck."dealerId")) NOT IN (${sentinels})
+          AND COALESCE(stuck."actionAt", stuck."updatedAt", stuck."assignedAt") < :cutoff
+          AND NOT EXISTS (
+            SELECT 1
+            FROM "dealer_lead_assignments" AS newer
+            WHERE newer."leadId" = stuck."leadId"
+              AND (
+                newer."assignedAt" > stuck."assignedAt"
+                OR (
+                  newer."assignedAt" = stuck."assignedAt"
+                  AND newer."createdAt" > stuck."createdAt"
+                )
+              )
+          )
+        ORDER BY stuck."assignedAt" ASC
+        LIMIT 200
+        FOR UPDATE SKIP LOCKED
+      )
+      `,
+      {
+        replacements: {
+          poolDealerId: POOL_UNASSIGNED_DEALER_ID,
+          cutoff
+        },
+        transaction
+      }
+    );
+    const updated = Number((meta as any)?.rowCount ?? 0);
+    return Number.isFinite(updated) ? updated : 0;
+  } catch (error) {
+    logError('Reclaim stuck calling assignments failed (non-fatal)', error);
+    return 0;
+  }
+};
+
+const countDealerOpenCallingSlots = async (
+  dealerId: string,
+  transaction: any
+): Promise<number> =>
+  DealerLeadAssignment.count({
+    where: {
+      [Op.and]: [
+        {
+          dealerId,
+          status: { [Op.in]: ['assigned', 'active', 'in_progress'] }
+        },
+        LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE,
+        dealerBatchEligibilityClause(dealerId)
+      ]
+    },
+    transaction
+  });
 
 /**
  * Live batch buckets (§7.8): completed | assigned (valid assignee, not completed) | unassigned.
@@ -214,9 +351,13 @@ const buildHrUploadCountsForBatches = async (
 
   for (const batch of batches) {
     const aggregate = aggregateByBatch.get(batch.id);
+    // Prefer live calling_leads count — CSV rowCount often exceeds created leads
+    // (duplicates skipped), which previously inflated unassignedCount (phantom Unassigned).
+    const liveLeadCount = Number(aggregate?.leadCount) || 0;
+    const denominator = liveLeadCount > 0 ? liveLeadCount : Math.max(0, Number(batch.rowCount) || 0);
     countsByBatch.set(
       batch.id,
-      computeHrUploadLeadCounts(batch.rowCount, {
+      computeHrUploadLeadCounts(denominator, {
         completedCount: aggregate?.completedCount ?? 0,
         assignedCount: aggregate?.assignedCount ?? 0
       })
@@ -310,6 +451,142 @@ const parseDealerIds = (dealerIds: unknown): string[] => {
   if (dealerIds === undefined || dealerIds === null) return [];
   const single = String(dealerIds).trim();
   return single ? [single] : [];
+};
+
+/** §15-C — SPA sends assignmentMode=round_robin_all to assign every upload row (no active-cap leftovers). */
+const isRoundRobinAllAssignmentMode = (raw: unknown): boolean => {
+  const mode = String(raw ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/-/g, '_');
+  return (
+    mode === 'round_robin_all' ||
+    mode === 'roundrobin_all' ||
+    mode === 'all' ||
+    mode === 'assign_all'
+  );
+};
+
+const extractDealerIdsFromBatchPool = (assignedDealers: unknown): string[] => {
+  if (!Array.isArray(assignedDealers)) return [];
+  const ids: string[] = [];
+  for (const entry of assignedDealers) {
+    if (typeof entry === 'string' || typeof entry === 'number') {
+      const id = String(entry).trim();
+      if (id) ids.push(id);
+      continue;
+    }
+    if (entry && typeof entry === 'object') {
+      const obj = entry as Record<string, unknown>;
+      const id = String(obj.id ?? obj.dealerId ?? obj.dealer_id ?? '').trim();
+      if (id) ids.push(id);
+    }
+  }
+  return Array.from(new Set(ids));
+};
+
+/**
+ * §15-C — round-robin assign all unassigned/pool leads in a batch to dealerIds.
+ * Returns how many leads were moved to assigned.
+ */
+const roundRobinAssignUnassignedLeadsForBatch = async ({
+  batchId,
+  dealerIds,
+  assignedByUserId,
+  transaction
+}: {
+  batchId: string;
+  dealerIds: string[];
+  assignedByUserId: string;
+  transaction: any;
+}): Promise<number> => {
+  if (!dealerIds.length) return 0;
+
+  const sentinels = Array.from(HR_UPLOAD_UNASSIGNED_DEALER_SENTINELS)
+    .map((value) => `'${value.replace(/'/g, "''")}'`)
+    .join(', ');
+
+  // Pool / sentinel assignments (latest per lead) for this batch — oldest first
+  const poolAssignments = await DealerLeadAssignment.findAll({
+    where: {
+      [Op.and]: [
+        LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE,
+        Sequelize.literal(`LOWER(TRIM("DealerLeadAssignment"."dealerId")) IN (${sentinels})`),
+        Sequelize.literal(`
+          EXISTS (
+            SELECT 1 FROM "calling_leads" AS cl
+            WHERE cl."id" = "DealerLeadAssignment"."leadId"
+              AND cl."batchId" = '${batchId.replace(/'/g, "''")}'
+          )
+        `)
+      ]
+    },
+    order: [
+      [Sequelize.literal('COALESCE("DealerLeadAssignment"."assignedAt", "DealerLeadAssignment"."createdAt")'), 'ASC'],
+      ['id', 'ASC']
+    ],
+    transaction,
+    lock: transaction.LOCK.UPDATE
+  });
+
+  // Leads in batch with no assignment row at all
+  const leadsWithoutAssignment = await CallingLead.findAll({
+    where: {
+      batchId,
+      [Op.and]: [
+        Sequelize.literal(`
+          NOT EXISTS (
+            SELECT 1 FROM "dealer_lead_assignments" AS da
+            WHERE da."leadId" = "CallingLead"."id"
+          )
+        `)
+      ]
+    },
+    order: [['createdAt', 'ASC'], ['id', 'ASC']],
+    transaction,
+    lock: transaction.LOCK.UPDATE
+  });
+
+  let cursor = 0;
+  let moved = 0;
+  const now = new Date();
+
+  for (const assignment of poolAssignments) {
+    const dealerId = dealerIds[cursor % dealerIds.length];
+    cursor += 1;
+    await assignment.update(
+      {
+        dealerId,
+        status: 'assigned',
+        assignedAt: now,
+        action: null,
+        callRemark: null,
+        nextFollowUpAt: null,
+        actionAt: null
+      },
+      { transaction }
+    );
+    moved += 1;
+  }
+
+  for (const lead of leadsWithoutAssignment) {
+    const dealerId = dealerIds[cursor % dealerIds.length];
+    cursor += 1;
+    await DealerLeadAssignment.create(
+      {
+        id: uuidv4(),
+        leadId: lead.id,
+        dealerId,
+        assignedBy: assignedByUserId,
+        assignedAt: now,
+        status: 'assigned'
+      },
+      { transaction }
+    );
+    moved += 1;
+  }
+
+  return moved;
 };
 
 const extractCell = (row: Record<string, unknown>, keyMatchList: string[]): unknown => {
@@ -967,41 +1244,35 @@ const promoteQueuedLeadIfSlotAvailable = async (
   activeLimitPerDealer: number,
   transaction: any
 ): Promise<void> => {
-  // No assignment cap: selected-batch leads should keep flowing to eligible dealers.
-  // Keep argument for backward compatibility with callers.
-  void activeLimitPerDealer;
+  try {
+    const limit = normalizeActiveLimitPerDealer(activeLimitPerDealer);
 
-  // §4.5.1 / §E.1 — one open call per dealer: do not promote while in_progress is open.
-  const openCallCount = await DealerLeadAssignment.count({
-    where: {
-      [Op.and]: [
-        { dealerId, status: 'in_progress' },
-        LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE,
-        dealerBatchEligibilityClause(dealerId)
-      ]
-    },
-    transaction
-  });
-  if (openCallCount > 0) return;
+    // §15 — free stuck work back into the pool before allocating.
+    await reclaimStuckCallingAssignments(transaction);
 
-  const queued = await DealerLeadAssignment.findOne({
-    where: {
-      dealerId,
-      status: 'queued'
-    },
-    order: [['assignedAt', 'ASC']],
-    transaction,
-    lock: transaction.LOCK.UPDATE
-  });
-
-  if (!queued) {
-    // Pool / sentinel assignee (unassigned, pool, open, …) — claim for this dealer when batch-eligible.
-    const poolAssignment = await DealerLeadAssignment.findOne({
+    // §4.5.1 / §E.1 — one open call per dealer: do not promote while in_progress is open.
+    const openCallCount = await DealerLeadAssignment.count({
       where: {
         [Op.and]: [
-          { status: { [Op.in]: ['queued', 'assigned', 'active'] } },
+          { dealerId, status: 'in_progress' },
           LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE,
-          poolAssigneeDealerIdClause(),
+          dealerBatchEligibilityClause(dealerId)
+        ]
+      },
+      transaction
+    });
+    if (openCallCount > 0) return;
+
+    // Cap: do not hand out another lead while dealer already holds assigned/active slots.
+    const openSlots = await countDealerOpenCallingSlots(dealerId, transaction);
+    if (openSlots >= limit) return;
+
+    // 1) Dealer's own queued row (oldest first)
+    const queued = await DealerLeadAssignment.findOne({
+      where: {
+        [Op.and]: [
+          { dealerId, status: 'queued' },
+          LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE,
           dealerBatchEligibilityClause(dealerId)
         ]
       },
@@ -1010,8 +1281,8 @@ const promoteQueuedLeadIfSlotAvailable = async (
       lock: transaction.LOCK.UPDATE
     });
 
-    if (poolAssignment) {
-      await poolAssignment.update(
+    if (queued) {
+      await queued.update(
         {
           dealerId,
           status: 'assigned',
@@ -1026,8 +1297,66 @@ const promoteQueuedLeadIfSlotAvailable = async (
       return;
     }
 
-    // If this dealer has capacity but no dealer-specific queue, claim one oldest unassigned
-    // lead from a batch where this dealer is explicitly eligible.
+    // 2) Pool / sentinel assignee (unassigned, pool, open, …) — FCFS claim with SKIP LOCKED via raw SQL
+    const [poolRows] = await sequelize.query(
+      `
+      SELECT dla."id"
+      FROM "dealer_lead_assignments" AS dla
+      WHERE dla."status" IN ('queued', 'assigned', 'active')
+        AND LOWER(TRIM(dla."dealerId")) IN (${Array.from(HR_UPLOAD_UNASSIGNED_DEALER_SENTINELS)
+          .map((value) => `'${value.replace(/'/g, "''")}'`)
+          .join(', ')})
+        AND NOT EXISTS (
+          SELECT 1
+          FROM "dealer_lead_assignments" AS newer
+          WHERE newer."leadId" = dla."leadId"
+            AND (
+              newer."assignedAt" > dla."assignedAt"
+              OR (
+                newer."assignedAt" = dla."assignedAt"
+                AND newer."createdAt" > dla."createdAt"
+              )
+            )
+        )
+        AND EXISTS (
+          SELECT 1
+          FROM "calling_leads" AS cl
+          WHERE cl."id" = dla."leadId"
+            AND (
+              cl."batchId" IS NULL
+              OR EXISTS (
+                SELECT 1
+                FROM "calling_lead_upload_batches" AS b
+                WHERE b."id" = cl."batchId"
+                  AND ${batchDealerEligibilityPredicate(dealerId, 'b')}
+              )
+            )
+        )
+      ORDER BY COALESCE(dla."assignedAt", dla."createdAt") ASC, dla."id" ASC
+      LIMIT 1
+      FOR UPDATE SKIP LOCKED
+      `,
+      { transaction }
+    );
+
+    const poolId = Array.isArray(poolRows) && poolRows[0] ? String((poolRows[0] as any).id || '') : '';
+    if (poolId) {
+      await DealerLeadAssignment.update(
+        {
+          dealerId,
+          status: 'assigned',
+          assignedAt: new Date(),
+          action: null,
+          callRemark: null,
+          nextFollowUpAt: null,
+          actionAt: null
+        },
+        { where: { id: poolId }, transaction }
+      );
+      return;
+    }
+
+    // 3) Leads with no assignment row yet — create assignment (legacy / edge)
     const unassignedLead = await CallingLead.findOne({
       where: {
         [Op.and]: [
@@ -1056,7 +1385,13 @@ const promoteQueuedLeadIfSlotAvailable = async (
     });
 
     if (unassignedLead) {
-      const assignedBy = await resolveSystemAssignedByUserId(transaction);
+      let assignedBy: string | null = null;
+      try {
+        assignedBy = await resolveSystemAssignedByUserId(transaction);
+      } catch (error) {
+        logError('resolveSystemAssignedByUserId failed during promote (non-fatal)', error, { dealerId });
+        return;
+      }
       await DealerLeadAssignment.create(
         {
           id: uuidv4(),
@@ -1068,56 +1403,12 @@ const promoteQueuedLeadIfSlotAvailable = async (
         },
         { transaction }
       );
-      return;
     }
 
-    // Rebalance within eligible selected batches only:
-    // if no unassigned lead exists, move the oldest pending eligible lead from another dealer.
-    const reassignable = await DealerLeadAssignment.findOne({
-      where: {
-        [Op.and]: [
-          {
-            dealerId: { [Op.ne]: dealerId },
-            status: { [Op.in]: ['queued', 'assigned', 'active'] }
-          },
-          LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE,
-          dealerBatchEligibilityClause(dealerId)
-        ]
-      },
-      order: [['assignedAt', 'ASC'], ['createdAt', 'ASC']],
-      transaction,
-      lock: transaction.LOCK.UPDATE
-    });
-
-    if (reassignable) {
-      await reassignable.update(
-        {
-          dealerId,
-          status: 'assigned',
-          assignedAt: new Date(),
-          action: null,
-          callRemark: null,
-          nextFollowUpAt: null,
-          actionAt: null
-        },
-        { transaction }
-      );
-    }
-    return;
+    // Do NOT steal assigned leads from other dealers — that fights FCFS (§15).
+  } catch (error) {
+    logError('promoteQueuedLeadIfSlotAvailable failed (non-fatal)', error, { dealerId });
   }
-
-  await queued.update(
-    {
-      dealerId,
-      status: 'assigned',
-      assignedAt: new Date(),
-      action: null,
-      callRemark: null,
-      nextFollowUpAt: null,
-      actionAt: null
-    },
-    { transaction }
-  );
 };
 
 const resolveSystemAssignedByUserId = async (transaction: any): Promise<string> => {
@@ -1598,11 +1889,14 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
     const dealerIds = parseDealerIds(req.body.dealerIds).length
       ? parseDealerIds(req.body.dealerIds)
       : parseDealerIds(req.body['dealerIds[]']);
-    const activeLimitPerDealer = Number(
-      req.body.activeLimitPerDealer ??
-      req.body.activeLeadsLimit ??
-      DEFAULT_ACTIVE_LIMIT_PER_DEALER
-    );
+    const assignmentModeRaw =
+      req.body.assignmentMode ?? req.body.assignment_mode ?? req.body.mode ?? '';
+    const roundRobinAll = isRoundRobinAllAssignmentMode(assignmentModeRaw);
+    const activeLimitPerDealer = roundRobinAll
+      ? Number.MAX_SAFE_INTEGER
+      : normalizeActiveLimitPerDealer(
+          req.body.activeLimitPerDealer ?? req.body.activeLeadsLimit ?? DEFAULT_ACTIVE_LIMIT_PER_DEALER
+        );
     if (dealerIds.length === 0) {
       res.status(400).json({
         success: false,
@@ -1766,9 +2060,10 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
     let created = 0;
     let assigned = 0;
     let queued = 0;
-    let roundRobinPointer = 0;
 
     await sequelize.transaction(async (transaction) => {
+      await ensureCallingPoolDealerExists(transaction);
+
       await CallingLeadUploadBatch.create({
         id: batchId,
         fileName: file.originalname || 'upload.csv',
@@ -1779,6 +2074,27 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
       }, { transaction });
 
       const assignedByUserId = await resolveAssignedByUserId(req, transaction);
+
+      // §15-C round_robin_all: assign every row. Otherwise seed ≤ activeLimitPerDealer per dealer.
+      const activeCountByDealer = new Map<string, number>();
+      if (!roundRobinAll) {
+        for (const dealerId of dealerIds) {
+          const openCount = await DealerLeadAssignment.count({
+            where: {
+              [Op.and]: [
+                {
+                  dealerId,
+                  status: { [Op.in]: ['assigned', 'active', 'in_progress'] }
+                },
+                LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE
+              ]
+            },
+            transaction
+          });
+          activeCountByDealer.set(dealerId, openCount);
+        }
+      }
+      let dealerCursor = 0;
 
       for (const row of rowsToCreate) {
         const lead = await CallingLead.create(
@@ -1800,16 +2116,33 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
         );
         created += 1;
 
-        // Fair dealer-wise assignment: strict round-robin across selected dealers.
-        const dealerId = dealerIds[roundRobinPointer % dealerIds.length];
-        roundRobinPointer += 1;
-        const nextStatus: 'assigned' | 'queued' = 'assigned';
+        let assigneeDealerId = POOL_UNASSIGNED_DEALER_ID;
+        let nextStatus: 'assigned' | 'queued' = 'queued';
+
+        if (roundRobinAll) {
+          assigneeDealerId = dealerIds[dealerCursor % dealerIds.length];
+          dealerCursor += 1;
+          nextStatus = 'assigned';
+        } else {
+          for (let i = 0; i < dealerIds.length; i += 1) {
+            const idx = (dealerCursor + i) % dealerIds.length;
+            const candidateDealerId = dealerIds[idx];
+            const currentActive = activeCountByDealer.get(candidateDealerId) || 0;
+            if (currentActive < activeLimitPerDealer) {
+              assigneeDealerId = candidateDealerId;
+              nextStatus = 'assigned';
+              activeCountByDealer.set(candidateDealerId, currentActive + 1);
+              dealerCursor = (idx + 1) % dealerIds.length;
+              break;
+            }
+          }
+        }
 
         await DealerLeadAssignment.create(
           {
             id: uuidv4(),
             leadId: lead.id,
-            dealerId,
+            dealerId: assigneeDealerId,
             assignedBy: assignedByUserId,
             assignedAt: new Date(),
             status: nextStatus as any
@@ -1849,6 +2182,12 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
           { transaction }
         );
       }
+
+      // Persist live created-lead count so HR badges match DB (not CSV parsed rows).
+      await CallingLeadUploadBatch.update(
+        { rowCount: created },
+        { where: { id: batchId }, transaction }
+      );
     });
 
     logInfo('Calling leads CSV uploaded', {
@@ -1858,7 +2197,8 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
       skippedDuplicate,
       assigned,
       queued,
-      activeLimitPerDealer
+      activeLimitPerDealer: roundRobinAll ? 'round_robin_all' : activeLimitPerDealer,
+      assignmentMode: roundRobinAll ? 'round_robin_all' : 'active_cap'
     });
 
     res.status(201).json({
@@ -1875,8 +2215,9 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
         queued,
         assignedAtUpload: assigned,
         queuedAtUpload: queued,
-        activeLimitPerDealer,
-        rowCount: parsed,
+        activeLimitPerDealer: roundRobinAll ? null : activeLimitPerDealer,
+        assignmentMode: roundRobinAll ? 'round_robin_all' : 'active_cap',
+        rowCount: created,
         assignedDealers: dealerIds
       }
     });
@@ -1901,14 +2242,14 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
 
 const CALLABLE_QUEUE_STATUSES = ['queued', 'assigned', 'active', 'in_progress'] as const;
 
-const buildCallableQueue = async (dealerId: string, limit = 500) => {
+/**
+ * §15 — Harshita empty Current Lead fix:
+ * If a lead is already assigned to THIS dealer, return it regardless of batch pool JSON.
+ * (Eligibility only gates claiming from the unassigned pool.)
+ */
+const findOpenAssignedLeadsForDealer = async (dealerId: string, limit = 500) => {
   const now = new Date();
-
-  await sequelize.transaction(async (transaction) => {
-    await promoteQueuedLeadIfSlotAvailable(dealerId, DEFAULT_ACTIVE_LIMIT_PER_DEALER, transaction);
-  });
-
-  let rows = await DealerLeadAssignment.findAll({
+  return DealerLeadAssignment.findAll({
     where: {
       [Op.and]: [
         {
@@ -1918,64 +2259,60 @@ const buildCallableQueue = async (dealerId: string, limit = 500) => {
             { status: 'rescheduled', nextFollowUpAt: { [Op.lte]: now } }
           ]
         },
-        LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE,
-        dealerBatchEligibilityClause(dealerId)
+        LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE
       ]
     },
-    include: [{ model: CallingLead, as: 'lead' }],
-    // Stable FIFO: one sort key (no status-based reorder). queued_at N/A — use assignedAt then createdAt.
+    include: [{ model: CallingLead, as: 'lead', required: false }],
     order: [
+      // Prefer in_progress first, then oldest assigned
+      [
+        Sequelize.literal(`
+          CASE "DealerLeadAssignment"."status"
+            WHEN 'in_progress' THEN 0
+            WHEN 'assigned' THEN 1
+            WHEN 'active' THEN 2
+            WHEN 'queued' THEN 3
+            ELSE 4
+          END
+        `),
+        'ASC'
+      ],
       [Sequelize.literal('COALESCE("DealerLeadAssignment"."assignedAt", "DealerLeadAssignment"."createdAt")'), 'ASC'],
       ['id', 'ASC']
     ],
     limit
   });
+};
 
-  // Promote from queued pool when no callable rows are present.
-  if (!rows.length) {
-    await sequelize.transaction(async (transaction) => {
-      await promoteQueuedLeadIfSlotAvailable(dealerId, DEFAULT_ACTIVE_LIMIT_PER_DEALER, transaction);
-    });
-    rows = await DealerLeadAssignment.findAll({
-      where: {
-        [Op.and]: [
-          {
-            dealerId,
-            [Op.or]: [
-              { status: { [Op.in]: [...CALLABLE_QUEUE_STATUSES] } },
-              { status: 'rescheduled', nextFollowUpAt: { [Op.lte]: now } }
-            ]
-          },
-          LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE,
-          dealerBatchEligibilityClause(dealerId)
-        ]
-      },
-      include: [{ model: CallingLead, as: 'lead' }],
-      order: [
-        [Sequelize.literal('COALESCE("DealerLeadAssignment"."assignedAt", "DealerLeadAssignment"."createdAt")'), 'ASC'],
-        ['id', 'ASC']
-      ],
-      limit
-    });
+const mapAssignmentRowsToQueueLeads = async (dealerId: string, rows: any[]) => {
+  const leadIds = rows.map((row: any) => String(row.leadId)).filter(Boolean);
+  let latestStatusMap = new Map<string, LeadStatusMeta>();
+  try {
+    latestStatusMap = await buildLatestStatusMetaMap(dealerId, leadIds);
+  } catch (error) {
+    logError('buildLatestStatusMetaMap failed (non-fatal)', error, { dealerId });
   }
 
-  const leadIds = rows.map((row: any) => String(row.leadId)).filter(Boolean);
-  const latestStatusMap = await buildLatestStatusMetaMap(dealerId, leadIds);
   const assigneeDealerIds = Array.from(
     new Set(rows.map((row: any) => String(row.dealerId)).filter((id) => isValidHrCallingAssigneeDealerId(id)))
   );
-  const assigneeDealers = assigneeDealerIds.length
-    ? await Dealer.findAll({
-      where: { id: { [Op.in]: assigneeDealerIds } },
-      attributes: ['id', 'firstName', 'lastName']
-    })
-    : [];
-  const assigneeNameById = new Map(
-    assigneeDealers.map((dealer) => [
-      dealer.id,
-      `${dealer.firstName || ''} ${dealer.lastName || ''}`.trim()
-    ])
-  );
+  let assigneeNameById = new Map<string, string>();
+  try {
+    const assigneeDealers = assigneeDealerIds.length
+      ? await Dealer.findAll({
+          where: { id: { [Op.in]: assigneeDealerIds } },
+          attributes: ['id', 'firstName', 'lastName']
+        })
+      : [];
+    assigneeNameById = new Map(
+      assigneeDealers.map((dealer) => [
+        dealer.id,
+        `${dealer.firstName || ''} ${dealer.lastName || ''}`.trim()
+      ])
+    );
+  } catch (error) {
+    logError('assignee dealer name lookup failed (non-fatal)', error, { dealerId });
+  }
 
   return rows
     .map((row: any) => {
@@ -1994,9 +2331,9 @@ const buildCallableQueue = async (dealerId: string, limit = 500) => {
         city: lead.city,
         state: lead.state,
         customerNote: lead.customerNote,
-        // CRM / HR uploader only — not the calling assignee.
+        uploadBatchId: lead.batchId || null,
+        queuedAt: toIsoStringOrNull(row.assignedAt || row.createdAt),
         dealerId: null,
-        // Explicit calling assignee (this queue is scoped to `dealerId`; do not infer from lead.uploader fields).
         assignedDealerId: row.dealerId,
         assigned_dealer_id: row.dealerId,
         assignedDealerName,
@@ -2018,7 +2355,28 @@ const buildCallableQueue = async (dealerId: string, limit = 500) => {
     .filter(Boolean) as any[];
 };
 
+const buildCallableQueue = async (dealerId: string, limit = 500, allocate = true) => {
+  // 1) Always surface leads already assigned to this dealer (no batch-pool eligibility filter).
+  let rows = await findOpenAssignedLeadsForDealer(dealerId, limit);
+
+  // 2) If free, claim oldest unassigned from eligible pools (FCFS).
+  if (allocate && !rows.length) {
+    try {
+      await sequelize.transaction(async (transaction) => {
+        await promoteQueuedLeadIfSlotAvailable(dealerId, DEFAULT_ACTIVE_LIMIT_PER_DEALER, transaction);
+      });
+    } catch (error) {
+      logError('buildCallableQueue promote failed (non-fatal)', error, { dealerId });
+    }
+    rows = await findOpenAssignedLeadsForDealer(dealerId, limit);
+  }
+
+  return mapAssignmentRowsToQueueLeads(dealerId, rows as any[]);
+};
+
 const buildDealerQueueCounts = async (dealerId: string) => {
+  // Count THIS dealer's own assignments — do not require batch pool eligibility
+  // (same Harshita fix as buildCallableQueue).
   const [pendingCount, queuedCount, scheduledCount, completedCount] = await Promise.all([
     DealerLeadAssignment.count({
       where: {
@@ -2027,24 +2385,23 @@ const buildDealerQueueCounts = async (dealerId: string) => {
             dealerId,
             status: { [Op.in]: ['active', 'assigned', 'in_progress'] }
           },
-          LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE,
-          dealerBatchEligibilityClause(dealerId)
+          LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE
         ]
       }
     }),
     DealerLeadAssignment.count({
       where: {
-        [Op.and]: [{ dealerId, status: 'queued' }, LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE, dealerBatchEligibilityClause(dealerId)]
+        [Op.and]: [{ dealerId, status: 'queued' }, LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE]
       }
     }),
     DealerLeadAssignment.count({
       where: {
-        [Op.and]: [{ dealerId, status: 'rescheduled' }, LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE, dealerBatchEligibilityClause(dealerId)]
+        [Op.and]: [{ dealerId, status: 'rescheduled' }, LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE]
       }
     }),
     DealerLeadAssignment.count({
       where: {
-        [Op.and]: [{ dealerId, status: 'completed' }, LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE, dealerBatchEligibilityClause(dealerId)]
+        [Op.and]: [{ dealerId, status: 'completed' }, LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE]
       }
     })
   ]);
@@ -2115,11 +2472,10 @@ const buildScheduledLeads = async (dealerId: string) => {
           status: 'rescheduled',
           nextFollowUpAt: { [Op.ne]: null }
         },
-        LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE,
-        dealerBatchEligibilityClause(dealerId)
+        LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE
       ]
     },
-    include: [{ model: CallingLead, as: 'lead' }],
+    include: [{ model: CallingLead, as: 'lead', required: false }],
     order: [['nextFollowUpAt', 'ASC'], ['assignedAt', 'ASC'], ['id', 'ASC']],
     limit: 200
   });
@@ -2490,13 +2846,44 @@ const resolveDealerQueueHead = (queue: any[]) => {
   return { lead: head, currentLead: head, nextLead: head };
 };
 
-const buildDealerQueueSnapshot = async (dealerId: string, recentActionsLimit = 1000) => {
-  const [queue, counts, scheduledLeads, recentActions] = await Promise.all([
-    buildCallableQueue(dealerId),
-    buildDealerQueueCounts(dealerId),
-    buildScheduledLeads(dealerId),
-    buildRecentActions(dealerId, recentActionsLimit)
-  ]);
+const buildDealerQueueSnapshot = async (
+  dealerId: string,
+  recentActionsLimit = 1000,
+  options?: { allocate?: boolean }
+) => {
+  const allocate = options?.allocate !== false;
+  const emptyCounts = { pendingCount: 0, queuedCount: 0, scheduledCount: 0, completedCount: 0 };
+
+  let queue: any[] = [];
+  let counts = emptyCounts;
+  let scheduledLeads: any[] = [];
+  let recentActions: any[] = [];
+
+  try {
+    queue = await buildCallableQueue(dealerId, 500, allocate);
+  } catch (error) {
+    logError('buildCallableQueue failed (non-fatal)', error, { dealerId });
+    queue = [];
+  }
+
+  try {
+    counts = await buildDealerQueueCounts(dealerId);
+  } catch (error) {
+    logError('buildDealerQueueCounts failed (non-fatal)', error, { dealerId });
+  }
+
+  try {
+    scheduledLeads = await buildScheduledLeads(dealerId);
+  } catch (error) {
+    logError('buildScheduledLeads failed (non-fatal)', error, { dealerId });
+  }
+
+  try {
+    recentActions = await buildRecentActions(dealerId, recentActionsLimit);
+  } catch (error) {
+    logError('buildRecentActions failed (non-fatal)', error, { dealerId });
+  }
+
   const { lead, currentLead, nextLead } = resolveDealerQueueHead(queue);
 
   const dialledActions = filterDialledActions(recentActions);
@@ -2529,6 +2916,29 @@ const buildDealerQueueSnapshot = async (dealerId: string, recentActionsLimit = 1
     completedActions: recentActions
   };
 };
+
+const emptyCallingQueueSnapshot = () => ({
+  lead: null,
+  currentLead: null,
+  nextLead: null,
+  queue: [],
+  leads: [],
+  pendingLeads: [],
+  pendingCount: 0,
+  queuedCount: 0,
+  scheduledCount: 0,
+  completedCount: 0,
+  counts: { pending: 0, queued: 0, scheduled: 0, completed: 0 },
+  scheduledLeads: [],
+  upcomingFollowUps: [],
+  rescheduledLeads: [],
+  recentActions: [],
+  dialledActions: [],
+  connectedActions: [],
+  notConnectedActions: [],
+  actionHistory: [],
+  completedActions: []
+});
 
 const buildDealerEligibilityDebugCounts = async (dealerId: string) => {
   // Count eligible unassigned pool leads: no dealer_lead_assignments row,
@@ -2602,6 +3012,14 @@ const resolveDealerIdForQueue = async (req: Request): Promise<string | null> => 
 };
 
 export const getDealerCallingQueueCurrent = async (req: Request, res: Response): Promise<void> => {
+  /**
+   * §15 P0 — always 200 with lead null|object. Prefer existing open call;
+   * still soft-allocates so Current Lead is not blank when Unassigned > 0.
+   * Never returns SYS_001 for empty/partial failures.
+   *
+   * Response shape: SPA reads both root `lead` and `data.lead`.
+   */
+  applyNoCacheHeaders(res);
   try {
     const dealerId = await resolveDealerIdForQueue(req);
     if (!dealerId) {
@@ -2619,28 +3037,90 @@ export const getDealerCallingQueueCurrent = async (req: Request, res: Response):
         : 1000;
 
     const debug = String(req.query.debug || '').toLowerCase() === 'true';
-    const snapshot = await buildDealerQueueSnapshot(dealerId, recentActionsLimit);
-    const debugCounts = debug ? await buildDealerEligibilityDebugCounts(dealerId) : null;
-    applyNoCacheHeaders(res);
-
-    res.json({
-      success: true,
-      data: {
-        ...snapshot,
-        debugEligibility: debugCounts
+    // Prefer already-assigned leads; allocate from pool only if dealer has none.
+    const snapshot = await buildDealerQueueSnapshot(dealerId, recentActionsLimit, { allocate: true });
+    let debugCounts = null;
+    if (debug) {
+      try {
+        debugCounts = await buildDealerEligibilityDebugCounts(dealerId);
+      } catch {
+        debugCounts = null;
       }
+    }
+
+    const data = {
+      ...snapshot,
+      debugEligibility: debugCounts
+    };
+    res.status(200).json({
+      success: true,
+      ...data,
+      data
     });
   } catch (error) {
-    logError('Get dealer calling queue current error', error, { dealerId: req.dealer?.id });
-    res.status(500).json({
-      success: false,
-      error: { code: 'SYS_001', message: 'Internal server error' }
+    logError('Get dealer calling queue current error — returning empty 200', error, {
+      dealerId: req.dealer?.id
+    });
+    const empty = emptyCallingQueueSnapshot();
+    res.status(200).json({
+      success: true,
+      ...empty,
+      data: empty
     });
   }
 };
 
-// Backward compatible alias
-export const getDealerCallingQueueNext = getDealerCallingQueueCurrent;
+/** FCFS source of truth — return dealer's assigned lead, else claim oldest unassigned. */
+export const getDealerCallingQueueNext = async (req: Request, res: Response): Promise<void> => {
+  applyNoCacheHeaders(res);
+  try {
+    const dealerId = await resolveDealerIdForQueue(req);
+    if (!dealerId) {
+      res.status(401).json({
+        success: false,
+        error: { code: 'AUTH_003', message: 'User not authenticated' }
+      });
+      return;
+    }
+
+    const requestedLimit = Number(req.query.limit);
+    const recentActionsLimit =
+      Number.isFinite(requestedLimit) && requestedLimit > 0
+        ? Math.min(5000, Math.floor(requestedLimit))
+        : 1000;
+
+    const debug = String(req.query.debug || '').toLowerCase() === 'true';
+    const snapshot = await buildDealerQueueSnapshot(dealerId, recentActionsLimit, { allocate: true });
+    let debugCounts = null;
+    if (debug) {
+      try {
+        debugCounts = await buildDealerEligibilityDebugCounts(dealerId);
+      } catch {
+        debugCounts = null;
+      }
+    }
+
+    const data = {
+      ...snapshot,
+      debugEligibility: debugCounts
+    };
+    res.status(200).json({
+      success: true,
+      ...data,
+      data
+    });
+  } catch (error) {
+    logError('Get dealer calling queue next error — returning empty 200', error, {
+      dealerId: req.dealer?.id
+    });
+    const empty = emptyCallingQueueSnapshot();
+    res.status(200).json({
+      success: true,
+      ...empty,
+      data: empty
+    });
+  }
+};
 
 export const updateDealerCallingQueueAction = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -3056,7 +3536,8 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
 
       await assignment.reload({ transaction });
 
-      if (assignment.status === 'completed') {
+      // §15 — after complete OR reschedule, free the slot and allocate next FIFO lead.
+      if (assignment.status === 'completed' || assignment.status === 'rescheduled') {
         await promoteQueuedLeadIfSlotAvailable(dealerId, DEFAULT_ACTIVE_LIMIT_PER_DEALER, transaction);
       }
 
@@ -3230,6 +3711,130 @@ export const getHrDealerAssignmentStats = async (_req: Request, res: Response): 
     });
   } catch (error) {
     logError('Get HR dealer assignment stats error', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
+};
+
+export const assignHrUploadUnassigned = async (req: Request, res: Response): Promise<void> => {
+  /**
+   * §15-C — POST /hr/leads/uploads/:uploadId/assign-unassigned
+   * Round-robin all unassigned/pool leads in the batch onto upload.dealerIds → unassignedCount === 0.
+   */
+  try {
+    const uploadId = String(req.params.uploadId || req.params.batchId || '').trim();
+    if (!uploadId) {
+      res.status(400).json({
+        success: false,
+        error: { code: 'VAL_001', message: 'uploadId is required' }
+      });
+      return;
+    }
+
+    const batch = await CallingLeadUploadBatch.findByPk(uploadId);
+    if (!batch) {
+      res.status(404).json({
+        success: false,
+        error: { code: 'RES_001', message: 'Upload batch not found' }
+      });
+      return;
+    }
+
+    let dealerIds = extractDealerIdsFromBatchPool(batch.assignedDealers);
+    const bodyDealerIds = parseDealerIds(req.body?.dealerIds).length
+      ? parseDealerIds(req.body?.dealerIds)
+      : parseDealerIds(req.body?.['dealerIds[]']);
+    if (bodyDealerIds.length) {
+      dealerIds = bodyDealerIds;
+    }
+
+    if (!dealerIds.length) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VAL_002',
+          message: 'Upload has no dealerIds pool — pass dealerIds in body or re-upload with dealers'
+        }
+      });
+      return;
+    }
+
+    const dealers = await Dealer.findAll({
+      where: { id: { [Op.in]: dealerIds }, role: 'dealer', isActive: true },
+      attributes: ['id']
+    });
+    if (!dealers.length) {
+      res.status(400).json({
+        success: false,
+        error: { code: 'LEAD_006', message: 'No valid active dealers in pool' }
+      });
+      return;
+    }
+    dealerIds = dealers.map((d) => d.id);
+
+    let assigned = 0;
+    await sequelize.transaction(async (transaction) => {
+      await ensureCallingPoolDealerExists(transaction);
+      // Free stuck assigned/in_progress into pool first, then RR onto dealers.
+      await reclaimStuckCallingAssignments(transaction);
+      const assignedByUserId = await resolveAssignedByUserId(req, transaction);
+      assigned = await roundRobinAssignUnassignedLeadsForBatch({
+        batchId: batch.id,
+        dealerIds,
+        assignedByUserId,
+        transaction
+      });
+    });
+
+    const countsMap = await buildHrUploadCountsForBatches([
+      { id: batch.id, rowCount: batch.rowCount }
+    ]);
+    const liveCounts =
+      countsMap.get(batch.id) ||
+      computeHrUploadLeadCounts(batch.rowCount, { completedCount: 0, assignedCount: 0 });
+
+    logInfo('HR assign-unassigned completed', {
+      uploadId: batch.id,
+      assigned,
+      unassignedCount: liveCounts.unassignedCount,
+      assignedCount: liveCounts.assignedCount,
+      userId: req.user?.id
+    });
+
+    emitRealtime(realtimeEvents.callingUploadsUpdated, {
+      batchId: batch.id,
+      assignedAt: new Date().toISOString(),
+      assignedDealers: dealerIds,
+      source: 'assign-unassigned'
+    });
+    emitRealtime(realtimeEvents.callingActionsUpdated, {
+      source: 'assign-unassigned',
+      at: new Date().toISOString()
+    });
+
+    const countFields = hrUploadCountsToApi(liveCounts);
+    res.json({
+      success: true,
+      uploadId: batch.id,
+      batchId: batch.id,
+      assigned,
+      unassignedRemaining: liveCounts.unassignedCount,
+      ...countFields,
+      data: {
+        uploadId: batch.id,
+        batchId: batch.id,
+        assigned,
+        unassignedRemaining: liveCounts.unassignedCount,
+        ...countFields
+      }
+    });
+  } catch (error) {
+    logError('HR assign-unassigned error', error, {
+      uploadId: req.params.uploadId || req.params.batchId,
+      userId: req.user?.id
+    });
     res.status(500).json({
       success: false,
       error: { code: 'SYS_001', message: 'Internal server error' }

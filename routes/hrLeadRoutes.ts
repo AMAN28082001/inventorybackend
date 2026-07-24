@@ -8,10 +8,14 @@ import {
   getHrDealerAssignmentStats,
   getHrCallingActions,
   getHrLeadUploadBatches,
-  getHrLeadUploadBatchRows
+  getHrLeadUploadBatchRows,
+  assignHrUploadUnassigned
 } from '../controllers/callingLeadController';
 import { validate } from '../middleware/validate';
-import { uploadCallingLeadsSchema } from '../validations/callingLeadValidations';
+import {
+  uploadCallingLeadsSchema,
+  assignUnassignedLeadsSchema
+} from '../validations/callingLeadValidations';
 
 const router: Router = express.Router();
 
@@ -43,9 +47,25 @@ router.get('/calling-actions', getHrCallingActions);
 router.get('/calling-queue/actions', getHrCallingActions);
 router.get('/leads/uploads', getHrLeadUploadBatches);
 router.get('/leads/uploads/:batchId', getHrLeadUploadBatchRows);
+// §15-C — drain Unassigned → 0 for an existing batch (round-robin onto dealer pool)
+router.post(
+  '/leads/uploads/:uploadId/assign-unassigned',
+  validate(assignUnassignedLeadsSchema),
+  assignHrUploadUnassigned
+);
 // Alias routes used by different frontend builds
 router.get('/calling-uploads/:batchId', getHrLeadUploadBatchRows);
 router.get('/uploads/:batchId', getHrLeadUploadBatchRows);
+router.post(
+  '/uploads/:uploadId/assign-unassigned',
+  validate(assignUnassignedLeadsSchema),
+  assignHrUploadUnassigned
+);
+router.post(
+  '/calling-uploads/:uploadId/assign-unassigned',
+  validate(assignUnassignedLeadsSchema),
+  assignHrUploadUnassigned
+);
 router.post('/leads/upload-csv', upload.fields([{ name: 'file', maxCount: 1 }, { name: 'csvFile', maxCount: 1 }]), validate(uploadCallingLeadsSchema), uploadCallingLeadsCsv);
 
 export default router;

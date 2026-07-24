@@ -48,6 +48,12 @@ import {
   deriveLoanCashAmountFields,
   buildPrimaryVisitLocationByQuotationId
 } from '../utils/adminQuotationListApi';
+import {
+  INSTALLATION_PENDING_STATUSES,
+  buildBrandAggregates,
+  isQuotationEligibleForProductNeeded,
+  serializeProductNeededRow
+} from '../utils/adminProductNeeded';
 import { persistQuotationSystemKw } from '../utils/persistQuotationSystemKw';
 
 const sumPhasePaidAmounts = (phases: { paidAmount?: number }[]): number =>
@@ -1860,6 +1866,144 @@ export const activateDealer = async (req: Request, res: Response): Promise<void>
     res.status(500).json({
       success: false,
       error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
+};
+
+/**
+ * GET /api/admin/product-needed?scope=installation_pending
+ * Procurement dashboard for Pending Installation jobs (brand + wattage/set cards).
+ */
+export const getAdminProductNeeded = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const scope = String(req.query.scope || 'installation_pending').toLowerCase();
+    if (scope && scope !== 'installation_pending') {
+      res.status(400).json({
+        success: false,
+        error: { code: 'VAL_001', message: 'scope must be "installation_pending"' }
+      });
+      return;
+    }
+
+    const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
+    const limit = Math.min(
+      2000,
+      Math.max(1, parseInt(String(req.query.limit || '500'), 10) || 500)
+    );
+    const dealerId = req.query.dealerId ? String(req.query.dealerId) : null;
+    const search = req.query.search ? String(req.query.search).trim().toLowerCase() : '';
+    const dateField =
+      String(req.query.dateField || 'installation_released').toLowerCase() === 'created'
+        ? 'createdAt'
+        : 'installationReleasedAt';
+    const startDate = req.query.startDate ? new Date(String(req.query.startDate)) : null;
+    const endDate = req.query.endDate ? new Date(String(req.query.endDate)) : null;
+
+    const where: any = {
+      status: 'approved',
+      [Op.and]: [
+        {
+          [Op.or]: [
+            { installationReadyForInstaller: true },
+            { installationReleasedAt: { [Op.ne]: null } },
+            { installationStatus: { [Op.in]: [...INSTALLATION_PENDING_STATUSES] } }
+          ]
+        },
+        {
+          installationStatus: { [Op.in]: [...INSTALLATION_PENDING_STATUSES] }
+        },
+        { installerApprovedAt: null }
+      ]
+    };
+    if (dealerId) where.dealerId = dealerId;
+    if (startDate || endDate) {
+      where[dateField] = {};
+      if (startDate && !Number.isNaN(startDate.getTime())) where[dateField][Op.gte] = startDate;
+      if (endDate && !Number.isNaN(endDate.getTime())) where[dateField][Op.lte] = endDate;
+    }
+
+    const rows = await Quotation.findAll({
+      where,
+      include: [
+        { model: QuotationProduct, as: 'products', required: false },
+        {
+          model: CustomPanel,
+          as: 'customPanels',
+          required: false
+        },
+        {
+          model: Dealer,
+          as: 'dealer',
+          attributes: ['id', 'firstName', 'lastName', 'email', 'mobile', 'username', 'role']
+        },
+        {
+          model: Customer,
+          as: 'customer',
+          attributes: ['id', 'firstName', 'lastName', 'mobile']
+        }
+      ],
+      order: [['installationReleasedAt', 'DESC'], ['createdAt', 'DESC']]
+    });
+
+    let all = rows
+      .map((q: any) => (typeof q.toJSON === 'function' ? q.toJSON() : q))
+      .map((q: any) => {
+        // Merge customPanels into products blob for customize system types
+        if (Array.isArray(q.customPanels) && q.customPanels.length) {
+          const products =
+            q.products && typeof q.products === 'object'
+              ? { ...q.products, customPanels: q.customPanels }
+              : { customPanels: q.customPanels };
+          return { ...q, products };
+        }
+        return q;
+      })
+      .filter(isQuotationEligibleForProductNeeded)
+      .map(serializeProductNeededRow);
+
+    if (search) {
+      all = all.filter((r) => {
+        const blob = [r.customerName, r.customerMobile, r.dealerName, r.quotationId, r.panels, r.inverter]
+          .join(' ')
+          .toLowerCase();
+        return blob.includes(search);
+      });
+    }
+
+    const aggregates = buildBrandAggregates(all);
+    const total = all.length;
+    const offset = (page - 1) * limit;
+    const pageRows = all.slice(offset, offset + limit);
+
+    res.json({
+      success: true,
+      data: {
+        scope: 'installation_pending',
+        rows: pageRows,
+        quotations: pageRows,
+        aggregates,
+        brandCards: aggregates.panels,
+        totals: {
+          jobs: aggregates.jobCount,
+          panelQuantity: aggregates.totalPanels,
+          inverterQuantity: aggregates.totalInverters
+        },
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.max(1, Math.ceil(total / limit))
+        }
+      }
+    });
+  } catch (error) {
+    logError('Get admin product-needed error', error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'SYS_001',
+        message: error instanceof Error ? error.message : 'Internal server error'
+      }
     });
   }
 };

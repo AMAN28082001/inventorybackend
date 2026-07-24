@@ -15,6 +15,10 @@ import {
   findProductSerialNumbers,
   requiresSerialNumbers
 } from '../utils/productSerialLookup';
+import {
+  InventoryCreatedByError,
+  resolveInventoryCreatedBy
+} from '../utils/resolveInventoryCreatedBy';
 
 const logProductInventoryTransaction = async ({
   productId,
@@ -223,6 +227,21 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
       return;
     }
 
+    let createdByUserId: string;
+    try {
+      createdByUserId = await resolveInventoryCreatedBy(req.user, req.body.created_by ?? req.body.createdBy);
+    } catch (err) {
+      if (err instanceof InventoryCreatedByError) {
+        res.status(400).json({
+          success: false,
+          error: err.message,
+          code: err.code
+        });
+        return;
+      }
+      throw err;
+    }
+
     const normalizedName = name.trim().toLowerCase();
     const normalizedModel = model.trim().toLowerCase();
 
@@ -315,7 +334,7 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
       unit_price: resolvedCostPrice,
       selling_price: resolvedSellingPrice,
       image: imagePath || null,
-      created_by: req.user.id
+      created_by: createdByUserId
     });
 
     const requiresSerials = requiresSerialNumbers(category, name);
@@ -380,7 +399,12 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
       });
       if (existingSerials.length > 0) {
         const duplicates = existingSerials.map((s) => s.serial_number);
-        res.status(400).json({ error: `Duplicate serial numbers found: ${duplicates.join(', ')}` });
+        res.status(400).json({
+          success: false,
+          error: `Duplicate serial numbers found: ${duplicates.join(', ')}`,
+          code: 'VAL_DUPLICATE_SERIAL',
+          details: [{ path: 'serial_numbers', message: `Duplicate serial numbers found: ${duplicates.join(', ')}` }]
+        });
         return;
       }
 
@@ -412,8 +436,14 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
       createdSerials = uniqueSerials;
     }
 
-    if (requiresSerials && hasQuantity && createdSerials.length === 0) {
-      res.status(400).json({ error: 'Serial numbers are required for Panels and Inverters.' });
+    // Tally / Add Product: allow create WITHOUT serials, then attach via PUT.
+    // Do not 400 when quantity > 0 and serials omitted for Panels/Inverters.
+    if (requiresSerials && hasQuantity && createdSerials.length === 0 && serial_numbers) {
+      res.status(400).json({
+        success: false,
+        error: 'Serial numbers are required for Panels and Inverters when serial_numbers is provided.',
+        code: 'VAL_SERIAL_REQUIRED'
+      });
       return;
     }
 
@@ -425,18 +455,49 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
         quantity: initialQuantity,
         reference: 'product_create',
         notes: 'Initial stock on product creation',
-        createdBy: req.user?.id || null
+        createdBy: createdByUserId
       });
     }
 
-    logInfo('Product created', { productId: newProduct.id, name: newProduct.name, model: newProduct.model, createdBy: req.user?.id });
+    logInfo('Product created', {
+      productId: newProduct.id,
+      name: newProduct.name,
+      model: newProduct.model,
+      createdBy: createdByUserId
+    });
     res.status(201).json({
       ...formatProductForApi(newProduct),
       serial_numbers: createdSerials
     });
   } catch (error) {
     logError('Create product error', error, { name: req.body.name, model: req.body.model, createdBy: req.user?.id });
-    res.status(500).json({ error: 'Server error' });
+    if (error instanceof InventoryCreatedByError) {
+      res.status(400).json({
+        success: false,
+        error: error.message,
+        code: error.code
+      });
+      return;
+    }
+    const message = error instanceof Error ? error.message : 'Server error';
+    const isFk = (error as any)?.name === 'SequelizeForeignKeyConstraintError';
+    const code =
+      (error as any)?.name === 'SequelizeUniqueConstraintError'
+        ? 'VAL_DUPLICATE'
+        : (error as any)?.name === 'SequelizeValidationError'
+          ? 'VAL_001'
+          : isFk
+            ? 'INV_USER_MISSING'
+            : 'SYS_001';
+    res.status(isFk ? 400 : 500).json({
+      success: false,
+      error: message,
+      code,
+      details: (error as any)?.errors?.map((e: any) => ({
+        path: e.path,
+        message: e.message
+      }))
+    });
   }
 };
 

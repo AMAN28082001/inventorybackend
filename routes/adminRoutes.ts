@@ -10,7 +10,8 @@ import {
   getAllDealers,
   updateDealer,
   activateDealer,
-  getSystemStatistics
+  getSystemStatistics,
+  getAdminProductNeeded
 } from '../controllers/adminController';
 import {
   updateQuotationInstallationRelease,
@@ -30,7 +31,8 @@ import {
   updateVisitorPassword,
   deleteVisitor
 } from '../controllers/adminVisitorController';
-import { getAdminCallingActions, getHrLeadUploadBatchRows } from '../controllers/callingLeadController';
+import { getAdminCallingActions, getHrLeadUploadBatchRows, assignHrUploadUnassigned } from '../controllers/callingLeadController';
+import { assignUnassignedLeadsSchema } from '../validations/callingLeadValidations';
 import {
   listInstallationTeams,
   createInstallationTeam,
@@ -91,6 +93,12 @@ router.get('/visits', authorizeAdmin, getAdminVisits);
 
 // All routes below require admin authorization
 router.use(authorizeAdmin);
+
+/**
+ * Admin Product Needed — installation-pending brand / wattage aggregates.
+ * GET /api/admin/product-needed?scope=installation_pending
+ */
+router.get('/product-needed', getAdminProductNeeded);
 
 /**
  * @swagger
@@ -233,6 +241,11 @@ router.patch(
 router.delete('/installation/team-logins/:teamId', deleteInstallationTeam);
 router.delete('/installation-team-logins/:teamId', deleteInstallationTeam);
 router.get('/leads/uploads/:batchId', getHrLeadUploadBatchRows);
+router.post(
+  '/leads/uploads/:uploadId/assign-unassigned',
+  validate(assignUnassignedLeadsSchema),
+  assignHrUploadUnassigned
+);
 
 /**
  * @swagger
