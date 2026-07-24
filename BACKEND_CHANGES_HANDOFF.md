@@ -91,12 +91,22 @@ Optional: `TZ=Asia/Kolkata` if weekly HR reports must match SPA Mon–Sun in IST
 | Method | Path | Notes |
 |--------|------|--------|
 | `GET` | `/api/hr/leads/uploads` | Live `assignedCount`, `unassignedCount`, `completedCount` (SQL, not upload-time `assigned`) |
-| `GET` | `/api/hr/leads/uploads/:uploadId` | Full-batch counts + paginated rows with assignee fields |
+| `GET` | `/api/hr/leads/uploads/:uploadId` | Full-batch counts + paginated rows with assignee fields; optional `?mobile=` / `q` / `search` |
+| `GET` | `/api/hr/leads/search?mobile=` | Global mobile search across all uploads (`q` / `search` aliases); see `getHrLeadsSearchByMobile` |
 | `POST` | `/api/hr/leads/upload-csv` | `assignedAtUpload` / `queuedAtUpload` only on POST |
 
-**Invariant:** `assignedCount + unassignedCount + completedCount === rowCount`
+**Invariant:** `assignedCount + unassignedCount + completedCount === leadCount`  
+(`leadCount` may be lower than CSV `rowCount` when duplicates were skipped.)
 
-**QA:** Upload 1000, 3 at upload → GET `assignedCount: 3`, `unassignedCount: 997`; modal queued rows match header.
+**Bucket rules (Jul 2026):**
+- `rowCount` / `uploadedRowCount` — CSV rows parsed at upload (e.g. 2600 for “2401 to 5K”, not 5000)
+- `leadCount` / `createdCount` — leads created in DB
+- `skippedDuplicate` — duplicate/invalid CSV rows not created as leads
+- `assignedCount` — only open callable work: `assigned` / `in_progress` / `active` / dealer-owned `queued`
+- `completedCount` — `completed` / `done` / `closed` **and** `rescheduled` (follow-ups are not “Assigned”)
+- `unassignedCount` — residual on leads (pool / no assignee)
+
+**QA:** Upload 1000, 3 at upload → GET `assignedCount: 3`, `unassignedCount: 997`; modal queued rows match header. Batch with only completed + rescheduled → `assignedCount: 0`, `unassignedCount: 0`. File “2401 to 5K” → `rowCount: 2600`, `leadCount: 2407`, `skippedDuplicate: 193`.
 
 ---
 

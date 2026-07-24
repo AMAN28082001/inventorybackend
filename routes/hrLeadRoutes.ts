@@ -9,6 +9,7 @@ import {
   getHrCallingActions,
   getHrLeadUploadBatches,
   getHrLeadUploadBatchRows,
+  getHrLeadsSearchByMobile,
   assignHrUploadUnassigned
 } from '../controllers/callingLeadController';
 import { validate } from '../middleware/validate';
@@ -45,6 +46,8 @@ router.get('/dealers/assignment-stats', getHrDealerAssignmentStats);
 router.get('/calling-actions', getHrCallingActions);
 // Alias used by some frontend builds (§J / §4.8)
 router.get('/calling-queue/actions', getHrCallingActions);
+/** Global calling-lead mobile search (SPA HR Uploaded Data search). */
+router.get('/leads/search', getHrLeadsSearchByMobile);
 router.get('/leads/uploads', getHrLeadUploadBatches);
 router.get('/leads/uploads/:batchId', getHrLeadUploadBatchRows);
 // §15-C — drain Unassigned → 0 for an existing batch (round-robin onto dealer pool)

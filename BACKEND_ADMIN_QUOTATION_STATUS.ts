@@ -379,12 +379,30 @@ export async function postHrLeadsUploadCsv(req, res, db) {
  *   buildHrUploadCountsForBatches() — SQL aggregate per batchId (no full row load on list)
  *
  * Buckets (mutually exclusive, sum to rowCount):
- *   completed — assignment status in completed|done|closed
- *   assigned — not completed + valid calling assignee dealer id (not pool/unassigned sentinels)
- *   unassigned — remainder (includes CSV rows without a created lead)
+ *   completed — completed|done|closed + rescheduled (follow-ups are not Assigned on HR badges)
+ *   assigned — open callable only: assigned|in_progress|active|dealer-owned queued
+ *   unassigned — remainder (includes CSV rows without a created lead / pool sentinel)
  *
  * POST upload response uses assignedAtUpload / queuedAtUpload (not list assignedCount).
  * GET /hr/leads/uploads returns live assignedCount / unassignedCount / completedCount only.
+ */
+
+/**
+ * GET /hr/leads/search?mobile=9602209955&limit=100
+ * Aliases: q / search.
+ * Match last-10 digits of mobile or altMobile (contains / ends-with).
+ * Implemented: controllers/callingLeadController.ts → getHrLeadsSearchByMobile
+ *
+ * @example
+ * export async function getHrLeadsSearchByMobile(req, res) {
+ *   // GET /api/hr/leads/search?mobile=9602209955
+ *   // Response: { success, mobile, total, leads: [{ id, name, mobile, kNumber, address,
+ *   //   status, assignedDealerId, assignedDealerName, uploadId, fileName, uploadedAt }] }
+ * }
+ *
+ * Optional batch View filter:
+ *   GET /hr/leads/uploads/:uploadId?mobile=9602209955&page=1&limit=50
+ *   (same mobile / q / search aliases)
  */
 
 /**

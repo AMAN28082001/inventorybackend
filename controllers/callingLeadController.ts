@@ -97,7 +97,12 @@ const HR_UPLOAD_UNASSIGNED_DEALER_SENTINELS = new Set([
 ]);
 
 export type HrUploadLeadCounts = {
+  /** CSV rows parsed at upload (what HR expects for “Rows”). */
   rowCount: number;
+  /** Leads actually created in calling_leads for this batch. */
+  leadCount: number;
+  /** Duplicate/invalid CSV rows not turned into leads. */
+  skippedDuplicate: number;
   assignedCount: number;
   unassignedCount: number;
   completedCount: number;
@@ -254,19 +259,32 @@ const countDealerOpenCallingSlots = async (
   });
 
 /**
- * Live batch buckets (§7.8): completed | assigned (valid assignee, not completed) | unassigned.
- * Invariant: assignedCount + unassignedCount + completedCount === rowCount.
+ * Live batch buckets (§7.8):
+ *   completed  — finished calls + rescheduled follow-ups (not in the active queue)
+ *   assigned   — only open callable work (assigned / in_progress / active / dealer-owned queued)
+ *   unassigned — residual (pool / no assignee)
+ * Invariant: assignedCount + unassignedCount + completedCount === leadCount
+ *   (leadCount may be < uploaded CSV rowCount when duplicates were skipped).
+ *
+ * Rescheduled must NOT inflate Assigned (HR wants Assigned→0 when only follow-ups remain).
  */
 export const computeHrUploadLeadCounts = (
-  rowCount: number,
-  leadBuckets: { completedCount: number; assignedCount: number }
+  uploadedRowCount: number,
+  leadBuckets: { leadCount: number; completedCount: number; assignedCount: number; skippedDuplicate?: number }
 ): HrUploadLeadCounts => {
+  const leadCount = Math.max(0, leadBuckets.leadCount);
   const completedCount = Math.max(0, leadBuckets.completedCount);
   const assignedCount = Math.max(0, leadBuckets.assignedCount);
-  const normalizedRowCount = Math.max(0, rowCount);
-  const unassignedCount = Math.max(0, normalizedRowCount - completedCount - assignedCount);
+  const uploaded = Math.max(0, uploadedRowCount);
+  const unassignedCount = Math.max(0, leadCount - completedCount - assignedCount);
+  const skippedDuplicate =
+    leadBuckets.skippedDuplicate !== undefined
+      ? Math.max(0, leadBuckets.skippedDuplicate)
+      : Math.max(0, uploaded - leadCount);
   return {
-    rowCount: normalizedRowCount,
+    rowCount: uploaded > 0 ? uploaded : leadCount,
+    leadCount,
+    skippedDuplicate,
     assignedCount,
     unassignedCount,
     completedCount
@@ -280,6 +298,13 @@ type HrUploadBatchCountRow = {
   assignedCount: number;
 };
 
+type HrUploadAuditCountRow = {
+  batchId: string;
+  duplicateCount: number;
+  invalidCount: number;
+  auditTotal: number;
+};
+
 const fetchHrUploadBatchCountRows = async (batchIds: string[]): Promise<Map<string, HrUploadBatchCountRow>> => {
   if (!batchIds.length) return new Map();
 
@@ -290,13 +315,17 @@ const fetchHrUploadBatchCountRows = async (batchIds: string[]): Promise<Map<stri
       COUNT(*)::int AS "leadCount",
       SUM(
         CASE
-          WHEN LOWER(COALESCE(dla."status"::text, '')) IN ('completed', 'done', 'closed') THEN 1
+          WHEN LOWER(COALESCE(dla."status"::text, '')) IN (
+            'completed', 'done', 'closed', 'rescheduled'
+          ) THEN 1
           ELSE 0
         END
       )::int AS "completedCount",
       SUM(
         CASE
-          WHEN LOWER(COALESCE(dla."status"::text, '')) NOT IN ('completed', 'done', 'closed')
+          WHEN LOWER(COALESCE(dla."status"::text, '')) IN (
+            'assigned', 'in_progress', 'active', 'queued'
+          )
             AND dla."dealerId" IS NOT NULL
             AND TRIM(dla."dealerId") <> ''
             AND LOWER(TRIM(dla."dealerId")) NOT IN (
@@ -342,24 +371,75 @@ const fetchHrUploadBatchCountRows = async (batchIds: string[]): Promise<Map<stri
   return map;
 };
 
+const fetchHrUploadAuditCountRows = async (batchIds: string[]): Promise<Map<string, HrUploadAuditCountRow>> => {
+  if (!batchIds.length) return new Map();
+  try {
+    const rows = await sequelize.query<HrUploadAuditCountRow>(
+      `
+      SELECT
+        "batchId" AS "batchId",
+        COUNT(*)::int AS "auditTotal",
+        SUM(
+          CASE WHEN LOWER(COALESCE(status::text, '')) = 'duplicate' THEN 1 ELSE 0 END
+        )::int AS "duplicateCount",
+        SUM(
+          CASE WHEN LOWER(COALESCE(status::text, '')) = 'invalid' THEN 1 ELSE 0 END
+        )::int AS "invalidCount"
+      FROM "calling_lead_upload_rows"
+      WHERE "batchId" IN (:batchIds)
+      GROUP BY "batchId"
+      `,
+      {
+        replacements: { batchIds },
+        type: QueryTypes.SELECT
+      }
+    );
+    const map = new Map<string, HrUploadAuditCountRow>();
+    for (const row of rows) {
+      map.set(String(row.batchId), {
+        batchId: String(row.batchId),
+        auditTotal: Number(row.auditTotal) || 0,
+        duplicateCount: Number(row.duplicateCount) || 0,
+        invalidCount: Number(row.invalidCount) || 0
+      });
+    }
+    return map;
+  } catch (error) {
+    logError('fetchHrUploadAuditCountRows failed (non-fatal)', error);
+    return new Map();
+  }
+};
+
 const buildHrUploadCountsForBatches = async (
   batches: Array<{ id: string; rowCount: number }>
 ): Promise<Map<string, HrUploadLeadCounts>> => {
   const batchIds = batches.map((batch) => batch.id);
-  const aggregateByBatch = await fetchHrUploadBatchCountRows(batchIds);
+  const [aggregateByBatch, auditByBatch] = await Promise.all([
+    fetchHrUploadBatchCountRows(batchIds),
+    fetchHrUploadAuditCountRows(batchIds)
+  ]);
   const countsByBatch = new Map<string, HrUploadLeadCounts>();
 
   for (const batch of batches) {
     const aggregate = aggregateByBatch.get(batch.id);
-    // Prefer live calling_leads count — CSV rowCount often exceeds created leads
-    // (duplicates skipped), which previously inflated unassignedCount (phantom Unassigned).
+    const audit = auditByBatch.get(batch.id);
     const liveLeadCount = Number(aggregate?.leadCount) || 0;
-    const denominator = liveLeadCount > 0 ? liveLeadCount : Math.max(0, Number(batch.rowCount) || 0);
+    // Prefer audit total / stored batch.rowCount as uploaded CSV size.
+    const uploadedRowCount =
+      (audit && audit.auditTotal > 0 ? audit.auditTotal : 0) ||
+      Math.max(0, Number(batch.rowCount) || 0) ||
+      liveLeadCount;
+    const skippedDuplicate =
+      (audit ? audit.duplicateCount + audit.invalidCount : 0) ||
+      Math.max(0, uploadedRowCount - liveLeadCount);
+
     countsByBatch.set(
       batch.id,
-      computeHrUploadLeadCounts(denominator, {
+      computeHrUploadLeadCounts(uploadedRowCount, {
+        leadCount: liveLeadCount > 0 ? liveLeadCount : Math.max(0, uploadedRowCount - skippedDuplicate),
         completedCount: aggregate?.completedCount ?? 0,
-        assignedCount: aggregate?.assignedCount ?? 0
+        assignedCount: aggregate?.assignedCount ?? 0,
+        skippedDuplicate
       })
     );
   }
@@ -367,15 +447,31 @@ const buildHrUploadCountsForBatches = async (
   return countsByBatch;
 };
 
+const emptyHrUploadLeadCounts = (uploadedRowCount = 0): HrUploadLeadCounts =>
+  computeHrUploadLeadCounts(uploadedRowCount, {
+    leadCount: 0,
+    completedCount: 0,
+    assignedCount: 0,
+    skippedDuplicate: 0
+  });
+
 const hrUploadCountsToApi = (counts: HrUploadLeadCounts) => ({
+  // Rows label = CSV uploaded size (e.g. 2600 for “2401 to 5K”)
   rowCount: counts.rowCount,
+  uploadedRowCount: counts.rowCount,
+  leadCount: counts.leadCount,
+  createdCount: counts.leadCount,
+  skippedDuplicate: counts.skippedDuplicate,
   assignedCount: counts.assignedCount,
   unassignedCount: counts.unassignedCount,
   completedCount: counts.completedCount,
   counts: {
     assigned: counts.assignedCount,
     unassigned: counts.unassignedCount,
-    completed: counts.completedCount
+    completed: counts.completedCount,
+    leads: counts.leadCount,
+    uploaded: counts.rowCount,
+    skippedDuplicate: counts.skippedDuplicate
   }
 });
 
@@ -443,6 +539,29 @@ const normalizeMobile = (value: unknown): string | null => {
   if (digits.length > 10) return digits.slice(-10);
   return null;
 };
+
+/** Digits for HR mobile search (last-10 when longer; keep shorter for contains/ends-with). */
+const extractMobileSearchNeedle = (value: unknown): string | null => {
+  if (value === undefined || value === null) return null;
+  const digits = String(value).replace(/\D/g, '');
+  if (!digits) return null;
+  return digits.length > 10 ? digits.slice(-10) : digits;
+};
+
+const resolveHrMobileSearchQuery = (query: Record<string, unknown> | any): string | null =>
+  extractMobileSearchNeedle(query?.mobile ?? query?.q ?? query?.search);
+
+/** SQL predicate: last-10 of mobile / altMobile / mobileNormalized contains or ends-with needle. */
+const callingLeadMobileSearchSql = (leadAlias: string, needleParam: string) => `
+  (
+    RIGHT(regexp_replace(COALESCE(${leadAlias}."mobile", ''), '[^0-9]', '', 'g'), 10)
+      LIKE '%' || ${needleParam} || '%'
+    OR RIGHT(regexp_replace(COALESCE(${leadAlias}."altMobile", ''), '[^0-9]', '', 'g'), 10)
+      LIKE '%' || ${needleParam} || '%'
+    OR COALESCE(${leadAlias}."mobileNormalized", '') LIKE '%' || ${needleParam} || '%'
+  )
+`;
+
 
 const parseDealerIds = (dealerIds: unknown): string[] => {
   if (Array.isArray(dealerIds)) {
@@ -584,6 +703,159 @@ const roundRobinAssignUnassignedLeadsForBatch = async ({
       { transaction }
     );
     moved += 1;
+  }
+
+  // Duplicate CSV rows: adopt existing leads (same mobile) into this batch and assign if not
+  // already actively held by a dealer (pool / completed / rescheduled / missing assignment).
+  moved += await adoptAndAssignDuplicateUploadLeadsForBatch({
+    batchId,
+    dealerIds,
+    assignedByUserId,
+    transaction,
+    dealerCursorStart: cursor
+  });
+
+  return moved;
+};
+
+/**
+ * §15 — Duplicate CSV mobiles were previously skipped. Adopt those existing leads into
+ * this upload batch and round-robin assign them to dealers when they are pool/unassigned,
+ * completed, rescheduled, or have no assignment (do not steal in_progress/assigned).
+ */
+const adoptAndAssignDuplicateUploadLeadsForBatch = async ({
+  batchId,
+  dealerIds,
+  assignedByUserId,
+  transaction,
+  dealerCursorStart = 0,
+  mobiles
+}: {
+  batchId: string;
+  dealerIds: string[];
+  assignedByUserId: string;
+  transaction: any;
+  dealerCursorStart?: number;
+  /** Optional explicit mobiles (upload path). Otherwise reads duplicate audit rows. */
+  mobiles?: string[];
+}): Promise<number> => {
+  if (!dealerIds.length) return 0;
+
+  let mobileList = (mobiles || [])
+    .map((m) => normalizeMobile(m) || String(m || '').replace(/\D/g, '').slice(-10))
+    .filter((m) => Boolean(m) && m.length >= 8);
+
+  if (!mobileList.length) {
+    const dupRows = await CallingLeadUploadRow.findAll({
+      where: { batchId, status: 'duplicate' },
+      attributes: ['customerMobile', 'id', 'leadId'],
+      transaction
+    });
+    mobileList = Array.from(
+      new Set(
+        dupRows
+          .map((row) => normalizeMobile(row.customerMobile))
+          .filter((m): m is string => Boolean(m))
+      )
+    );
+  }
+
+  if (!mobileList.length) return 0;
+
+  const existingLeads = await CallingLead.findAll({
+    where: { mobileNormalized: { [Op.in]: mobileList } },
+    transaction,
+    lock: transaction.LOCK.UPDATE
+  });
+  if (!existingLeads.length) return 0;
+
+  const leadByMobile = new Map(existingLeads.map((lead) => [String(lead.mobileNormalized), lead]));
+  let cursor = Math.max(0, dealerCursorStart);
+  let moved = 0;
+  const now = new Date();
+  const adoptedLeadIds: string[] = [];
+
+  for (const mobile of mobileList) {
+    const lead = leadByMobile.get(mobile);
+    if (!lead) continue;
+
+    const latest = await DealerLeadAssignment.findOne({
+      where: {
+        [Op.and]: [{ leadId: lead.id }, LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE]
+      },
+      transaction,
+      lock: transaction.LOCK.UPDATE
+    });
+
+    const latestStatus = String(latest?.status || '').toLowerCase();
+    const latestDealerId = String(latest?.dealerId || '');
+    const isPool = isPoolOrUnassignedAssigneeId(latestDealerId);
+    const isActiveHold =
+      !isPool &&
+      ['assigned', 'active', 'in_progress'].includes(latestStatus) &&
+      isValidHrCallingAssigneeDealerId(latestDealerId);
+
+    // Already with a dealer as open work — leave alone.
+    if (isActiveHold) continue;
+
+    // Adopt into this upload so HR badges / View include the row.
+    if (String(lead.batchId || '') !== batchId) {
+      await lead.update({ batchId }, { transaction });
+    }
+
+    const dealerId = dealerIds[cursor % dealerIds.length];
+    cursor += 1;
+
+    if (latest && (isPool || latestStatus === 'queued')) {
+      await latest.update(
+        {
+          dealerId,
+          status: 'assigned',
+          assignedAt: now,
+          assignedBy: assignedByUserId,
+          action: null,
+          callRemark: null,
+          nextFollowUpAt: null,
+          actionAt: null
+        },
+        { transaction }
+      );
+    } else {
+      // completed / rescheduled / missing / other — create a NEW assignment so history stays intact
+      await DealerLeadAssignment.create(
+        {
+          id: uuidv4(),
+          leadId: lead.id,
+          dealerId,
+          assignedBy: assignedByUserId,
+          assignedAt: now,
+          status: 'assigned'
+        },
+        { transaction }
+      );
+    }
+
+    adoptedLeadIds.push(lead.id);
+    moved += 1;
+  }
+
+  if (adoptedLeadIds.length) {
+    // Link duplicate audit rows to the adopted lead ids for View/search.
+    const dupRows = await CallingLeadUploadRow.findAll({
+      where: {
+        batchId,
+        status: 'duplicate',
+        customerMobile: { [Op.ne]: null }
+      },
+      transaction
+    });
+    for (const row of dupRows) {
+      const mobile = normalizeMobile(row.customerMobile);
+      if (!mobile) continue;
+      const lead = leadByMobile.get(mobile);
+      if (!lead || !adoptedLeadIds.includes(lead.id)) continue;
+      await row.update({ leadId: lead.id }, { transaction });
+    }
   }
 
   return moved;
@@ -2037,29 +2309,21 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
 
     const existingLeads = await CallingLead.findAll({
       where: { mobileNormalized: { [Op.in]: normalizedRows.map((row) => row.mobile) } },
-      attributes: ['mobileNormalized']
+      attributes: ['id', 'mobileNormalized', 'batchId']
     });
     const existingMobiles = new Set(existingLeads.map((lead: any) => lead.mobileNormalized));
 
     const rowsToCreate = normalizedRows.filter((row) => !existingMobiles.has(row.mobile));
-    const skippedDuplicate = duplicateInFile.size + normalizedRows.length - rowsToCreate.length;
-    const rowsByMobile = new Map(normalizedRows.map((row) => [row.mobile, row]));
-    for (const existingMobile of existingMobiles) {
-      const row = rowsByMobile.get(existingMobile);
-      if (!row) continue;
-      rowAudit.push({
-        rowIndex: row.rowIndex,
-        status: 'duplicate',
-        customerName: row.name,
-        customerMobile: row.mobile,
-        customerAddress: buildCustomerAddress(row),
-        rawPayload: row.rawPayload
-      });
-    }
+    const duplicateExistingRows = normalizedRows.filter((row) => existingMobiles.has(row.mobile));
+    const skippedDuplicateInFile = duplicateInFile.size;
+
+    // Audit entries for true in-file duplicates (2nd+ occurrence) — not assigned again.
+    // Existing-mobile rows are adopted+assigned inside the transaction below.
 
     let created = 0;
     let assigned = 0;
     let queued = 0;
+    let duplicatesAssigned = 0;
 
     await sequelize.transaction(async (transaction) => {
       await ensureCallingPoolDealerExists(transaction);
@@ -2163,6 +2427,55 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
         });
       }
 
+      // Existing mobiles: adopt into this batch + assign to dealers (pool/completed/rescheduled).
+      if (duplicateExistingRows.length) {
+        const beforeDupAudit = rowAudit.length;
+        for (const row of duplicateExistingRows) {
+          rowAudit.push({
+            rowIndex: row.rowIndex,
+            status: 'duplicate',
+            customerName: row.name,
+            customerMobile: row.mobile,
+            customerAddress: buildCustomerAddress(row),
+            rawPayload: row.rawPayload
+          });
+        }
+
+        // Persist audit first so adopt helper can link leadId on duplicate rows.
+        if (rowAudit.length > beforeDupAudit) {
+          await CallingLeadUploadRow.bulkCreate(
+            rowAudit
+              .slice(beforeDupAudit)
+              .filter((row) => row.rowIndex > 0)
+              .map((row) => ({
+                id: uuidv4(),
+                batchId,
+                rowIndex: row.rowIndex,
+                customerName: row.customerName,
+                customerMobile: row.customerMobile,
+                customerAddress: row.customerAddress,
+                status: row.status,
+                leadId: row.leadId || null,
+                rawPayload: row.rawPayload
+              })),
+            { transaction }
+          );
+        }
+
+        duplicatesAssigned = await adoptAndAssignDuplicateUploadLeadsForBatch({
+          batchId,
+          dealerIds,
+          assignedByUserId,
+          transaction,
+          dealerCursorStart: dealerCursor,
+          mobiles: duplicateExistingRows.map((row) => row.mobile)
+        });
+        assigned += duplicatesAssigned;
+
+        // Remove duplicate entries already flushed so final bulkCreate doesn't double-insert.
+        rowAudit.length = beforeDupAudit;
+      }
+
       if (rowAudit.length > 0) {
         await CallingLeadUploadRow.bulkCreate(
           rowAudit
@@ -2183,18 +2496,21 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
         );
       }
 
-      // Persist live created-lead count so HR badges match DB (not CSV parsed rows).
+      // Keep batch.rowCount = CSV parsed size (not created leads).
       await CallingLeadUploadBatch.update(
-        { rowCount: created },
+        { rowCount: parsed },
         { where: { id: batchId }, transaction }
       );
     });
+
+    const skippedDuplicate = skippedDuplicateInFile + Math.max(0, duplicateExistingRows.length - duplicatesAssigned);
 
     logInfo('Calling leads CSV uploaded', {
       uploadedBy: req.user?.id,
       parsed,
       created,
       skippedDuplicate,
+      duplicatesAssigned,
       assigned,
       queued,
       activeLimitPerDealer: roundRobinAll ? 'round_robin_all' : activeLimitPerDealer,
@@ -2211,13 +2527,17 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
         uploadedBy: req.user?.id || 'unknown',
         created,
         skippedDuplicate,
+        duplicatesAssigned,
         assigned,
         queued,
         assignedAtUpload: assigned,
         queuedAtUpload: queued,
         activeLimitPerDealer: roundRobinAll ? null : activeLimitPerDealer,
         assignmentMode: roundRobinAll ? 'round_robin_all' : 'active_cap',
-        rowCount: created,
+        rowCount: parsed,
+        uploadedRowCount: parsed,
+        leadCount: created + duplicatesAssigned,
+        createdCount: created,
         assignedDealers: dealerIds
       }
     });
@@ -3792,8 +4112,7 @@ export const assignHrUploadUnassigned = async (req: Request, res: Response): Pro
       { id: batch.id, rowCount: batch.rowCount }
     ]);
     const liveCounts =
-      countsMap.get(batch.id) ||
-      computeHrUploadLeadCounts(batch.rowCount, { completedCount: 0, assignedCount: 0 });
+      countsMap.get(batch.id) || emptyHrUploadLeadCounts(batch.rowCount);
 
     logInfo('HR assign-unassigned completed', {
       uploadId: batch.id,
@@ -3885,10 +4204,7 @@ export const getHrLeadUploadBatches = async (req: Request, res: Response): Promi
     const total = batches.count;
     const hrUploadsList = batches.rows.map((batch) => {
       const assignedDealers = Array.isArray(batch.assignedDealers) ? batch.assignedDealers : [];
-      const liveCounts = countsByBatch.get(batch.id) || computeHrUploadLeadCounts(batch.rowCount, {
-        completedCount: 0,
-        assignedCount: 0
-      });
+      const liveCounts = countsByBatch.get(batch.id) || emptyHrUploadLeadCounts(batch.rowCount);
       return {
         id: batch.id,
         uploadedAt: batch.uploadedAt,
@@ -3908,10 +4224,7 @@ export const getHrLeadUploadBatches = async (req: Request, res: Response): Promi
       data: {
         batches: batches.rows.map((batch) => {
           const assignedDealers = Array.isArray(batch.assignedDealers) ? batch.assignedDealers : [];
-          const liveCounts = countsByBatch.get(batch.id) || computeHrUploadLeadCounts(batch.rowCount, {
-            completedCount: 0,
-            assignedCount: 0
-          });
+          const liveCounts = countsByBatch.get(batch.id) || emptyHrUploadLeadCounts(batch.rowCount);
           return {
             id: batch.id,
             batchId: batch.id,
@@ -3952,12 +4265,141 @@ export const getHrLeadUploadBatches = async (req: Request, res: Response): Promi
   }
 };
 
+export const getHrLeadsSearchByMobile = async (req: Request, res: Response): Promise<void> => {
+  /**
+   * GET /api/hr/leads/search?mobile=9602209955&limit=100
+   * Aliases: q / search for mobile.
+   * Match last-10 digits of mobile or altMobile (contains / ends-with).
+   */
+  try {
+    const mobileNeedle = resolveHrMobileSearchQuery(req.query);
+    if (!mobileNeedle) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VAL_001',
+          message: 'mobile (or q / search) is required'
+        }
+      });
+      return;
+    }
+
+    const limit = Math.min(parsePositiveInt(req.query.limit, 100), 200);
+
+    const leads = await sequelize.query<{
+      id: string;
+      name: string;
+      mobile: string;
+      altMobile: string | null;
+      kNumber: string | null;
+      address: string | null;
+      status: string | null;
+      assignedDealerId: string | null;
+      assignedDealerName: string | null;
+      uploadId: string | null;
+      fileName: string | null;
+      uploadedAt: Date | string | null;
+    }>(
+      `
+      SELECT
+        cl."id" AS "id",
+        cl."name" AS "name",
+        cl."mobile" AS "mobile",
+        cl."altMobile" AS "altMobile",
+        cl."kNumber" AS "kNumber",
+        cl."address" AS "address",
+        dla."status" AS "status",
+        CASE
+          WHEN dla."dealerId" IS NOT NULL
+            AND TRIM(dla."dealerId") <> ''
+            AND LOWER(TRIM(dla."dealerId")) NOT IN (
+              'unassigned', 'null', 'none', '-', 'na', 'n/a', 'pool', 'open'
+            )
+          THEN dla."dealerId"
+          ELSE NULL
+        END AS "assignedDealerId",
+        CASE
+          WHEN dla."dealerId" IS NOT NULL
+            AND TRIM(dla."dealerId") <> ''
+            AND LOWER(TRIM(dla."dealerId")) NOT IN (
+              'unassigned', 'null', 'none', '-', 'na', 'n/a', 'pool', 'open'
+            )
+          THEN NULLIF(TRIM(CONCAT_WS(' ', d."firstName", d."lastName")), '')
+          ELSE NULL
+        END AS "assignedDealerName",
+        cl."batchId" AS "uploadId",
+        b."fileName" AS "fileName",
+        b."uploadedAt" AS "uploadedAt"
+      FROM "calling_leads" AS cl
+      LEFT JOIN "calling_lead_upload_batches" AS b
+        ON b."id" = cl."batchId"
+      LEFT JOIN LATERAL (
+        SELECT newer.*
+        FROM "dealer_lead_assignments" AS newer
+        WHERE newer."leadId" = cl."id"
+        ORDER BY newer."assignedAt" DESC NULLS LAST, newer."createdAt" DESC NULLS LAST, newer."id" DESC
+        LIMIT 1
+      ) AS dla ON TRUE
+      LEFT JOIN "dealers" AS d
+        ON d."id" = dla."dealerId"
+      WHERE ${callingLeadMobileSearchSql('cl', ':needle')}
+      ORDER BY COALESCE(b."uploadedAt", cl."createdAt") DESC NULLS LAST, cl."createdAt" DESC
+      LIMIT :limit
+      `,
+      {
+        replacements: { needle: mobileNeedle, limit },
+        type: QueryTypes.SELECT
+      }
+    );
+
+    const payload = {
+      success: true,
+      mobile: mobileNeedle,
+      total: leads.length,
+      leads: leads.map((lead) => ({
+        id: lead.id,
+        name: lead.name || '',
+        mobile: lead.mobile || '',
+        altMobile: lead.altMobile || null,
+        kNumber: lead.kNumber || null,
+        address: lead.address || null,
+        status: lead.status || 'queued',
+        assignedDealerId: lead.assignedDealerId || null,
+        assignedDealerName: lead.assignedDealerName || null,
+        uploadId: lead.uploadId || null,
+        fileName: lead.fileName || null,
+        uploadedAt: lead.uploadedAt
+          ? lead.uploadedAt instanceof Date
+            ? lead.uploadedAt.toISOString()
+            : String(lead.uploadedAt)
+          : null
+      }))
+    };
+
+    applyNoCacheHeaders(res);
+    res.status(200).json({
+      ...payload,
+      data: payload
+    });
+  } catch (error) {
+    logError('HR leads search by mobile error', error, {
+      userId: req.user?.id,
+      mobile: req.query.mobile ?? req.query.q ?? req.query.search
+    });
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
+};
+
 export const getHrLeadUploadBatchRows = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { batchId } = req.params;
+    const batchId = String(req.params.batchId || req.params.uploadId || '').trim();
     const page = parsePositiveInt(req.query.page, 1);
     const limit = Math.min(parsePositiveInt(req.query.limit, 50), 100);
     const offset = (page - 1) * limit;
+    const mobileNeedle = resolveHrMobileSearchQuery(req.query);
 
     const batch = await CallingLeadUploadBatch.findByPk(batchId);
     if (!batch) {
@@ -3968,8 +4410,39 @@ export const getHrLeadUploadBatchRows = async (req: Request, res: Response): Pro
       return;
     }
 
+    const rowWhere: WhereOptions = { batchId };
+    if (mobileNeedle) {
+      // needle is digits-only from extractMobileSearchNeedle — safe to embed
+      const escapedNeedle = mobileNeedle.replace(/'/g, "''");
+      const matchingLeadIds = (
+        await sequelize.query<{ id: string }>(
+          `
+          SELECT cl."id" AS "id"
+          FROM "calling_leads" AS cl
+          WHERE cl."batchId" = :batchId
+            AND ${callingLeadMobileSearchSql('cl', `:needle`)}
+          `,
+          {
+            replacements: { batchId, needle: mobileNeedle },
+            type: QueryTypes.SELECT
+          }
+        )
+      ).map((row) => String(row.id));
+
+      const mobileOr: any[] = [
+        Sequelize.literal(
+          `RIGHT(regexp_replace(COALESCE("CallingLeadUploadRow"."customerMobile", ''), '[^0-9]', '', 'g'), 10) LIKE '%${escapedNeedle}%'`
+        )
+      ];
+      if (matchingLeadIds.length) {
+        mobileOr.unshift({ leadId: { [Op.in]: matchingLeadIds } });
+      }
+
+      (rowWhere as any)[Op.and] = [{ [Op.or]: mobileOr }];
+    }
+
     const rows = await CallingLeadUploadRow.findAndCountAll({
-      where: { batchId },
+      where: rowWhere,
       order: [['createdAt', 'ASC'], ['id', 'ASC']],
       limit,
       offset
@@ -4043,10 +4516,7 @@ export const getHrLeadUploadBatchRows = async (req: Request, res: Response): Pro
       });
     }
     const countsByBatch = await buildHrUploadCountsForBatches([{ id: batch.id, rowCount: batch.rowCount }]);
-    const liveCounts = countsByBatch.get(batch.id) || computeHrUploadLeadCounts(batch.rowCount, {
-      completedCount: 0,
-      assignedCount: 0
-    });
+    const liveCounts = countsByBatch.get(batch.id) || emptyHrUploadLeadCounts(batch.rowCount);
 
     const resolveRowAssignmentStatus = (
       assignment: DealerLeadAssignment | null | undefined
@@ -4116,31 +4586,33 @@ export const getHrLeadUploadBatchRows = async (req: Request, res: Response): Pro
       data: {
         batch: batchPayload,
         rows: normalizedRows,
+        mobile: mobileNeedle || null,
         pagination: {
           page,
           limit,
           total,
-          totalPages: Math.ceil(total / limit),
+          totalPages: Math.ceil(total / limit) || 0,
           hasNext: page < Math.ceil(total / limit),
           hasPrev: page > 1
         },
-        totalRows: liveCounts.rowCount
+        totalRows: mobileNeedle ? total : liveCounts.rowCount
       },
       rows: normalizedRows,
+      mobile: mobileNeedle || null,
       pagination: {
         page,
         limit,
         total,
-        totalPages: Math.ceil(total / limit),
+        totalPages: Math.ceil(total / limit) || 0,
         hasNext: page < Math.ceil(total / limit),
         hasPrev: page > 1
       },
-      totalRows: liveCounts.rowCount
+      totalRows: mobileNeedle ? total : liveCounts.rowCount
     });
   } catch (error) {
     logError('Get HR lead upload batch rows error', error, {
       userId: req.user?.id,
-      batchId: req.params.batchId
+      batchId: req.params.batchId || req.params.uploadId
     });
     res.status(500).json({
       success: false,

@@ -22,5 +22,10 @@
  *   ensureCallingPoolDealerExists() runs before reclaim/upload/assign-unassigned.
  *   HR counts use live calling_leads count (not CSV rowCount) so Unassigned is not phantom.
  *
+ * Duplicate mobiles (Jul 2026):
+ *   Existing mobiles in a new CSV are adopted into the upload batch and round-robin
+ *   assigned to dealers when not already actively held (assigned/in_progress).
+ *   assign-unassigned also adopts duplicate audit rows the same way.
+ *
  * Related: BACKEND_CALLING_QUEUE_CURRENT.ts
  */
