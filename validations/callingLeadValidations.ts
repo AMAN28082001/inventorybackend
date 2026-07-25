@@ -9,11 +9,11 @@ export const uploadCallingLeadsSchema = z.object({
   activeLimitPerDealer: z.preprocess((value) => {
     if (value !== undefined && value !== null && value !== '') return value;
     return undefined;
-  }, z.coerce.number().int().min(1).max(5000).optional()),
+  }, z.coerce.number().int().min(1).max(50).optional()),
   activeLeadsLimit: z.preprocess((value) => {
     if (value !== undefined && value !== null && value !== '') return value;
     return undefined;
-  }, z.coerce.number().int().min(1).max(5000).optional()),
+  }, z.coerce.number().int().min(1).max(50).optional()),
   /** §15-C — round_robin_all assigns every row (ignore active cap leftovers) */
   assignmentMode: z.string().max(64).optional(),
   assignment_mode: z.string().max(64).optional(),

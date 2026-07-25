@@ -1711,10 +1711,37 @@ SPA already aggregates from `GET /admin/quotations` when this route is missing.
 | FCFS allocate | `promoteQueuedLeadIfSlotAvailable` + SKIP LOCKED; stuck reclaim |
 | **`POST …/uploads/:uploadId/assign-unassigned`** | Round-robin all pool/unassigned leads → `unassignedCount === 0` |
 | Upload `assignmentMode=round_robin_all` | Assign **every** new row (ignore `activeLimitPerDealer` leftovers) |
+| Upload Zod | `activeLimitPerDealer` / `activeLeadsLimit` **1..50** (SPA sends `1`; do **not** send >50 — use `round_robin_all` to assign all) |
 
 **Refs:** `BACKEND_ASSIGN_UNASSIGNED.ts`, `BACKEND_CALLING_QUEUE_CURRENT.ts`
 
-**QA:** HR Assign unassigned on batch with Unassigned 193 → badge **0**; new CSV with `round_robin_all` → Unassigned **0** at upload; dealer `/current` 200 with next assigned lead.
+**QA:** Upload with `activeLimitPerDealer=1` succeeds; HR Assign unassigned → Unassigned **0**; `/current` never 500; `/next` returns dealer’s assigned lead until Assigned **0**.
+
+### §15-C-2 — Upload CSV must never 500 on Assign Leads (Jul 2026)
+
+**Symptom:** `POST /api/hr/leads/upload-csv` → delay → **500 Internal server error**. Zod is fine (`activeLimitPerDealer=1`).
+
+**Shipped in `uploadCallingLeadsCsv`:**
+
+| # | Fix |
+|---|-----|
+| 1 | Unknown dealers → **400 VAL_002** before insert |
+| 2 | CSV parse try/catch → **400 VAL_001** |
+| 3 | Per-row insert + **SAVEPOINT** — unique → `skippedDuplicate`, continue |
+| 4 | **Chunked inserts (500)** — avoids large-CSV timeout |
+| 5 | Per-assign SAVEPOINT — try next / pool |
+| 6 | Outer **SYS_001** includes truncated `e.message` |
+| 7 | Zod max **50**; `assignmentMode=round_robin_all` ignores numeric cap |
+
+**QA:**
+```bash
+curl -sS -X POST "$API/hr/leads/upload-csv" \
+  -H "Authorization: Bearer $HR_JWT" \
+  -F "file=@leads.csv" \
+  -F "dealerIds[]=$DEALER1" \
+  -F "activeLimitPerDealer=1"
+# Expect 201 with created/assigned — NEVER 500
+```
 
 ---
 

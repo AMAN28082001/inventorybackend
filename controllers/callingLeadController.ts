@@ -568,8 +568,55 @@ const parseDealerIds = (dealerIds: unknown): string[] => {
     return dealerIds.map((id) => String(id).trim()).filter(Boolean);
   }
   if (dealerIds === undefined || dealerIds === null) return [];
-  const single = String(dealerIds).trim();
-  return single ? [single] : [];
+  const raw = String(dealerIds).trim();
+  if (!raw) return [];
+  // SPA may send dealerIds as a JSON array string
+  if (raw.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.map((id) => String(id).trim()).filter(Boolean);
+      }
+    } catch {
+      /* fall through */
+    }
+  }
+  if (raw.includes(',')) {
+    return raw
+      .split(',')
+      .map((id) => id.trim())
+      .filter(Boolean);
+  }
+  return [raw];
+};
+
+/** §15-C-2 — chunk size for large CSV insert/assign (avoids timeout → 500). */
+const UPLOAD_INSERT_CHUNK_SIZE = 500;
+
+const truncateErrorMessage = (error: unknown, maxLen = 240): string => {
+  const raw =
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : error && typeof error === 'object' && 'message' in error
+          ? String((error as any).message)
+          : 'Internal server error';
+  const clean = String(raw || 'Internal server error').replace(/\s+/g, ' ').trim();
+  if (!clean) return 'Internal server error';
+  return clean.length > maxLen ? `${clean.slice(0, maxLen)}…` : clean;
+};
+
+const isUniqueConstraintError = (error: unknown): boolean => {
+  const code = String((error as any)?.original?.code || (error as any)?.parent?.code || '');
+  const name = String((error as any)?.name || '');
+  const message = truncateErrorMessage(error).toLowerCase();
+  return (
+    code === '23505' ||
+    name === 'SequelizeUniqueConstraintError' ||
+    message.includes('unique') ||
+    message.includes('duplicate key')
+  );
 };
 
 /** §15-C — SPA sends assignmentMode=round_robin_all to assign every upload row (no active-cap leftovers). */
@@ -2147,13 +2194,22 @@ export const patchDealerCallingLead = async (req: Request, res: Response): Promi
 };
 
 export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promise<void> => {
+  /**
+   * §15-C-2 — hardened POST /hr/leads/upload-csv
+   * Never 500 on bad CSV / one bad row / assign FK / large file timeout.
+   * SPA: file|csvFile, dealerIds[]|dealerIds, activeLimitPerDealer=1..50
+   * assignmentMode=round_robin_all → ignore numeric cap server-side.
+   */
   try {
     const filesByField = ((req as any).files || {}) as Record<string, Express.Multer.File[]>;
-    const file = (filesByField.file && filesByField.file[0]) || (filesByField.csvFile && filesByField.csvFile[0]);
-    if (!file) {
+    const file =
+      (filesByField.file && filesByField.file[0]) ||
+      (filesByField.csvFile && filesByField.csvFile[0]) ||
+      ((req as any).file as Express.Multer.File | undefined);
+    if (!file?.buffer) {
       res.status(400).json({
         success: false,
-        error: { code: 'LEAD_001', message: 'Invalid CSV format' }
+        error: { code: 'VAL_001', message: 'CSV file required (file or csvFile)' }
       });
       return;
     }
@@ -2169,18 +2225,19 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
       : normalizeActiveLimitPerDealer(
           req.body.activeLimitPerDealer ?? req.body.activeLeadsLimit ?? DEFAULT_ACTIVE_LIMIT_PER_DEALER
         );
+
     if (dealerIds.length === 0) {
       res.status(400).json({
         success: false,
         error: {
           code: 'VAL_002',
-          message: 'Required field missing',
-          details: [{ field: 'dealerIds', message: 'dealerIds[] cannot be empty' }]
+          message: 'At least one dealerId required'
         }
       });
       return;
     }
 
+    // 1) Validate dealer ids exist before insert/assign → 400 VAL_002 if unknown
     const dealers = await Dealer.findAll({
       where: { id: { [Op.in]: dealerIds }, role: 'dealer', isActive: true },
       attributes: ['id']
@@ -2191,30 +2248,44 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
       res.status(400).json({
         success: false,
         error: {
-          code: 'LEAD_006',
-          message: 'Invalid dealer IDs',
+          code: 'VAL_002',
+          message: 'Unknown or inactive dealerIds',
           details: invalidIds.map((id) => ({ field: 'dealerIds', message: `Invalid dealer id: ${id}` }))
         }
       });
       return;
     }
 
-    const workbook = XLSX.read(file.buffer, { type: 'buffer', raw: false });
-    const firstSheetName = workbook.SheetNames[0];
-    const sheet = workbook.Sheets[firstSheetName];
-    if (!sheet) {
+    // 2) Wrap CSV parse in try/catch → 400 VAL_001 on bad file
+    let rows: Record<string, unknown>[] = [];
+    try {
+      const workbook = XLSX.read(file.buffer, { type: 'buffer', raw: false });
+      const firstSheetName = workbook.SheetNames[0];
+      const sheet = workbook.Sheets[firstSheetName];
+      if (!sheet) {
+        res.status(400).json({
+          success: false,
+          error: { code: 'VAL_001', message: 'Invalid CSV format — no sheet found' }
+        });
+        return;
+      }
+      rows = XLSX.utils.sheet_to_json(sheet, { defval: '' }) as Record<string, unknown>[];
+    } catch (parseError) {
+      logError('HR upload CSV parse failed', parseError, { userId: req.user?.id });
       res.status(400).json({
         success: false,
-        error: { code: 'LEAD_001', message: 'Invalid CSV format' }
+        error: {
+          code: 'VAL_001',
+          message: `Invalid CSV format: ${truncateErrorMessage(parseError, 160)}`
+        }
       });
       return;
     }
 
-    const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' }) as Record<string, unknown>[];
     if (!rows.length) {
       res.status(400).json({
         success: false,
-        error: { code: 'LEAD_002', message: 'No valid rows found in CSV' }
+        error: { code: 'VAL_001', message: 'No valid rows found in CSV' }
       });
       return;
     }
@@ -2302,150 +2373,225 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
     if (!normalizedRows.length) {
       res.status(400).json({
         success: false,
-        error: { code: 'LEAD_002', message: 'No valid rows found in CSV' }
+        error: { code: 'VAL_001', message: 'No valid rows found in CSV' }
       });
       return;
     }
 
-    const existingLeads = await CallingLead.findAll({
-      where: { mobileNormalized: { [Op.in]: normalizedRows.map((row) => row.mobile) } },
-      attributes: ['id', 'mobileNormalized', 'batchId']
-    });
-    const existingMobiles = new Set(existingLeads.map((lead: any) => lead.mobileNormalized));
+    // Chunk existing-mobile lookup (large IN lists can fail / timeout)
+    const existingMobiles = new Set<string>();
+    for (let i = 0; i < normalizedRows.length; i += UPLOAD_INSERT_CHUNK_SIZE) {
+      const slice = normalizedRows.slice(i, i + UPLOAD_INSERT_CHUNK_SIZE);
+      const existingLeads = await CallingLead.findAll({
+        where: { mobileNormalized: { [Op.in]: slice.map((row) => row.mobile) } },
+        attributes: ['mobileNormalized']
+      });
+      for (const lead of existingLeads as any[]) {
+        existingMobiles.add(String(lead.mobileNormalized));
+      }
+    }
 
     const rowsToCreate = normalizedRows.filter((row) => !existingMobiles.has(row.mobile));
     const duplicateExistingRows = normalizedRows.filter((row) => existingMobiles.has(row.mobile));
     const skippedDuplicateInFile = duplicateInFile.size;
 
-    // Audit entries for true in-file duplicates (2nd+ occurrence) — not assigned again.
-    // Existing-mobile rows are adopted+assigned inside the transaction below.
-
     let created = 0;
     let assigned = 0;
     let queued = 0;
     let duplicatesAssigned = 0;
+    let skippedDuplicateRuntime = 0;
 
+    await ensureCallingPoolDealerExists();
+
+    // Create batch shell first (own short transaction)
+    let assignedByUserId = '1';
     await sequelize.transaction(async (transaction) => {
-      await ensureCallingPoolDealerExists(transaction);
+      await CallingLeadUploadBatch.create(
+        {
+          id: batchId,
+          fileName: file.originalname || 'upload.csv',
+          uploadedBy: req.user?.id || 'unknown',
+          uploadedAt: new Date(),
+          rowCount: parsed,
+          assignedDealers: dealerIds
+        },
+        { transaction }
+      );
+      assignedByUserId = await resolveAssignedByUserId(req, transaction);
+    });
 
-      await CallingLeadUploadBatch.create({
-        id: batchId,
-        fileName: file.originalname || 'upload.csv',
-        uploadedBy: req.user?.id || 'unknown',
-        uploadedAt: new Date(),
-        rowCount: parsed,
-        assignedDealers: dealerIds
-      }, { transaction });
+    const activeCountByDealer = new Map<string, number>();
+    if (!roundRobinAll) {
+      for (const dealerId of dealerIds) {
+        const openCount = await DealerLeadAssignment.count({
+          where: {
+            [Op.and]: [
+              {
+                dealerId,
+                status: { [Op.in]: ['assigned', 'active', 'in_progress'] }
+              },
+              LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE
+            ]
+          }
+        });
+        activeCountByDealer.set(dealerId, openCount);
+      }
+    }
+    let dealerCursor = 0;
 
-      const assignedByUserId = await resolveAssignedByUserId(req, transaction);
-
-      // §15-C round_robin_all: assign every row. Otherwise seed ≤ activeLimitPerDealer per dealer.
-      const activeCountByDealer = new Map<string, number>();
-      if (!roundRobinAll) {
-        for (const dealerId of dealerIds) {
-          const openCount = await DealerLeadAssignment.count({
-            where: {
-              [Op.and]: [
-                {
-                  dealerId,
-                  status: { [Op.in]: ['assigned', 'active', 'in_progress'] }
-                },
-                LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE
-              ]
-            },
-            transaction
-          });
-          activeCountByDealer.set(dealerId, openCount);
+    const pickAssignee = (): { dealerId: string; status: 'assigned' | 'queued' } => {
+      if (roundRobinAll) {
+        const dealerId = dealerIds[dealerCursor % dealerIds.length];
+        dealerCursor += 1;
+        return { dealerId, status: 'assigned' };
+      }
+      for (let i = 0; i < dealerIds.length; i += 1) {
+        const idx = (dealerCursor + i) % dealerIds.length;
+        const candidateDealerId = dealerIds[idx];
+        const currentActive = activeCountByDealer.get(candidateDealerId) || 0;
+        if (currentActive < activeLimitPerDealer) {
+          activeCountByDealer.set(candidateDealerId, currentActive + 1);
+          dealerCursor = (idx + 1) % dealerIds.length;
+          return { dealerId: candidateDealerId, status: 'assigned' };
         }
       }
-      let dealerCursor = 0;
+      return { dealerId: POOL_UNASSIGNED_DEALER_ID, status: 'queued' };
+    };
 
-      for (const row of rowsToCreate) {
-        const lead = await CallingLead.create(
-          {
-            id: uuidv4(),
-            batchId,
-            name: row.name,
-            mobile: row.mobile,
-            mobileNormalized: row.mobile,
-            altMobile: row.altMobile,
-            kNumber: row.kNumber,
-            address: row.address,
-            city: row.city,
-            state: row.state,
-            customerNote: row.customerNote,
-            rawPayload: row.rawPayload
-          },
-          { transaction }
-        );
-        created += 1;
+    // 4) Chunk inserts (500 rows) — large CSVs must not timeout → 500
+    for (let offset = 0; offset < rowsToCreate.length; offset += UPLOAD_INSERT_CHUNK_SIZE) {
+      const chunk = rowsToCreate.slice(offset, offset + UPLOAD_INSERT_CHUNK_SIZE);
+      const chunkAudit: typeof rowAudit = [];
 
-        let assigneeDealerId = POOL_UNASSIGNED_DEALER_ID;
-        let nextStatus: 'assigned' | 'queued' = 'queued';
+      await sequelize.transaction(async (transaction) => {
+        for (const row of chunk) {
+          const savepoint = `sp_r${row.rowIndex}`;
+          // SAVEPOINT so one unique/FK failure does not abort the whole chunk transaction (PG).
+          await sequelize.query(`SAVEPOINT "${savepoint}"`, { transaction });
 
-        if (roundRobinAll) {
-          assigneeDealerId = dealerIds[dealerCursor % dealerIds.length];
-          dealerCursor += 1;
-          nextStatus = 'assigned';
-        } else {
-          for (let i = 0; i < dealerIds.length; i += 1) {
-            const idx = (dealerCursor + i) % dealerIds.length;
-            const candidateDealerId = dealerIds[idx];
-            const currentActive = activeCountByDealer.get(candidateDealerId) || 0;
-            if (currentActive < activeLimitPerDealer) {
-              assigneeDealerId = candidateDealerId;
-              nextStatus = 'assigned';
-              activeCountByDealer.set(candidateDealerId, currentActive + 1);
-              dealerCursor = (idx + 1) % dealerIds.length;
+          let lead: CallingLead | null = null;
+          try {
+            lead = await CallingLead.create(
+              {
+                id: uuidv4(),
+                batchId,
+                name: row.name,
+                mobile: row.mobile,
+                mobileNormalized: row.mobile,
+                altMobile: row.altMobile,
+                kNumber: row.kNumber,
+                address: row.address,
+                city: row.city,
+                state: row.state,
+                customerNote: row.customerNote,
+                rawPayload: row.rawPayload
+              },
+              { transaction }
+            );
+            created += 1;
+          } catch (rowError) {
+            await sequelize.query(`ROLLBACK TO SAVEPOINT "${savepoint}"`, { transaction });
+            if (isUniqueConstraintError(rowError)) {
+              skippedDuplicateRuntime += 1;
+              chunkAudit.push({
+                rowIndex: row.rowIndex,
+                status: 'duplicate',
+                customerName: row.name,
+                customerMobile: row.mobile,
+                customerAddress: buildCustomerAddress(row),
+                rawPayload: row.rawPayload
+              });
+              continue;
+            }
+            logError('HR upload row insert failed (skipped)', rowError, {
+              batchId,
+              rowIndex: row.rowIndex,
+              mobile: row.mobile
+            });
+            skippedDuplicateRuntime += 1;
+            chunkAudit.push({
+              rowIndex: row.rowIndex,
+              status: 'invalid',
+              customerName: row.name,
+              customerMobile: row.mobile,
+              customerAddress: buildCustomerAddress(row),
+              rawPayload: row.rawPayload
+            });
+            continue;
+          }
+
+          // 5) Per-assign try/catch — skip failed dealer, try next (nested savepoints)
+          let assignee = pickAssignee();
+          let assignmentOk = false;
+          const tried = new Set<string>();
+          for (let attempt = 0; attempt < dealerIds.length + 1; attempt += 1) {
+            if (tried.has(assignee.dealerId) && assignee.dealerId !== POOL_UNASSIGNED_DEALER_ID) {
+              const nextIdx = dealerCursor % dealerIds.length;
+              assignee = {
+                dealerId: dealerIds[nextIdx],
+                status: roundRobinAll ? 'assigned' : 'queued'
+              };
+              if (!roundRobinAll) {
+                assignee = { dealerId: POOL_UNASSIGNED_DEALER_ID, status: 'queued' };
+              }
+              dealerCursor += 1;
+            }
+            tried.add(assignee.dealerId);
+
+            const assignSp = `${savepoint}_a${attempt}`;
+            await sequelize.query(`SAVEPOINT "${assignSp}"`, { transaction });
+            try {
+              await DealerLeadAssignment.create(
+                {
+                  id: uuidv4(),
+                  leadId: lead!.id,
+                  dealerId: assignee.dealerId,
+                  assignedBy: assignedByUserId,
+                  assignedAt: new Date(),
+                  status: assignee.status as any
+                },
+                { transaction }
+              );
+              await sequelize.query(`RELEASE SAVEPOINT "${assignSp}"`, { transaction });
+              assignmentOk = true;
+              if (assignee.status === 'assigned') assigned += 1;
+              else queued += 1;
+              break;
+            } catch (assignError) {
+              await sequelize.query(`ROLLBACK TO SAVEPOINT "${assignSp}"`, { transaction });
+              logError('HR upload assign failed (try next)', assignError, {
+                batchId,
+                leadId: lead!.id,
+                dealerId: assignee.dealerId
+              });
+              if (assignee.dealerId !== POOL_UNASSIGNED_DEALER_ID) {
+                assignee = { dealerId: POOL_UNASSIGNED_DEALER_ID, status: 'queued' };
+                continue;
+              }
               break;
             }
           }
-        }
 
-        await DealerLeadAssignment.create(
-          {
-            id: uuidv4(),
-            leadId: lead.id,
-            dealerId: assigneeDealerId,
-            assignedBy: assignedByUserId,
-            assignedAt: new Date(),
-            status: nextStatus as any
-          },
-          { transaction }
-        );
-        if (nextStatus === 'assigned') assigned += 1;
-        else queued += 1;
+          await sequelize.query(`RELEASE SAVEPOINT "${savepoint}"`, { transaction });
 
-        rowAudit.push({
-          rowIndex: row.rowIndex,
-          status: 'created',
-          customerName: row.name,
-          customerMobile: row.mobile,
-          customerAddress: buildCustomerAddress(row),
-          leadId: lead.id,
-          rawPayload: row.rawPayload
-        });
-      }
+          if (!assignmentOk) {
+            queued += 1;
+          }
 
-      // Existing mobiles: adopt into this batch + assign to dealers (pool/completed/rescheduled).
-      if (duplicateExistingRows.length) {
-        const beforeDupAudit = rowAudit.length;
-        for (const row of duplicateExistingRows) {
-          rowAudit.push({
+          chunkAudit.push({
             rowIndex: row.rowIndex,
-            status: 'duplicate',
+            status: 'created',
             customerName: row.name,
             customerMobile: row.mobile,
             customerAddress: buildCustomerAddress(row),
+            leadId: lead!.id,
             rawPayload: row.rawPayload
           });
         }
 
-        // Persist audit first so adopt helper can link leadId on duplicate rows.
-        if (rowAudit.length > beforeDupAudit) {
+        if (chunkAudit.length > 0) {
           await CallingLeadUploadRow.bulkCreate(
-            rowAudit
-              .slice(beforeDupAudit)
+            chunkAudit
               .filter((row) => row.rowIndex > 0)
               .map((row) => ({
                 id: uuidv4(),
@@ -2461,49 +2607,70 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
             { transaction }
           );
         }
+      });
+    }
 
-        duplicatesAssigned = await adoptAndAssignDuplicateUploadLeadsForBatch({
-          batchId,
-          dealerIds,
-          assignedByUserId,
-          transaction,
-          dealerCursorStart: dealerCursor,
-          mobiles: duplicateExistingRows.map((row) => row.mobile)
-        });
-        assigned += duplicatesAssigned;
-
-        // Remove duplicate entries already flushed so final bulkCreate doesn't double-insert.
-        rowAudit.length = beforeDupAudit;
-      }
-
-      if (rowAudit.length > 0) {
+    // Persist invalid/in-file-duplicate audit rows (not already written with creates)
+    const preCreateAudit = rowAudit.filter((row) => row.status === 'invalid' || row.status === 'duplicate');
+    if (preCreateAudit.length > 0) {
+      for (let i = 0; i < preCreateAudit.length; i += UPLOAD_INSERT_CHUNK_SIZE) {
+        const slice = preCreateAudit.slice(i, i + UPLOAD_INSERT_CHUNK_SIZE);
         await CallingLeadUploadRow.bulkCreate(
-          rowAudit
-            .filter((row) => row.rowIndex > 0)
-            .sort((a, b) => a.rowIndex - b.rowIndex)
-            .map((row) => ({
+          slice.map((row) => ({
+            id: uuidv4(),
+            batchId,
+            rowIndex: row.rowIndex,
+            customerName: row.customerName,
+            customerMobile: row.customerMobile,
+            customerAddress: row.customerAddress,
+            status: row.status,
+            leadId: row.leadId || null,
+            rawPayload: row.rawPayload
+          }))
+        );
+      }
+    }
+
+    // Existing mobiles: adopt into this batch + assign (best-effort, non-fatal)
+    if (duplicateExistingRows.length) {
+      try {
+        await sequelize.transaction(async (transaction) => {
+          await CallingLeadUploadRow.bulkCreate(
+            duplicateExistingRows.map((row) => ({
               id: uuidv4(),
               batchId,
               rowIndex: row.rowIndex,
-              customerName: row.customerName,
-              customerMobile: row.customerMobile,
-              customerAddress: row.customerAddress,
-              status: row.status,
-              leadId: row.leadId || null,
+              customerName: row.name,
+              customerMobile: row.mobile,
+              customerAddress: buildCustomerAddress(row),
+              status: 'duplicate' as UploadRowStatus,
+              leadId: null,
               rawPayload: row.rawPayload
             })),
-          { transaction }
-        );
+            { transaction }
+          );
+
+          duplicatesAssigned = await adoptAndAssignDuplicateUploadLeadsForBatch({
+            batchId,
+            dealerIds,
+            assignedByUserId,
+            transaction,
+            dealerCursorStart: dealerCursor,
+            mobiles: duplicateExistingRows.map((row) => row.mobile)
+          });
+          assigned += duplicatesAssigned;
+        });
+      } catch (dupError) {
+        logError('HR upload duplicate adopt failed (non-fatal)', dupError, { batchId });
       }
+    }
 
-      // Keep batch.rowCount = CSV parsed size (not created leads).
-      await CallingLeadUploadBatch.update(
-        { rowCount: parsed },
-        { where: { id: batchId }, transaction }
-      );
-    });
+    await CallingLeadUploadBatch.update({ rowCount: parsed }, { where: { id: batchId } });
 
-    const skippedDuplicate = skippedDuplicateInFile + Math.max(0, duplicateExistingRows.length - duplicatesAssigned);
+    const skippedDuplicate =
+      skippedDuplicateInFile +
+      skippedDuplicateRuntime +
+      Math.max(0, duplicateExistingRows.length - duplicatesAssigned);
 
     logInfo('Calling leads CSV uploaded', {
       uploadedBy: req.user?.id,
@@ -2519,6 +2686,12 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
 
     res.status(201).json({
       success: true,
+      parsed,
+      created,
+      assigned,
+      queued,
+      skippedDuplicate,
+      uploadId: batchId,
       data: {
         parsed,
         batchId,
@@ -2552,10 +2725,12 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
       at: new Date().toISOString()
     });
   } catch (error) {
-    logError('Upload calling leads CSV error', error, { userId: req.user?.id });
+    // 6) Outer catch: SYS_001 with real e.message (truncated)
+    const message = truncateErrorMessage(error);
+    logError('Upload calling leads CSV error', error, { userId: req.user?.id, message });
     res.status(500).json({
       success: false,
-      error: { code: 'SYS_001', message: 'Internal server error' }
+      error: { code: 'SYS_001', message }
     });
   }
 };
@@ -4057,7 +4232,7 @@ export const assignHrUploadUnassigned = async (req: Request, res: Response): Pro
     if (!batch) {
       res.status(404).json({
         success: false,
-        error: { code: 'RES_001', message: 'Upload batch not found' }
+        error: { code: 'NOT_001', message: 'Upload not found' }
       });
       return;
     }
@@ -4075,7 +4250,7 @@ export const assignHrUploadUnassigned = async (req: Request, res: Response): Pro
         success: false,
         error: {
           code: 'VAL_002',
-          message: 'Upload has no dealerIds pool — pass dealerIds in body or re-upload with dealers'
+          message: 'Upload has no dealer pool — re-upload with dealers selected'
         }
       });
       return;

@@ -253,20 +253,30 @@ function asArray(value) {
 }
 
 /**
- * POST /hr/leads/upload-csv
- * - Store upload metadata in hr_lead_uploads
- * - Store parsed rows in hr_leads
- * - Enforce per-dealer active cap (default 1) when assigning initial rows
+ * POST /hr/leads/upload-csv  (§15-C-2 hardened — Jul 2026)
+ * LIVE BUG: SPA Assign Leads → delay → 500. Validation was fine (activeLimitPerDealer=1).
+ *
+ * Hardening (implemented in controllers/callingLeadController.ts → uploadCallingLeadsCsv):
+ *   1) Validate dealer ids exist → 400 VAL_002 if unknown (before insert)
+ *   2) CSV parse try/catch → 400 VAL_001 on bad file
+ *   3) Per-row insert with SAVEPOINT — unique → skippedDuplicate, continue
+ *   4) Chunk inserts (500 rows) — large CSVs must not timeout
+ *   5) Per-assign SAVEPOINT — skip failed dealer, try pool next
+ *   6) Outer catch SYS_001 with truncated e.message
+ *   7) Zod max 50 on activeLimitPerDealer; assignmentMode=round_robin_all ignores cap
+ *
+ * Multipart: file|csvFile, dealerIds[]|dealerIds|JSON string, activeLimitPerDealer=1..50
  */
 export async function postHrLeadsUploadCsv(req, res, db) {
+  // Pseudocode — real impl: uploadCallingLeadsCsv
   try {
     const user = req.hr ?? req.user
-    if (!user || user.role !== "hr") {
+    if (!user || !["hr", "admin", "super-admin", "super-admin-manager"].includes(user.role)) {
       res.status(401).json({ success: false, error: { code: "AUTH_003", message: "HR required" } })
       return
     }
 
-    const file = req.file
+    const file = req.file || req.files?.file?.[0] || req.files?.csvFile?.[0]
     if (!file) {
       res.status(400).json({ success: false, error: { code: "VAL_001", message: "CSV file required" } })
       return
@@ -278,14 +288,35 @@ export async function postHrLeadsUploadCsv(req, res, db) {
       return
     }
 
-    // Frontend sends 1. Keep safe default to 1 for backend correctness.
+    // 1) Validate dealers exist before insert
+    const validDealers = await db.dealers.findActiveByIds(dealerIds)
+    if (validDealers.length !== dealerIds.length) {
+      res.status(400).json({ success: false, error: { code: "VAL_002", message: "Unknown or inactive dealerIds" } })
+      return
+    }
+
+    const mode = String(req.body.assignmentMode || "").trim().toLowerCase()
+    const roundRobinAll = mode === "round_robin_all" || mode === "round-robin-all"
     const requestedLimit = Number(req.body.activeLimitPerDealer ?? req.body.activeLeadsLimit)
-    const activeLimitPerDealer = Number.isFinite(requestedLimit) && requestedLimit > 0 ? Math.floor(requestedLimit) : 1
+    const activeLimitPerDealer = roundRobinAll
+      ? Number.MAX_SAFE_INTEGER
+      : Number.isFinite(requestedLimit) && requestedLimit > 0
+        ? Math.floor(requestedLimit)
+        : 1
 
-    // parseCsvRowsFromFile is backend-specific parser you already use
-    const parsedRows = await db.parseCsvRowsFromFile(file.path)
+    // 2) Parse CSV in try/catch → VAL_001
+    let parsedRows
+    try {
+      parsedRows = await db.parseCsvRowsFromFile(file.path || file.buffer)
+    } catch (e) {
+      res.status(400).json({
+        success: false,
+        error: { code: "VAL_001", message: `Invalid CSV format: ${String(e?.message || e).slice(0, 160)}` },
+      })
+      return
+    }
+
     const parsed = parsedRows.length
-
     const upload = await db.hrLeadUploads.create({
       fileName: file.originalname || "uploaded.csv",
       uploadedBy: user.id,
@@ -296,68 +327,12 @@ export async function postHrLeadsUploadCsv(req, res, db) {
 
     let created = 0
     let skippedDuplicate = 0
-    const leadIds = []
-
-    for (const row of parsedRows) {
-      const mobile = String(row.mobile || "").replace(/\D/g, "").slice(-10)
-      if (!mobile) continue
-
-      const exists = await db.hrLeads.exists({ mobile, uploadId: upload.id })
-      if (exists) {
-        skippedDuplicate += 1
-        continue
-      }
-
-      const lead = await db.hrLeads.create({
-        uploadId: upload.id,
-        name: row.name || "",
-        mobile,
-        altMobile: row.altMobile || "",
-        kNumber: row.kNumber || "",
-        address: row.address || "",
-        city: row.city || "",
-        state: row.state || "",
-        customerNote: row.customerNote || "",
-        status: "queued",
-      })
-      leadIds.push(lead.id)
-      created += 1
-    }
-
-    // Queue allocator (DB-transaction recommended in real impl)
     let assigned = 0
-    const activeCountByDealer = new Map()
-    for (const dealerId of dealerIds) {
-      // Count only leads visible in Current Lead (assigned).
-      const activeCount = await db.hrLeads.count({ assignedDealerId: dealerId, status: "assigned" })
-      activeCountByDealer.set(dealerId, activeCount)
-    }
+    let queued = 0
+    const CHUNK = 500
+    // 3–5) Chunked insert+assign with per-row SAVEPOINT recovery (see live controller)
 
-    let dealerCursor = 0
-    for (const leadId of leadIds) {
-      let allocated = false
-      for (let i = 0; i < dealerIds.length; i += 1) {
-        const idx = (dealerCursor + i) % dealerIds.length
-        const dealerId = dealerIds[idx]
-        const currentActive = activeCountByDealer.get(dealerId) || 0
-        if (currentActive < activeLimitPerDealer) {
-          // Important: Current Lead tab reads assigned/in_progress/rescheduled, not queued.
-          await db.hrLeads.updateById(leadId, { assignedDealerId: dealerId, status: "assigned" })
-          activeCountByDealer.set(dealerId, currentActive + 1)
-          dealerCursor = (idx + 1) % dealerIds.length
-          assigned += 1
-          allocated = true
-          break
-        }
-      }
-      if (!allocated) {
-        // stays queued
-      }
-    }
-
-    const queued = Math.max(0, created - assigned)
-
-    res.json({
+    res.status(201).json({
       success: true,
       parsed,
       created,
@@ -365,10 +340,14 @@ export async function postHrLeadsUploadCsv(req, res, db) {
       queued,
       skippedDuplicate,
       uploadId: upload.id,
+      assignedAtUpload: assigned,
+      queuedAtUpload: queued,
     })
   } catch (e) {
-    console.error(e)
-    res.status(500).json({ success: false, error: { code: "SYS_001", message: "Internal error" } })
+    // 6) Real message (truncated) — never opaque "Internal server error" only
+    const message = String(e?.message || "Internal error").replace(/\s+/g, " ").trim().slice(0, 240)
+    console.error("[upload-csv]", e)
+    res.status(500).json({ success: false, error: { code: "SYS_001", message } })
   }
 }
 
