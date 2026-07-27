@@ -693,6 +693,12 @@ const panSchema = z
   .transform((val) => val.toUpperCase())
   .refine((val) => panRegex.test(val), { message: 'PAN must be in format ABCDE1234F' });
 
+/** Empty / null multipart values → undefined so optional media never fail min(1). §18 */
+const optionalMediaRef = z.preprocess(
+  (val) => (val === '' || val === null ? undefined : val),
+  z.string().min(1).optional()
+);
+
 /** Subsidy rules for create/update when effective system type is known (partial PATCH). */
 export const validateSubsidyForSystemType = (
   systemType: string,
@@ -740,9 +746,10 @@ export const quotationDocumentsSchema = z.object({
   bankName: z.string().min(1).optional(),
   bankBranch: z.string().min(1).optional(),
   bankPassbookImage: z.string().min(1).optional(),
-  geotagRoofPhoto: z.string().min(1).optional(),
-  customerWithHousePhoto: z.string().min(1).optional(),
-  propertyDocumentPdf: z.string().min(1).optional(),
+  // §18 — optional; submit without these must succeed
+  geotagRoofPhoto: optionalMediaRef,
+  customerWithHousePhoto: optionalMediaRef,
+  propertyDocumentPdf: optionalMediaRef,
   isCompliantSenior: booleanOrString.optional(),
   compliantAadharNumber: z.string().min(1).optional().refine((val) => !val || aadharRegex.test(val), {
     message: 'Compliant Aadhar number must be 12 digits'

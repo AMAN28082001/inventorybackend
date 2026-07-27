@@ -3803,6 +3803,17 @@ const QUOTATION_DOCUMENT_IMAGE_OR_PDF_FIELDS = new Set([
 
 const QUOTATION_DOCUMENT_PDF_ONLY_FIELDS = new Set(['propertyDocumentPdf', 'electricityBillImage']);
 
+/**
+ * §18 Document Submission — optional media (Jul 2026).
+ * Never 400 solely because these are omitted or still null after save.
+ * Keep allowlisted so uploads are accepted when present.
+ */
+export const OPTIONAL_QUOTATION_DOCUMENT_MEDIA_FIELDS = new Set([
+  'propertyDocumentPdf',
+  'geotagRoofPhoto',
+  'customerWithHousePhoto'
+]);
+
 const ensureQuotationDocumentUploadFieldIsValid = (
   fieldName: string,
   file: Express.Multer.File
@@ -4457,6 +4468,8 @@ export const saveQuotationDocuments = async (req: Request, res: Response): Promi
 
     // KYC form validation (dealer/account-management upload flow). Final-confirmation-only uploads
     // should remain partial and not require base KYC fields (use POST …/final-confirmation-documents).
+    // §18: propertyDocumentPdf / geotagRoofPhoto / customerWithHousePhoto are optional — do not
+    // require them here (null when never uploaded is valid). See OPTIONAL_QUOTATION_DOCUMENT_MEDIA_FIELDS.
     const isKycEditor = Boolean(req.dealer) || isAccountManager;
     if (isKycEditor && !requestIsFinalConfirmationOnlyUpload(req)) {
       const details: Array<{ field: string; message: string }> = [];
