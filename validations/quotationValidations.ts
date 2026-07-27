@@ -607,6 +607,15 @@ export const finalSettlementSchema = z.object({
   }
 );
 
+/**
+ * Revert final settlement.
+ * Body is optional (usually empty) — handler recomputes everything server-side.
+ */
+export const revertFinalSettlementSchema = z.preprocess(
+  (v) => (v === undefined || v === null ? {} : v),
+  z.object({}).passthrough()
+);
+
 export const updatePaymentModeSchema = z.object({
   paymentMode: z
     .union([z.string(), z.null()])

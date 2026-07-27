@@ -171,6 +171,14 @@ The client tries up to **4 DB writes**, in order, until one succeeds:
 5) GET /api/quotations?status=approved                 ← must reflect settled state
 ```
 
+### Revert final settlement (undo)
+
+Frontend can undo a previously persisted final settlement by calling:
+- `POST /api/quotations/{id}/revert-final-settlement` (preferred)
+- fallback: `DELETE /api/quotations/{id}/final-settlement`
+
+See: `BACKEND_REVERT_SETTLEMENT.md`.
+
 **"Already cleared" responses** (message containing `cannot exceed remaining`,
 `remaining (0)`, `already settled`, `already completed`, `nothing to settle`, or
 `paid … exceed`) are NOT treated as fatal — the client keeps trying the next write and,

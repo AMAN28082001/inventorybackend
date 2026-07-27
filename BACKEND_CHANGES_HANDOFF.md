@@ -40,6 +40,8 @@
 | 28 | High | Admin Overview → Product Needed (installation-pending brands) | **Done** | §13 / `BACKEND_ADMIN_PRODUCT_NEEDED.ts` |
 | 29 | High | Inventory Tally import — `POST /products` without serials + clear errors | **Done** | §14 |
 | 30 | High | Calling FCFS + `/current` never 500 + assign-unassigned (Unassigned→0) | **Done** | §15 / `BACKEND_ASSIGN_UNASSIGNED.ts` |
+| 31 | High | Metering dual track — Bank process + installer auth | **Done** | §17 / `BACKEND_METERING_DUAL_TRACK.md` |
+| 32 | High | Document Submission — Property Documents PDF optional | **Done** | §18 / `BACKEND_PROPERTY_DOCUMENT_OPTIONAL.md` |
 
 **Deploy before QA:**
 
@@ -56,6 +58,7 @@ yarn migrate
 | `20260415100000-add-installation-release-fields-to-quotations.js` | `installationReadyForInstaller`, `installationReleasedAt` (bootstrap also ensures) |
 | `20260605120000-add-unit-column-to-products.js` | `products.unit` for stock display (Meters, Quantity, Pieces; bootstrap also ensures) |
 | `20260606120000-ensure-calling-remark-text-columns.js` | `callRemark` TEXT on assignments + action history (§E.2) |
+| `20260725120000-bank-process-done.js` | `bankProcessDone` / `bankProcessDoneAt` for Metering dual track (§17) |
 
 After migrate, optional backfill: `npx ts-node scripts/backfill-system-kw.ts`
 
@@ -937,6 +940,34 @@ Client calls **`api.quotations.finalizeSettlement`**, which **persists to the DB
 
 ---
 
+## 12c. Revert Final Settlement (undo) (Jul 2026)
+
+Backend must support undoing a previously persisted final settlement by clearing settlement audit fields and recomputing pricing/payment aggregates (`discountAmount`, `finalAmount`, `remaining/remainingAmount`, `paymentStatus`) without modifying installment rows.
+
+**Endpoints (same behavior):**
+- `POST /api/quotations/:id/revert-final-settlement` (preferred)
+- fallback: `DELETE /api/quotations/:id/final-settlement`
+
+**Auth:** `account-management` and `admin` (quotation admin = dealer `role: admin` also allowed by handler).
+
+**Must clear:**
+- `finalSettlementApplied = false`
+- `finalSettlementAmount = 0`
+- `finalSettlementAt = null`
+- `finalSettlementBy = null`
+
+**Must recompute/persist:**
+- `discountAmount`, `discount`
+- `finalAmount` and `totalAmount`
+- `remaining/remainingAmount`
+- `paymentStatus` (pending/partial/completed derived from remaining + paid)
+
+**Must keep:** `installments/paymentPhases` unchanged.
+
+**Docs:** `BACKEND_REVERT_SETTLEMENT.md`.
+
+---
+
 ## 12b. Super Admin — Quotation login + Inventory data (Jul 2026)
 
 **Status: implemented** — `BACKEND_CHANGES_REQUIRED.md` §AD, `BACKEND_SUPER_ADMIN_QUOTATION_LOGIN.ts`
@@ -1745,6 +1776,54 @@ curl -sS -X POST "$API/hr/leads/upload-csv" \
 
 ---
 
+## 17. Metering — dual track (Meter process left + Bank process right)
+
+**Frontend:** Admin → Metering, `/dashboard/metering`, Installer → Metering  
+**Full handoff:** **`BACKEND_METERING_DUAL_TRACK.md`**  
+**Meter stages:** `BACKEND_METERING_DISCOM_WCC_METER_INSTALL.md`
+
+| Track | Tabs |
+|-------|------|
+| **Meter** (left) | Meter Pending → Discom → WCC Pending → Meter Installation Pending → Final Step |
+| **Bank** (right, parallel, loan/mix only) | Bank Process → Pending Payment |
+
+**Shipped:**
+
+| Piece | Implementation |
+|-------|----------------|
+| Columns | `bankProcessDone`, `bankProcessDoneAt` — migration `20260725120000-bank-process-done.js` |
+| GET echo | `quotationPaymentApiFields` → `paymentType`, `bankProcessDone`, bank name/IFSC |
+| PATCH bank | `updateQuotationBankProcess` — `/admin|metering|quotations/…/bank-process` (+ payment-details fallbacks) |
+| Installer auth | `authorizeMetering` / `authorizeMeteringOrAdmin` allow `installer` + installation-team; WCC + bank routes before admin-only gate |
+
+**QA:** Loan row in Meter + Bank Process; mark bank done → Pending Payment, same Meter tab after refresh; Installer Metering queue no AUTH_004.
+
+---
+
+## 18. Document Submission — Property Documents (PDF) optional
+
+**Frontend:** Dashboard / Quotations Document Submission — label has no `*`; client no longer blocks Submit when PDF is missing.
+
+**Backend:** **`BACKEND_PROPERTY_DOCUMENT_OPTIONAL.md`**
+
+### Required API change
+
+On `PATCH /api/quotations/{quotationId}/documents` (KYC / customer documents):
+
+1. Remove `propertyDocumentPdf` from any **required** file list (Zod / manual checks).
+2. Do **not** return **400** when the property PDF part is omitted or when the quotation has never stored one.
+3. Still accept and store the PDF when uploaded; leave null when never provided.
+4. Keep `geotagRoofPhoto` / `customerWithHousePhoto` optional as today.
+
+**Shipped:** KYC hard-requires only `phoneNumber` / `emailId` / `electricityKno`; `OPTIONAL_QUOTATION_DOCUMENT_MEDIA_FIELDS` documents the optional set; Zod uses `optionalMediaRef` so empty multipart values do not 400.
+
+### QA
+
+1. Submit documents without Property Documents PDF → **200**.
+2. Later upload PDF only → persists; reopen shows View link.
+
+---
+
 ## Related docs
 
 | Doc | Section |
@@ -1765,4 +1844,9 @@ curl -sS -X POST "$API/hr/leads/upload-csv" \
 | **§15** (this file) | Calling `/current` 500 + FCFS + Unassigned → 0 |
 | **`BACKEND_ASSIGN_UNASSIGNED.ts`** | **§15-C** `POST …/assign-unassigned` + upload `round_robin_all` |
 | **`BACKEND_CALLING_QUEUE_CURRENT.ts`** | **§15** `/calling-queue/current` + `/next` (never SYS_001) |
+| **§17** (this file) | Metering dual track — Meter left + Bank right |
+| **`BACKEND_METERING_DUAL_TRACK.md`** | **§17** `bank_process_done` + installer auth on metering routes |
+| **`BACKEND_METERING_DISCOM_WCC_METER_INSTALL.md`** | Meter Pending → Discom → WCC → MIP → Final Step |
+| **§18** (this file) | Document Submission — Property Documents PDF optional |
+| **`BACKEND_PROPERTY_DOCUMENT_OPTIONAL.md`** | **§18** stop requiring `propertyDocumentPdf` on PATCH …/documents |
 

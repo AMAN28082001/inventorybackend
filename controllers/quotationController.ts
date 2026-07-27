@@ -3459,6 +3459,148 @@ export const submitQuotationFinalSettlement = async (req: Request, res: Response
   }
 };
 
+/**
+ * Revert final settlement.
+ * Clears settlement audit fields and recomputes discount/finalAmount/remaining/paymentStatus
+ * while keeping installment/phases rows unchanged.
+ */
+export const revertQuotationFinalSettlement = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const role = req.user?.role;
+    const isAccountManager = role === 'account-management' || role === 'hr';
+    const isInventoryAdmin =
+      role === 'admin' || role === 'super-admin' || role === 'super-admin-manager';
+    const isQuotationAdmin = req.dealer && req.dealer.role === 'admin';
+    if (!isAccountManager && !isInventoryAdmin && !isQuotationAdmin) {
+      res.status(403).json({
+        success: false,
+        error: { code: 'AUTH_004', message: 'Insufficient permissions' }
+      });
+      return;
+    }
+
+    const { quotationId } = req.params;
+    const quotation = await Quotation.findOne({
+      where: { id: quotationId, status: 'approved' },
+      include: [{ model: QuotationProduct, as: 'products' }]
+    });
+    if (!quotation) {
+      res.status(404).json({
+        success: false,
+        error: { code: 'RES_001', message: 'Quotation not found' }
+      });
+      return;
+    }
+
+    const phases = await loadQuotationPaymentPhases(quotation.id);
+    const paid =
+      phases.length > 0
+        ? sumPhasePaidAmounts(phases)
+        : Number((quotation as any).paidAmount || 0);
+
+    const amountAfterSubsidy = resolveAmountAfterSubsidy(
+      quotation as any,
+      (quotation as any).products
+    );
+
+    const settlementAmount = Number((quotation as any).finalSettlementAmount || 0);
+    const currentDiscountAmount = Number((quotation as any).discountAmount || 0);
+
+    // Required discount (server-side) to clear remaining based on amountAfterSubsidy and paid.
+    const discountToClear = Math.max(
+      0,
+      amountAfterSubsidy - Math.min(paid, amountAfterSubsidy)
+    );
+
+    // Revert discount:
+    // - If current discount is already higher than what's required to clear the balance,
+    //   assume settlement did not change discount; keep it.
+    // - Otherwise, derive the "pre-settlement" discount using AM audit settlementAmount
+    //   and the AM-visible cap (quotation.subtotal).
+    let newDiscountAmount = currentDiscountAmount;
+    if (settlementAmount > 0) {
+      const likelyDiscountWasTouched = currentDiscountAmount <= discountToClear + 0.01;
+      if (likelyDiscountWasTouched) {
+        const amCap = Number(quotation.subtotal || 0) || amountAfterSubsidy;
+        const derivedPreDiscount = amCap - paid - settlementAmount;
+        if (Number.isFinite(derivedPreDiscount)) {
+          newDiscountAmount = Math.max(
+            0,
+            Math.min(currentDiscountAmount, derivedPreDiscount)
+          );
+        }
+      }
+    }
+
+    newDiscountAmount = Math.max(0, Math.min(newDiscountAmount, amountAfterSubsidy));
+    const finalAmount = Math.max(0, amountAfterSubsidy - newDiscountAmount);
+    const remainingAmount = remainingPaymentAgainstSubtotal(
+      amountAfterSubsidy,
+      paid,
+      newDiscountAmount
+    );
+
+    const epsilon = 0.01;
+    const paymentStatus =
+      remainingAmount > epsilon
+        ? paid > epsilon
+          ? 'partial'
+          : 'pending'
+        : paid > epsilon || newDiscountAmount > epsilon
+          ? 'completed'
+          : 'pending';
+
+    const { actorId } = resolveActorForAudit(req);
+    await quotation.update({
+      discountAmount: newDiscountAmount,
+      discount: newDiscountAmount,
+      totalAmount: finalAmount,
+      finalAmount: finalAmount,
+      amountAfterSubsidy: amountAfterSubsidy,
+      remainingAmount,
+      paymentStatus,
+
+      // Clear settlement audit fields
+      finalSettlementApplied: false,
+      finalSettlementAmount: 0,
+      finalSettlementAt: null,
+      finalSettlementBy: null,
+
+      paymentPlanUpdatedBy: actorId,
+      paymentPlanUpdatedAt: new Date()
+    });
+
+    await quotation.reload();
+    const responsePhases = await loadQuotationPaymentPhases(quotation.id);
+    const qAny = quotation as any;
+
+    res.json({
+      success: true,
+      data: {
+        id: quotation.id,
+        quotationId: quotation.id,
+        discountAmount: Number(qAny.discountAmount || 0),
+        discount_amount: Number(qAny.discountAmount || 0),
+        remaining: remainingAmount,
+        remainingAmount: remainingAmount,
+        paymentStatus,
+        finalSettlementAmount: 0,
+        finalSettlementApplied: false,
+        finalSettlementAt: null,
+        finalSettlementBy: null,
+        installments: responsePhases,
+        paymentPhases: responsePhases
+      }
+    });
+  } catch (error) {
+    logError('Revert final settlement error', error, { quotationId: req.params.quotationId });
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
+};
+
 export const updateQuotationInstallationScheduledAt = async (req: Request, res: Response): Promise<void> => {
   try {
     const { quotationId } = req.params;

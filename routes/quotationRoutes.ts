@@ -18,6 +18,7 @@ import {
   updateQuotationPricing,
   updateQuotationPaymentDetails,
   submitQuotationFinalSettlement,
+  revertQuotationFinalSettlement,
   updateQuotationInstallationRelease,
   updateQuotationInstallationScheduledAt,
   downloadQuotationsExcel,
@@ -60,8 +61,8 @@ import {
 } from '../middleware/authQuotation';
 import { validate } from '../middleware/validate';
 import { logRequestBeforeValidation, logRequestAfterValidation } from '../middleware/requestLogger';
-import { createQuotationSchema, updateDiscountSchema, updateProductsSchema, updatePricingSchema, updatePaymentDetailsSchema, updatePaymentModeSchema, updateInstallationReleaseSchema, updateInstallationScheduledAtSchema, finalSettlementSchema } from '../validations/quotationValidations';
-import { patchQuotationInstallationTeamSchema } from '../validations/adminValidations';
+import { createQuotationSchema, updateDiscountSchema, updateProductsSchema, updatePricingSchema, updatePaymentDetailsSchema, updatePaymentModeSchema, updateInstallationReleaseSchema, updateInstallationScheduledAtSchema, finalSettlementSchema, revertFinalSettlementSchema } from '../validations/quotationValidations';
+import { patchQuotationInstallationTeamSchema, bankProcessSchema } from '../validations/adminValidations';
 import {
   meteringDetailsSchema,
   meteringMcoDocumentsSchema,
@@ -70,6 +71,7 @@ import {
 } from '../validations/workflowValidations';
 import { handleInstallerMultipart, handleSingleInstallerUploadMultipart } from './installerRoutes';
 import { rescheduleVisitSchema } from '../validations/visitValidations';
+import { updateQuotationBankProcess } from '../controllers/adminController';
 
 const router: Router = express.Router();
 const MAX_PDF_UPLOAD_BYTES = 30 * 1024 * 1024; // 30 MB
@@ -854,10 +856,19 @@ router.patch('/:quotationId/products', authorizeDealerOrAccountManager, validate
  */
 router.patch('/:quotationId/pricing', authorizeDealerOrAccountManager, validate(updatePricingSchema), updateQuotationPricing);
 router.post('/:quotationId/final-settlement', authorizeDealerOrAccountManager, validate(finalSettlementSchema), submitQuotationFinalSettlement);
+router.post('/:quotationId/revert-final-settlement', authorizeDealerOrAccountManager, validate(revertFinalSettlementSchema), revertQuotationFinalSettlement);
+router.delete('/:quotationId/final-settlement', authorizeDealerOrAccountManager, validate(revertFinalSettlementSchema), revertQuotationFinalSettlement);
 router.patch('/:quotationId/payment-details', authorizeDealerOrAccountManager, validate(updatePaymentDetailsSchema), updateQuotationPaymentDetails);
 router.patch('/:quotationId/installments', authorizeDealerOrAccountManager, validate(updatePaymentDetailsSchema), updateQuotationPaymentDetails);
 router.put('/:quotationId/installments', authorizeDealerOrAccountManager, validate(updatePaymentDetailsSchema), updateQuotationPaymentDetails);
 router.patch('/:quotationId/payment-mode', authorizeDealerOrAccountManager, validate(updatePaymentModeSchema), updateQuotationPaymentDetails);
+/** §17 Bank process dual-track (SPA fallbacks + installer/metering JWT). */
+router.patch(
+  '/:quotationId/bank-process',
+  authorizeMeteringOrAdmin,
+  validate(bankProcessSchema),
+  updateQuotationBankProcess
+);
 router.patch('/:quotationId/installation-release', authorizeDealerOrAccountManager, validate(updateInstallationReleaseSchema), updateQuotationInstallationRelease);
 router.patch('/:quotationId/installation/ready', authorizeDealerOrAccountManager, validate(updateInstallationReleaseSchema), updateQuotationInstallationRelease);
 router.patch('/:quotationId/installation-scheduled-at', authorizeAdmin, validate(updateInstallationScheduledAtSchema), updateQuotationInstallationScheduledAt);
