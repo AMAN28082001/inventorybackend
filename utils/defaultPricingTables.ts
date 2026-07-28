@@ -159,6 +159,28 @@ export const JUNE_2026_NON_DCR_PRICING_DEFAULTS = [
     inverterSize: '5kW',
     panelType: 'Waaree 540W',
     price: 280000
+  },
+  /** Non-DCR 80kW set — Renew Energy / Waaree / Adani (Vsole/Xwatt) — Jul 2026 */
+  {
+    systemSize: '80kW',
+    phase: '3-Phase' as const,
+    inverterSize: '80kW',
+    panelType: 'Renew Energy',
+    price: 2510000
+  },
+  {
+    systemSize: '80kW',
+    phase: '3-Phase' as const,
+    inverterSize: '80kW',
+    panelType: 'Waaree',
+    price: 2590000
+  },
+  {
+    systemSize: '80kW',
+    phase: '3-Phase' as const,
+    inverterSize: '80kW',
+    panelType: 'Adani',
+    price: 2590000
   }
 ];
 
@@ -345,6 +367,63 @@ export const JUNE_2026_SYSTEM_CONFIG_DEFAULTS = [
     dcCableSize: 'As per Set',
     acdb: 'Havells (1-Phase)',
     dcdb: 'Havells (1-Phase)'
+  },
+  {
+    systemType: 'non-dcr' as const,
+    systemSize: '80kW',
+    phase: '3-Phase' as const,
+    panelBrand: 'Renew Energy',
+    panelSize: '600W',
+    inverterBrand: 'Vsole/Xwatt',
+    inverterSize: '80kW',
+    inverterType: 'String Inverter',
+    structureType: 'GI Structure',
+    structureSize: '80kW',
+    meterBrand: 'L&T',
+    acCableBrand: 'Polycab',
+    acCableSize: 'As per Set',
+    dcCableBrand: 'Polycab',
+    dcCableSize: 'As per Set',
+    acdb: 'Havells (3-Phase)',
+    dcdb: 'Havells (3-Phase)'
+  },
+  {
+    systemType: 'non-dcr' as const,
+    systemSize: '80kW',
+    phase: '3-Phase' as const,
+    panelBrand: 'Waaree',
+    panelSize: '580W',
+    inverterBrand: 'Vsole/Xwatt',
+    inverterSize: '80kW',
+    inverterType: 'String Inverter',
+    structureType: 'GI Structure',
+    structureSize: '80kW',
+    meterBrand: 'L&T',
+    acCableBrand: 'Polycab',
+    acCableSize: 'As per Set',
+    dcCableBrand: 'Polycab',
+    dcCableSize: 'As per Set',
+    acdb: 'Havells (3-Phase)',
+    dcdb: 'Havells (3-Phase)'
+  },
+  {
+    systemType: 'non-dcr' as const,
+    systemSize: '80kW',
+    phase: '3-Phase' as const,
+    panelBrand: 'Adani',
+    panelSize: '600W',
+    inverterBrand: 'Vsole/Xwatt',
+    inverterSize: '80kW',
+    inverterType: 'String Inverter',
+    structureType: 'GI Structure',
+    structureSize: '80kW',
+    meterBrand: 'L&T',
+    acCableBrand: 'Polycab',
+    acCableSize: 'As per Set',
+    dcCableBrand: 'Polycab',
+    dcCableSize: 'As per Set',
+    acdb: 'Havells (3-Phase)',
+    dcdb: 'Havells (3-Phase)'
   },
   {
     systemType: 'dcr' as const,

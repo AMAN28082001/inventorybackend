@@ -3,7 +3,9 @@ import multer, { MulterError } from 'multer';
 import { authenticate, authorizeInstaller, authorizeInstallerOrAdmin } from '../middleware/authQuotation';
 import { validate } from '../middleware/validate';
 import { installerStatusSchema, installerUploadMetaSchema } from '../validations/workflowValidations';
+import { sendToMeteringSchema } from '../validations/adminValidations';
 import { getInstallerQueue, installerDecision, installerUploadDocuments, uploadInstallerDocument } from '../controllers/workflowController';
+import { sendQuotationToMetering } from '../controllers/adminController';
 
 const router: Router = express.Router();
 
@@ -94,6 +96,32 @@ router.use(authenticate);
 
 router.get('/quotations', authorizeInstallerOrAdmin, getInstallerQueue);
 router.get('/queue', authorizeInstallerOrAdmin, getInstallerQueue);
+
+/** §17 Optional aliases — SPA fallthrough for Installer → Metering handoff */
+router.patch(
+  '/quotations/:quotationId/send-to-metering',
+  authorizeInstallerOrAdmin,
+  validate(sendToMeteringSchema),
+  sendQuotationToMetering
+);
+router.post(
+  '/quotations/:quotationId/send-to-metering',
+  authorizeInstallerOrAdmin,
+  validate(sendToMeteringSchema),
+  sendQuotationToMetering
+);
+router.patch(
+  '/quotations/:quotationId/metering-handoff',
+  authorizeInstallerOrAdmin,
+  validate(sendToMeteringSchema),
+  sendQuotationToMetering
+);
+router.post(
+  '/quotations/:quotationId/metering-handoff',
+  authorizeInstallerOrAdmin,
+  validate(sendToMeteringSchema),
+  sendQuotationToMetering
+);
 
 // Installer / field-team only (not quotation admin): workflow state transitions
 router.patch('/quotations/:quotationId/status', authorizeInstaller, validate(installerStatusSchema), installerDecision);

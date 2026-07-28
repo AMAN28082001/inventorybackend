@@ -258,11 +258,14 @@ const swaggerDefinition = {
             enum: [
               'waaree_540_560_bifacial',
               'waaree_580_700_bifacial_topcon',
+              'waaree_580_630',
               'adani_540_580_bifacial',
               'adani_610_625_bifacial_topcon',
+              'adani_600_630',
               'premier_600_625_bifacial_topcon',
               'tata_530_570',
-              'ina_500_600_bifacial'
+              'ina_500_600_bifacial',
+              'renew_energy_600_630'
             ]
           },
           pdfDcrPanelRangeKey: { type: 'string', nullable: true },

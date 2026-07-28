@@ -3,7 +3,9 @@ import multer, { MulterError } from 'multer';
 import { authenticate, authorizeMetering } from '../middleware/authQuotation';
 import { validate } from '../middleware/validate';
 import { getMeteringQueue, meteringStatusUpdate, saveMeteringDetails, saveMeteringMcoDocuments } from '../controllers/workflowController';
+import { updateQuotationBankProcess } from '../controllers/adminController';
 import { meteringDetailsSchema, meteringMcoDocumentsSchema, meteringStatusSchema } from '../validations/workflowValidations';
+import { bankProcessSchema } from '../validations/adminValidations';
 import {
   isAllowedStandardImageOrPdfUpload,
   standardImageOrPdfValidationMessage
@@ -36,6 +38,16 @@ router.use(authorizeMetering);
 
 router.get('/quotations', getMeteringQueue);
 router.patch('/quotations/:quotationId/status', validate(meteringStatusSchema), meteringStatusUpdate);
+router.patch(
+  '/quotations/:quotationId/bank-process',
+  validate(bankProcessSchema),
+  updateQuotationBankProcess
+);
+router.patch(
+  '/quotations/:quotationId/payment-details',
+  validate(bankProcessSchema),
+  updateQuotationBankProcess
+);
 router.post(
   '/quotations/:quotationId/details',
   (req, res, next) => {

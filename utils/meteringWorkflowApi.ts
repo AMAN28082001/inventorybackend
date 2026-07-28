@@ -95,3 +95,19 @@ export const parseMeteringWccAfterDiscomFlag = (
   if (raw === false || raw === 'false' || raw === 0 || raw === '0') return false;
   return undefined;
 };
+
+/** Parse bank-process-done flag from request body (camel / snake / moveToPendingPayment). */
+export const parseBankProcessDoneFlag = (
+  body: Record<string, unknown> | null | undefined
+): boolean | undefined => {
+  if (!body) return undefined;
+  const raw =
+    body.bankProcessDone ??
+    body.bank_process_done ??
+    body.moveToPendingPayment ??
+    body.move_to_pending_payment;
+  if (raw === undefined || raw === null || raw === '') return undefined;
+  if (raw === true || raw === 'true' || raw === 1 || raw === '1') return true;
+  if (raw === false || raw === 'false' || raw === 0 || raw === '0') return false;
+  return undefined;
+};

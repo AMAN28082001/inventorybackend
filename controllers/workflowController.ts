@@ -11,7 +11,7 @@ import {
   INSTALLER_RELEASE_STATUSES,
   resolveInstallerQueueStatuses
 } from '../constants/workflowQueues';
-import { toDateOnlyStringOrNull } from '../utils/quotationApiJson';
+import { toDateOnlyStringOrNull, quotationPaymentApiFields } from '../utils/quotationApiJson';
 import { getInstallationTeamIdFromRequest } from '../utils/installationTeamRole';
 import {
   buildPublicWorkflowFileUrl,
@@ -386,6 +386,9 @@ const getWorkflowQueue = async (
               meteringWccAfterDiscom: (q as any).meteringWccAfterDiscom,
               meteringWccAfterDiscomAt: (q as any).meteringWccAfterDiscomAt
             }),
+            ...quotationPaymentApiFields(
+              typeof q.toJSON === 'function' ? q.toJSON() : (q as any)
+            ),
             ...(await buildMeterInstallationPendingPhotoApiFields({
               meterInstallationPhotoUrl: (q as any).meterInstallationPhotoUrl,
               meterInstallationPhotoName: (q as any).meterInstallationPhotoName,

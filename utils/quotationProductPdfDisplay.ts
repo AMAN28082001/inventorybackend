@@ -6,11 +6,15 @@
 export const PDF_PANEL_RANGE_KEYS = [
   'waaree_540_560_bifacial',
   'waaree_580_700_bifacial_topcon',
+  'waaree_580_630',
   'adani_540_580_bifacial',
   'adani_610_625_bifacial_topcon',
+  'adani_600_630',
   'premier_600_625_bifacial_topcon',
   'tata_530_570',
-  'ina_500_600_bifacial'
+  'ina_500_600_bifacial',
+  /** Non-DCR 80kW Renew Energy package (Jul 2026) */
+  'renew_energy_600_630'
 ] as const;
 
 export type PdfPanelRangeKey = (typeof PDF_PANEL_RANGE_KEYS)[number];
@@ -19,11 +23,14 @@ export type PdfPanelRangeKey = (typeof PDF_PANEL_RANGE_KEYS)[number];
 export const PDF_PANEL_RANGE_LABELS: Record<PdfPanelRangeKey, string> = {
   waaree_540_560_bifacial: '540-560W Bifacial',
   waaree_580_700_bifacial_topcon: '580-700W Bifacial Topcon',
+  waaree_580_630: '580W - 630W',
   adani_540_580_bifacial: '540-580W Bifacial',
   adani_610_625_bifacial_topcon: '610-625W Bifacial Topcon',
+  adani_600_630: '600W - 630W',
   premier_600_625_bifacial_topcon: '600-625W Bifacial Topcon',
   tata_530_570: '530W - 570W',
-  ina_500_600_bifacial: '500W - 600W'
+  ina_500_600_bifacial: '500W - 600W',
+  renew_energy_600_630: '600W - 630W'
 };
 
 /** PDF range label sent as panelSize (e.g. INA) — not a catalog wattage. */

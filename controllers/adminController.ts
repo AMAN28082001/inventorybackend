@@ -32,8 +32,10 @@ import {
   METER_INSTALLATION_PENDING_STATUS,
   meteringWorkflowApiFields,
   normalizeMeteringWorkflowStatus,
-  parseMeteringWccAfterDiscomFlag
+  parseMeteringWccAfterDiscomFlag,
+  parseBankProcessDoneFlag
 } from '../utils/meteringWorkflowApi';
+import { isInstallationTeamJwtRole } from '../utils/installationTeamRole';
 import {
   INSTALLATION_PARTIAL_STATUS,
   installationPartialApiFields,
@@ -69,6 +71,21 @@ const hasAdminQuotationAccess = (req: Request): boolean => {
       req.user.role === 'super-admin-manager')
   );
   return isQuotationAdmin || isInventoryAdmin;
+};
+
+/** §17 — Admin / metering / installer may update WCC flag + bank process. */
+const hasMeteringDualTrackAccess = (req: Request): boolean => {
+  if (hasAdminQuotationAccess(req)) return true;
+  const role = req.user?.role;
+  if (!role) return false;
+  return (
+    role === 'metering' ||
+    role === 'meter' ||
+    role === 'metering-team' ||
+    role === 'mco' ||
+    role === 'installer' ||
+    isInstallationTeamJwtRole(role)
+  );
 };
 
 /**
@@ -775,6 +792,21 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
       pickStatus('meteringStatus', 'metering_status', 'status') ||
       null;
     const wccAfterDiscomFlag = parseMeteringWccAfterDiscomFlag(body);
+    const bankDoneFlag = parseBankProcessDoneFlag(body);
+
+    // §17 SPA fallback: installation-status body with only bankProcessDone → bank-process handler
+    if (
+      !requested &&
+      wccAfterDiscomFlag === undefined &&
+      (bankDoneFlag !== undefined ||
+        body.bankName !== undefined ||
+        body.bank_name !== undefined ||
+        body.bankIfsc !== undefined ||
+        body.bank_ifsc !== undefined)
+    ) {
+      await updateQuotationBankProcess(req, res);
+      return;
+    }
 
     if (!requested && wccAfterDiscomFlag === undefined) {
       res.status(400).json({
@@ -791,6 +823,16 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
         error: { code: 'RES_001', message: 'Quotation not found' }
       });
       return;
+    }
+
+    // §17 Parallel bank track — may accompany a metering stage change; never moves stage itself.
+    if (bankDoneFlag !== undefined) {
+      await quotation.update({
+        bankProcessDone: bankDoneFlag,
+        bankProcessDoneAt: bankDoneFlag
+          ? (quotation as any).bankProcessDoneAt || new Date()
+          : null
+      } as any);
     }
 
     const currentStatus = String(quotation.installationStatus || 'pending_installer').trim();
@@ -837,6 +879,7 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
 
     const respondWithQuotation = async () => {
       await quotation.reload();
+      const row = typeof quotation.toJSON === 'function' ? quotation.toJSON() : (quotation as any);
       res.json({
         success: true,
         data: {
@@ -850,6 +893,7 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
             meteringWccAfterDiscom: (quotation as any).meteringWccAfterDiscom,
             meteringWccAfterDiscomAt: (quotation as any).meteringWccAfterDiscomAt
           }),
+          ...quotationPaymentApiFields(row),
           ...installationPartialApiFields({
             installationStatus: quotation.installationStatus,
             installationPartialApproved: (quotation as any).installationPartialApproved,
@@ -874,6 +918,13 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
           }
         });
         return;
+      }
+      if (bankDoneFlag === true) {
+        patch.bankProcessDone = true;
+        patch.bankProcessDoneAt = (quotation as any).bankProcessDoneAt || now;
+      } else if (bankDoneFlag === false) {
+        patch.bankProcessDone = false;
+        patch.bankProcessDoneAt = null;
       }
       await quotation.update(patch as any);
       await respondWithQuotation();
@@ -1146,7 +1197,7 @@ export const sendQuotationToMetering = async (req: Request, res: Response): Prom
  */
 export const updateMeteringWccAfterDiscom = async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!hasAdminQuotationAccess(req)) {
+    if (!hasMeteringDualTrackAccess(req)) {
       res.status(403).json({
         success: false,
         error: { code: 'AUTH_004', message: 'Insufficient permissions. Admin access required.' }
@@ -1238,6 +1289,109 @@ export const updateMeteringWccAfterDiscom = async (req: Request, res: Response):
     });
   } catch (error) {
     logError('Update metering WCC after discom error', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal error' }
+    });
+  }
+};
+
+/**
+ * §17 Bank process (parallel track) — save bank details + optional move to Pending Payment.
+ * Does NOT change metering/installation stage.
+ * PATCH /admin/quotations/:id/bank-process (also payment-details fallbacks).
+ */
+export const updateQuotationBankProcess = async (req: Request, res: Response): Promise<void> => {
+  try {
+    if (!hasMeteringDualTrackAccess(req)) {
+      res.status(403).json({
+        success: false,
+        error: { code: 'AUTH_004', message: 'Insufficient permissions' }
+      });
+      return;
+    }
+
+    const { quotationId } = req.params;
+    const body = (req.body || {}) as Record<string, unknown>;
+    const quotation = await Quotation.findByPk(quotationId);
+    if (!quotation) {
+      res.status(404).json({
+        success: false,
+        error: { code: 'RES_001', message: 'Quotation not found' }
+      });
+      return;
+    }
+
+    const patch: Record<string, unknown> = {};
+    const bankNameRaw = body.bankName ?? body.bank_name;
+    if (typeof bankNameRaw === 'string') {
+      const trimmed = bankNameRaw.trim();
+      if (trimmed) patch.bankName = trimmed;
+    }
+    const bankIfscRaw = body.bankIfsc ?? body.bank_ifsc;
+    if (typeof bankIfscRaw === 'string') {
+      const trimmed = bankIfscRaw.trim();
+      if (trimmed) patch.bankIfsc = trimmed;
+    }
+
+    const paymentTypeRaw = body.paymentType ?? body.payment_type ?? body.paymentMode ?? body.payment_mode;
+    if (typeof paymentTypeRaw === 'string' && paymentTypeRaw.trim()) {
+      const norm = paymentTypeRaw
+        .trim()
+        .toLowerCase()
+        .replace(/-/g, '_')
+        .replace(/\+/g, '_');
+      const paymentType =
+        norm === 'cash_loan' || norm === 'cashloan' ? 'mix' : norm === 'loan' || norm === 'cash' || norm === 'mix' ? norm : null;
+      if (paymentType) {
+        patch.paymentType = paymentType;
+        patch.paymentMode = paymentType;
+      }
+    }
+
+    const doneFlag = parseBankProcessDoneFlag(body);
+    if (doneFlag === true) {
+      patch.bankProcessDone = true;
+      patch.bankProcessDoneAt = (quotation as any).bankProcessDoneAt || new Date();
+    } else if (doneFlag === false) {
+      patch.bankProcessDone = false;
+      patch.bankProcessDoneAt = null;
+    }
+
+    if (Object.keys(patch).length === 0) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VAL_001',
+          message: 'Provide bankName, bankIfsc, paymentType, and/or bankProcessDone'
+        }
+      });
+      return;
+    }
+
+    await quotation.update(patch as any);
+    await quotation.reload();
+
+    const row = typeof quotation.toJSON === 'function' ? quotation.toJSON() : (quotation as any);
+    res.json({
+      success: true,
+      data: {
+        id: quotation.id,
+        ...quotationPaymentApiFields(row),
+        ...meteringWorkflowApiFields({
+          installationStatus: quotation.installationStatus,
+          meteringApprovedAt: quotation.meteringApprovedAt,
+          mcoAt: quotation.mcoAt,
+          completionAt: quotation.completionAt,
+          meterInstallationPendingAt: (quotation as any).meterInstallationPendingAt,
+          meteringWccAfterDiscom: (quotation as any).meteringWccAfterDiscom,
+          meteringWccAfterDiscomAt: (quotation as any).meteringWccAfterDiscomAt
+        }),
+        updatedAt: quotation.updatedAt
+      }
+    });
+  } catch (error) {
+    logError('Update quotation bank process error', error);
     res.status(500).json({
       success: false,
       error: { code: 'SYS_001', message: 'Internal error' }

@@ -6,6 +6,7 @@ import {
   updateQuotationInstallationStatus,
   sendQuotationToMetering,
   updateMeteringWccAfterDiscom,
+  updateQuotationBankProcess,
   updateQuotationFileLogin,
   getAllDealers,
   updateDealer,
@@ -41,7 +42,7 @@ import {
   deleteInstallationTeam,
   patchQuotationInstallationTeam
 } from '../controllers/installationTeamController';
-import { authenticate, authorizeAdmin } from '../middleware/authQuotation';
+import { authenticate, authorizeAdmin, authorizeMeteringOrAdmin } from '../middleware/authQuotation';
 import { validate } from '../middleware/validate';
 import { handleInstallerMultipart, handleSingleInstallerUploadMultipart } from './installerRoutes';
 import { installerUploadDocuments, meteringStatusUpdate, uploadInstallerDocument } from '../controllers/workflowController';
@@ -52,6 +53,7 @@ import {
   updateInstallationStatusSchema,
   sendToMeteringSchema,
   meteringWccAfterDiscomSchema,
+  bankProcessSchema,
   fileLoginSchema,
   createVisitorSchema,
   updateVisitorSchema,
@@ -84,6 +86,30 @@ router.use(authenticate);
  */
 router.get('/quotations', getAllQuotations);
 router.get('/quotations/:quotationId', getAdminQuotationById);
+
+/**
+ * §17 Metering dual-track — WCC flag + bank process.
+ * Accessible to admin / metering / installer (Installer → Metering tab).
+ * Must stay before `authorizeAdmin` so installer JWTs are not AUTH_004'd.
+ */
+router.patch(
+  '/quotations/:quotationId/metering-wcc-after-discom',
+  authorizeMeteringOrAdmin,
+  validate(meteringWccAfterDiscomSchema),
+  updateMeteringWccAfterDiscom
+);
+router.patch(
+  '/quotations/:quotationId/bank-process',
+  authorizeMeteringOrAdmin,
+  validate(bankProcessSchema),
+  updateQuotationBankProcess
+);
+router.patch(
+  '/quotations/:quotationId/payment-details',
+  authorizeMeteringOrAdmin,
+  validate(bankProcessSchema),
+  updateQuotationBankProcess
+);
 
 /**
  * Admin Visitor Reports — all visits (admin / super-admin only).
@@ -167,11 +193,6 @@ router.post(
   '/quotations/:quotationId/send-to-metering',
   validate(sendToMeteringSchema),
   sendQuotationToMetering
-);
-router.patch(
-  '/quotations/:quotationId/metering-wcc-after-discom',
-  validate(meteringWccAfterDiscomSchema),
-  updateMeteringWccAfterDiscom
 );
 router.patch(
   '/quotations/:quotationId/installation-release',

@@ -1033,6 +1033,77 @@ Also: Option B (`POST …/claim`, `POST …/assign`, `PATCH …/:leadId`) · Opt
 
 ---
 
+## §J.2 — Dealer Calling Data: backend source of truth (no local-cache counting)
+
+**Frontend:** `app/dashboard/calling-data/page.tsx` (dealer analytics summary + flow tabs)
+
+Goal: one submit = one action row = one count increment. Counts/history must come from backend rows only.
+
+### Required backend behavior
+
+1. Provide canonical dealer action rows via API:
+   - `GET /api/dealers/calling-actions` (or current equivalent), and/or queue action arrays used by dealer page.
+2. Ensure each logical action event is returned once (no duplicates for retry/reload).
+3. Return per-row fields:
+   - `id` (stable action id)
+   - `leadId`
+   - `action` (`called` / `follow_up` / `not_interested` / `rescheduled` / `start`)
+   - `actionAt`
+   - `callRemark` / `call_remark`
+   - recommended: `statusCategory` / `statusText` (+ snake_case aliases)
+4. Write path should be idempotent for retries (do not create duplicate inserts).
+
+### Persist on PATCH submit
+
+When dealer submits an outcome, persist structured status fields:
+- `status_category`
+- `status_text`
+- `call_remark`
+- `action` + `action_at`
+
+Accepted `statusCategory` values should align with:
+`call_connectivity`, `lead_validity`, `customer_intent`, `financial`, `schedule`, `competition`, `other`.
+
+### Classification note
+
+Do not classify buckets with naive string includes. Use explicit status mapping (same status sets used by HR cards and dealer page):
+- Interested
+- Follow Up
+- Not Interested
+- Others
+
+### QA
+
+1. Submit **Interested** once → Interested bucket increments by 1.
+2. Submit **Already Installed Solar** once → Not Interested increments, Interested unchanged.
+3. Submit **Callback Later** (with follow-up datetime) → Follow Up increments.
+4. Refresh and open another tab/device → totals unchanged (no duplicate increments).
+5. History endpoint shows exactly one row for each submit event.
+
+### Optional quick staging curls
+
+Use one lead and repeat submit payload twice quickly. Expected: single persisted logical event (idempotent response).
+
+```bash
+# Submit action once
+curl -s -X PATCH "$BASE/api/dealers/me/calling-queue/$LEAD_ID/action" \
+  -H "Authorization: Bearer $DEALER_JWT" \
+  -H "Content-Type: application/json" \
+  -d '{"action":"called","statusCategory":"customer_intent","statusText":"Interested","callRemark":"[customer_intent] Interested | test"}'
+
+# Retry same submit (simulate network retry/double click)
+curl -s -X PATCH "$BASE/api/dealers/me/calling-queue/$LEAD_ID/action" \
+  -H "Authorization: Bearer $DEALER_JWT" \
+  -H "Content-Type: application/json" \
+  -d '{"action":"called","statusCategory":"customer_intent","statusText":"Interested","callRemark":"[customer_intent] Interested | test"}'
+
+# Verify history (should not duplicate same logical event)
+curl -s "$BASE/api/dealers/calling-actions?limit=50" \
+  -H "Authorization: Bearer $DEALER_JWT"
+```
+
+---
+
 ## §E.1 — Active lead until Submit (`in_progress` must not disappear)
 
 **Handoff:** `BACKEND_CHANGES_HANDOFF.md` **§4.5.1**. **Status: implemented.**

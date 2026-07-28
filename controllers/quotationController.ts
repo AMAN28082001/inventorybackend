@@ -299,9 +299,10 @@ const validateProductSelection = (products: any, catalog: any): { isValid: boole
     errors.push(`Invalid DC cable size: ${products.dcCableSize}`);
   }
 
-  // Validate ACDB selection
+  // Validate ACDB / DCDB — allow empty / “As per the set” (PDF ≥20kW uses CT/BT client-side)
   if (
     products.acdb &&
+    !isAsPerTheSet(products.acdb) &&
     catalog.acdb?.options?.length > 0 &&
     !catalog.acdb.options.includes(products.acdb)
   ) {
@@ -311,6 +312,7 @@ const validateProductSelection = (products: any, catalog: any): { isValid: boole
   // Validate DCDB selection
   if (
     products.dcdb &&
+    !isAsPerTheSet(products.dcdb) &&
     catalog.dcdb?.options?.length > 0 &&
     !catalog.dcdb.options.includes(products.dcdb)
   ) {

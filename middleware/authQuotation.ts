@@ -457,10 +457,15 @@ export const authorizeMetering = (req: Request, res: Response, next: NextFunctio
   }
   if (req.user && (
     req.user.role === 'admin' ||
+    req.user.role === 'super-admin' ||
+    req.user.role === 'super-admin-manager' ||
     req.user.role === 'metering' ||
     req.user.role === 'meter' ||
     req.user.role === 'metering-team' ||
-    req.user.role === 'mco'
+    req.user.role === 'mco' ||
+    // §17 Installer → Metering tab (same metering panel)
+    req.user.role === 'installer' ||
+    isInstallationTeamJwtRole(req.user.role)
   )) {
     next();
     return;
@@ -471,7 +476,7 @@ export const authorizeMetering = (req: Request, res: Response, next: NextFunctio
   });
 };
 
-/** Metering workflow updates from quotation-scoped fallback routes (metering team or admin). */
+/** Metering workflow updates from quotation-scoped fallback routes (metering team, admin, or installer). */
 export const authorizeMeteringOrAdmin = (req: Request, res: Response, next: NextFunction): void => {
   if (req.dealer?.role === 'admin') {
     next();
@@ -479,10 +484,14 @@ export const authorizeMeteringOrAdmin = (req: Request, res: Response, next: Next
   }
   if (req.user && (
     req.user.role === 'admin' ||
+    req.user.role === 'super-admin' ||
+    req.user.role === 'super-admin-manager' ||
     req.user.role === 'metering' ||
     req.user.role === 'meter' ||
     req.user.role === 'metering-team' ||
-    req.user.role === 'mco'
+    req.user.role === 'mco' ||
+    req.user.role === 'installer' ||
+    isInstallationTeamJwtRole(req.user.role)
   )) {
     next();
     return;

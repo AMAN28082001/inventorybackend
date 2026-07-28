@@ -14,7 +14,9 @@ export const DEFAULT_PANEL_BRANDS = [
   'Premier Energies',
   'INA',
   'Vikram Solar',
-  'RenewSys'
+  'RenewSys',
+  /** Non-DCR 80kW package brand — do not coerce to RenewSys / Adani */
+  'Renew Energy'
 ] as const;
 
 /** DCR panel wattages used by frontend browse + PDF (incl. 555W Adani, INA 500W–600W). */
@@ -35,7 +37,9 @@ export const DEFAULT_PANEL_SIZES = [
   '590W',
   '600W',
   '610W',
-  '620W'
+  '620W',
+  '625W',
+  '630W'
 ] as const;
 
 export const DEFAULT_INVERTER_TYPES = ['String Inverter', 'Hybrid Inverter'] as const;

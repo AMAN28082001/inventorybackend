@@ -42,6 +42,7 @@
 | 30 | High | Calling FCFS + `/current` never 500 + assign-unassigned (Unassigned→0) | **Done** | §15 / `BACKEND_ASSIGN_UNASSIGNED.ts` |
 | 31 | High | Metering dual track — Bank process + installer auth | **Done** | §17 / `BACKEND_METERING_DUAL_TRACK.md` |
 | 32 | High | Document Submission — Property Documents PDF optional | **Done** | §18 / `BACKEND_PROPERTY_DOCUMENT_OPTIONAL.md` |
+| 33 | High | Non-DCR 80kW set — Renew Energy / Waaree / Adani | **Done** | §19 / `BACKEND_NON_DCR_80KW.md` |
 
 **Deploy before QA:**
 
@@ -134,7 +135,7 @@ Optional: `TZ=Asia/Kolkata` if weekly HR reports must match SPA Mon–Sun in IST
 | `pdfDcrPanelRangeKey` | BOTH — DCR line |
 | `pdfNonDcrPanelRangeKey` | BOTH — Non-DCR line |
 
-**Allowed values:** `waaree_540_560_bifacial`, `waaree_580_700_bifacial_topcon`, `adani_540_580_bifacial`, `adani_610_625_bifacial_topcon`, `premier_600_625_bifacial_topcon`, **`tata_530_570`** (`530W - 570W`, Tata DCR packages only), **`ina_500_600_bifacial`** (`500W - 600W`, INA DCR). Unknown keys stored as `null`.
+**Allowed values:** `waaree_540_560_bifacial`, `waaree_580_700_bifacial_topcon`, **`waaree_580_630`**, `adani_540_580_bifacial`, `adani_610_625_bifacial_topcon`, **`adani_600_630`**, `premier_600_625_bifacial_topcon`, **`tata_530_570`** (`530W - 570W`, Tata DCR packages only), **`ina_500_600_bifacial`** (`500W - 600W`, INA DCR), **`renew_energy_600_630`** (`600W - 630W`, Non-DCR 80kW Renew Energy). Unknown keys stored as `null`.
 
 **PDF display (client-generated; keys must round-trip on GET):**
 
@@ -750,6 +751,30 @@ On submit (`called` / `follow_up` / `not_interested` / `rescheduled`), persists 
 - Optional **`summary`**: `{ interested, followUp, notInterested, others, total }` — computed from **statusText** (not `action: called` → Interested).
 
 **Code:** `utils/callingActionSummary.ts`, `controllers/callingLeadController.ts` → `buildCallingActionsResponse`, `updateDealerCallingQueueAction`.
+
+---
+
+### 7.1 Dealer Calling Data — backend-only history and single-count totals
+
+**Frontend:** `app/dashboard/calling-data/page.tsx` (analytics cards + tabs)
+
+Goal: dealer Calling Data counts/history must come from backend action rows only, with each submit counted exactly once (no local cache dependency).
+
+Required backend behavior:
+- `GET /api/dealers/calling-actions` (or wired equivalent) returns canonical action rows.
+- No duplicate rows for one logical submit event.
+- Every row includes at least: `id`, `leadId`, `action`, `actionAt`, `callRemark` (`call_remark` alias).
+- Prefer structured classification fields: `statusCategory`/`status_category`, `statusText`/`status_text`.
+- PATCH submit path persists those fields on write (same event model as HR/Admin actions).
+
+Suggested dedupe guard:
+- enforce idempotency key, or
+- unique constraint / dedupe policy for duplicate retries (return existing row with safe 200/409 semantics instead of a second insert).
+
+Quick QA:
+1. Submit one action once → connected/not-connected + outcome bucket increments by exactly 1.
+2. Refresh / open on another tab/device → counts unchanged (no second increment).
+3. History endpoint shows one row for that submit.
 
 ---
 
@@ -1824,6 +1849,41 @@ On `PATCH /api/quotations/{quotationId}/documents` (KYC / customer documents):
 
 ---
 
+## 19. Non-DCR 80kW set — Renew Energy / Waaree / Adani (Vsole/Xwatt)
+
+**Frontend:** Non-DCR browse + PDF proposal  
+**Full handoff:** **`BACKEND_NON_DCR_80KW.md`**
+
+### Set prices (3-Phase, inverter 80kW Vsole/Xwatt)
+
+| Panel brand | Set price |
+|-------------|-----------|
+| **Renew Energy** | ₹25,10,000 |
+| **Waaree** | ₹25,90,000 |
+| **Adani** | ₹25,90,000 |
+
+### PDF panel ranges (persist `pdfPanelRangeKey`)
+
+| Brand | Key | Label |
+|-------|-----|-------|
+| Renew Energy | `renew_energy_600_630` | 600W - 630W |
+| Waaree | `waaree_580_630` | 580W - 630W |
+| Adani | `adani_600_630` | 600W - 630W |
+
+### Other
+
+- Allow brand **`Renew Energy`** (do not coerce to RenewSys / Adani).
+- ≥20kW PDF: CT / BT + “As per the set” is **frontend-only**.
+- `GET /quotations/pricing-tables` includes the three 80kW `nonDcr` rows + system presets.
+
+### QA (short)
+
+1. Save 80kW Renew Energy → GET echoes brand + `renew_energy_600_630` + subtotal 2510000.
+2. Waaree / Adani same with their keys/prices.
+3. Empty range key clears on PATCH.
+
+---
+
 ## Related docs
 
 | Doc | Section |
@@ -1849,4 +1909,6 @@ On `PATCH /api/quotations/{quotationId}/documents` (KYC / customer documents):
 | **`BACKEND_METERING_DISCOM_WCC_METER_INSTALL.md`** | Meter Pending → Discom → WCC → MIP → Final Step |
 | **§18** (this file) | Document Submission — Property Documents PDF optional |
 | **`BACKEND_PROPERTY_DOCUMENT_OPTIONAL.md`** | **§18** stop requiring `propertyDocumentPdf` on PATCH …/documents |
+| **§19** (this file) | Non-DCR 80kW set — Renew Energy / Waaree / Adani |
+| **`BACKEND_NON_DCR_80KW.md`** | **§19** PDF range keys + pricing-tables 80kW rows |
 

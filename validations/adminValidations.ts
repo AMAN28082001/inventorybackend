@@ -100,6 +100,7 @@ export const meteringWccAfterDiscomSchema = z
     meteringWccAfterDiscom: z.union([z.boolean(), z.string(), z.number()]).optional(),
     metering_wcc_after_discom: z.union([z.boolean(), z.string(), z.number()]).optional()
   })
+  .passthrough()
   .refine(
     (data) =>
       data.meteringWccAfterDiscom !== undefined || data.metering_wcc_after_discom !== undefined,
@@ -108,6 +109,26 @@ export const meteringWccAfterDiscomSchema = z
       path: ['meteringWccAfterDiscom']
     }
   );
+
+/** §17 Bank process dual-track */
+export const bankProcessSchema = z
+  .object({
+    bankName: z.string().max(255).optional(),
+    bank_name: z.string().max(255).optional(),
+    bankIfsc: z.string().max(32).optional(),
+    bank_ifsc: z.string().max(32).optional(),
+    loanAmount: z.union([z.number(), z.string()]).optional(),
+    loan_amount: z.union([z.number(), z.string()]).optional(),
+    paymentType: z.string().max(32).optional(),
+    payment_type: z.string().max(32).optional(),
+    paymentMode: z.string().max(32).optional(),
+    payment_mode: z.string().max(32).optional(),
+    bankProcessDone: z.union([z.boolean(), z.string(), z.number()]).optional(),
+    bank_process_done: z.union([z.boolean(), z.string(), z.number()]).optional(),
+    moveToPendingPayment: z.union([z.boolean(), z.string(), z.number()]).optional(),
+    move_to_pending_payment: z.union([z.boolean(), z.string(), z.number()]).optional()
+  })
+  .passthrough();
 
 /** PATCH /admin/quotations/:id/file-login — body validated loosely; controller enforces rules. */
 export const fileLoginSchema = z

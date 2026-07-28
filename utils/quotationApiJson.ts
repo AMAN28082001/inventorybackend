@@ -358,7 +358,7 @@ export function quotationProductListApiFields(
 
 export function quotationPaymentApiFields(q: Record<string, unknown>) {
   const paymentMode = (q.paymentMode ?? q.payment_mode ?? null) as string | null;
-  const paymentType = (
+  const paymentTypeRaw = (
     q.filePaymentType ??
     q.file_payment_type ??
     q.paymentType ??
@@ -366,8 +366,21 @@ export function quotationPaymentApiFields(q: Record<string, unknown>) {
     paymentMode ??
     null
   ) as string | null;
+  // Normalize cash+loan aliases → mix for Bank tab eligibility
+  const paymentTypeNorm = String(paymentTypeRaw || '')
+    .trim()
+    .toLowerCase()
+    .replace(/-/g, '_')
+    .replace(/\+/g, '_');
+  const paymentType =
+    paymentTypeNorm === 'cash_loan' || paymentTypeNorm === 'cashloan'
+      ? 'mix'
+      : paymentTypeRaw;
   const bankName = (q.bankName ?? q.bank_name ?? null) as string | null;
   const bankIfsc = (q.bankIfsc ?? q.bank_ifsc ?? null) as string | null;
+  const bankProcessDoneRaw = q.bankProcessDone ?? q.bank_process_done ?? false;
+  const bankProcessDone = bankProcessDoneRaw === true || bankProcessDoneRaw === 'true' || bankProcessDoneRaw === 1;
+  const bankProcessDoneAt = (q.bankProcessDoneAt ?? q.bank_process_done_at ?? null) as string | Date | null;
   // Final Settlement audit flags — FE hides the "Submit final settlement" button when truthy.
   const finalSettlementAppliedRaw = q.finalSettlementApplied ?? q.final_settlement_applied ?? false;
   const finalSettlementApplied = finalSettlementAppliedRaw === true || finalSettlementAppliedRaw === 'true';
@@ -387,6 +400,10 @@ export function quotationPaymentApiFields(q: Record<string, unknown>) {
     bank_name: bankName,
     bankIfsc,
     bank_ifsc: bankIfsc,
+    bankProcessDone,
+    bank_process_done: bankProcessDone,
+    bankProcessDoneAt,
+    bank_process_done_at: bankProcessDoneAt,
     finalSettlementApplied,
     final_settlement_applied: finalSettlementApplied,
     finalSettlementAmount,
