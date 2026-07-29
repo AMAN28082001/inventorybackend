@@ -43,9 +43,10 @@
 | 31 | High | Inventory Review & Dispatch — `dispatched_by_id` FK (Quotation Admin) | **Done** | §16 / `BACKEND_STOCK_REQUESTS_DISPATCHED_BY.ts` |
 | 32 | High | Inventory Agent sale — `sales_created_by_fkey` | **Done** | §20 / `BACKEND_SALES_CREATED_BY.ts` |
 | 33 | High | Inventory Agent sale — admin stock (not central) | **Done** | §21 / `BACKEND_SALES_ADMIN_STOCK.ts` |
-| 34 | High | Metering dual track — Bank process + installer auth | **Done** | §17 / `BACKEND_METERING_DUAL_TRACK.md` |
-| 35 | High | Document Submission — Property Documents PDF optional | **Done** | §18 / `BACKEND_PROPERTY_DOCUMENT_OPTIONAL.md` |
-| 36 | High | Non-DCR 80kW set — Renew Energy / Waaree / Adani | **Done** | §19 / `BACKEND_NON_DCR_80KW.md` |
+| 34 | High | Inventory sale lines — persist/return qty + unit_price | **Done** | §22 / `BACKEND_SALES_LINE_ITEMS.ts` |
+| 35 | High | Metering dual track — Bank process + installer auth | **Done** | §17 / `BACKEND_METERING_DUAL_TRACK.md` |
+| 36 | High | Document Submission — Property Documents PDF optional | **Done** | §18 / `BACKEND_PROPERTY_DOCUMENT_OPTIONAL.md` |
+| 37 | High | Non-DCR 80kW set — Renew Energy / Waaree / Adani | **Done** | §19 / `BACKEND_NON_DCR_80KW.md` |
 
 **Deploy before QA:**
 
@@ -1984,6 +1985,38 @@ UI checks `admin_inventory` (Available > 0) and sends `adminId` / `sell_from_adm
 3. Sale without `admin_id` still uses central rules / central error message
 
 **Deploy:** `yarn migrate` (adds `sales.admin_id`)
+
+---
+
+## 22. Inventory — Sale line items must persist & return qty / unit_price (Jul 2026)
+
+**Frontend:** Quotation Admin → Inventory → **Agent** → Sales History → **View items**  
+(also Approvals → Pending Sales → View items)
+
+**Live UI bug (before fix):** Expanded items show `Qty 0.00 × ₹0 = ₹104` — amount present, qty/price missing or zero.
+
+### Root cause
+
+POST/GET either ignored `items[].quantity` / `unit_price` aliases (`subtotal` as line amount), or returned DECIMAL fields without numeric coerce / `subtotal` aliases the UI expects.
+
+### Shipped
+
+| Piece | Implementation |
+|-------|----------------|
+| Incoming aliases | `normalizeIncomingSaleItem` — `qty` / `unitPrice` / `subtotal` → `line_total` |
+| Persist on create | `SaleItem.create` writes `quantity`, `unit_price`, `gst_rate`, `line_total` as numbers |
+| Sale money | `resolveSaleMoneyFields` — body `subtotal` / `tax_amount` / `total_amount` or recompute |
+| GET serialize | `serializeSaleItemApi` — numbers + `subtotal`/`qty`/`rate` aliases + nested `product: { id, name }` |
+| DECIMAL getters | `models/SaleItem.ts` return Numbers |
+
+**Ref:** `BACKEND_SALES_LINE_ITEMS.ts`, `utils/saleLineItemsApi.ts`
+
+### QA
+
+1. Agent → New B2B Sale → qty 2 @ ₹100 → Record Sale → **201**
+2. `GET /sales/:id` → `items[0].quantity === 2`, `unit_price === 100`, `subtotal === 200`
+3. Sales History → View items → **not** `0.00 × ₹0`
+4. Stock deduct (§21) uses the same persisted quantity
 
 ---
 

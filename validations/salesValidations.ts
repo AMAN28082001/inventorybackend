@@ -37,8 +37,12 @@ export const createSaleSchema = z.object({
   line_total: z.coerce.number().min(0).optional(), // Legacy support
   product_summary: z.string().optional(),
   subtotal: z.coerce.number().min(0).optional(),
-  tax_amount: z.coerce.number().min(0).optional(),
+    tax_amount: z.coerce.number().min(0).optional(),
   discount_amount: z.coerce.number().min(0).optional(),
+  total_amount: z.coerce.number().min(0).optional(),
+  totalAmount: z.coerce.number().min(0).optional(),
+  final_amount: z.coerce.number().min(0).optional(),
+  finalAmount: z.coerce.number().min(0).optional(),
   payment_status: z.enum(['pending', 'completed']).optional(),
   sale_date: z.string().datetime().or(z.date()).optional(),
   company_name: z.string().nullable().optional(),

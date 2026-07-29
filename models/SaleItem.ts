@@ -56,6 +56,10 @@ SaleItem.init(
       allowNull: false,
       validate: {
         min: 0.001
+      },
+      get() {
+        const v = this.getDataValue('quantity');
+        return v === null || v === undefined ? v : Number(v);
       }
     },
     unit_price: {
@@ -63,6 +67,10 @@ SaleItem.init(
       allowNull: false,
       validate: {
         min: 0
+      },
+      get() {
+        const v = this.getDataValue('unit_price');
+        return v === null || v === undefined ? v : Number(v);
       }
     },
     line_total: {
@@ -70,6 +78,10 @@ SaleItem.init(
       allowNull: false,
       validate: {
         min: 0
+      },
+      get() {
+        const v = this.getDataValue('line_total');
+        return v === null || v === undefined ? v : Number(v);
       }
     },
     gst_rate: {
@@ -78,6 +90,10 @@ SaleItem.init(
       defaultValue: 0,
       validate: {
         min: 0
+      },
+      get() {
+        const v = this.getDataValue('gst_rate');
+        return v === null || v === undefined ? v : Number(v);
       }
     },
     serial_numbers: {

@@ -577,6 +577,12 @@ Missing `installationStatus` → Excel shows **Workflow Pending** for all rows a
 
 When body has `admin_id` / `adminId` / `sell_from_admin_id` / `stock_admin_id` (or `stock_source: "admin"` / `use_admin_stock`), `POST /api/sales` checks and deducts **`admin_inventory` only** — never central `products.quantity`. Short → **400 `INSUFFICIENT_ADMIN_STOCK`**. Persists `sales.admin_id`.
 
+### Sale line items — qty / unit_price (Jul 2026) — IMPLEMENTED
+
+**Handoff:** `BACKEND_CHANGES_HANDOFF.md` §22 · **Ref:** `BACKEND_SALES_LINE_ITEMS.ts`
+
+`POST /sales` persists each line's `quantity`, `unit_price`, `gst_rate`, and line amount (`line_total` / `subtotal`). `GET /sales` and `GET /sales/:id` return those as numbers plus aliases and nested `product: { id, name }`.
+
 ---
 
 ### Admin Overview kW — verify list payload (no new endpoint)

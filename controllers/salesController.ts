@@ -17,13 +17,19 @@ import { Transaction } from 'sequelize';
 import { logError, logInfo } from '../utils/loggerHelper';
 import { lookupQuotationCustomerByPhone } from '../utils/customerPhoneLookup';
 import { persistableMediaReference } from '../utils/s3Service';
-import { normalizeSaleQuantity, isWholeSaleQuantity, hasSufficientStock } from '../utils/saleQuantity';
+import { isWholeSaleQuantity, hasSufficientStock } from '../utils/saleQuantity';
 import { roundProductPrice } from '../utils/productUnit';
 import {
   InventoryCreatedByError,
   InventoryUserMissingError,
   resolveInventorySaleCreatedBy
 } from '../utils/resolveInventoryCreatedBy';
+import {
+  normalizeIncomingSaleItem,
+  resolveSaleMoneyFields,
+  serializeSaleItemApi,
+  serializeSaleMoneyApi
+} from '../utils/saleLineItemsApi';
 
 const SALE_PRODUCT_SUMMARY_MAX = 2000;
 const SALE_IMAGE_MAX = 2048;
@@ -62,7 +68,15 @@ const buildSaleIncludes = () => ([
   },
   {
     model: SaleItem,
-    as: 'items'
+    as: 'items',
+    include: [
+      {
+        model: Product,
+        as: 'product',
+        attributes: ['id', 'name', 'model', 'unit_price', 'selling_price'],
+        required: false
+      }
+    ]
   },
   {
     model: Address,
@@ -75,16 +89,28 @@ const buildSaleIncludes = () => ([
 ]);
 
 const serializeSale = (sale: any) => {
-  const creator = sale.creator || sale.created_by;
+  const plain = typeof sale?.toJSON === 'function' ? sale.toJSON() : { ...sale };
+  const creator = sale.creator || plain.creator || sale.created_by;
   const createdByName = creator?.name || creator?.created_by_name || null;
-  const saleDate = sale.sale_date || sale.created_at || null;
+  const saleDate = plain.sale_date || plain.created_at || null;
+  const money = serializeSaleMoneyApi(plain);
+  const itemsRaw = Array.isArray(plain.items) ? plain.items : [];
+  const items = itemsRaw.map((row: any) =>
+    serializeSaleItemApi(
+      typeof row?.toJSON === 'function' ? row.toJSON() : row,
+      row?.product || null
+    )
+  );
 
   return {
-    ...sale.toJSON?.() || sale,
+    ...plain,
+    ...money,
+    items,
     created_by_name: createdByName,
     agent_name: createdByName,
     created_at: saleDate,
-    sale_date: saleDate
+    sale_date: saleDate,
+    admin_id: plain.admin_id ?? null
   };
 };
 
@@ -116,16 +142,19 @@ const normalizeSaleItems = async (rawItems: any, transaction: Transaction): Prom
 
   const normalized: NormalizedSaleItem[] = [];
 
-  for (const item of rawItems) {
-    const quantity = normalizeSaleQuantity(item.quantity);
+  for (const raw of rawItems) {
+    const incoming = normalizeIncomingSaleItem(
+      raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
+    );
 
-    if (!quantity || quantity <= 0 || Number.isNaN(quantity)) {
+    if (!incoming.quantity || incoming.quantity <= 0 || Number.isNaN(incoming.quantity)) {
       throw new Error('Each sale item must have a quantity greater than 0');
     }
 
-    let productId: string | null = item.product_id || null;
-    let productName = item.product_name;
-    let model = item.model;
+    let productId: string | null = incoming.product_id;
+    let productName =
+      (raw as any)?.product_name || (raw as any)?.productName || (raw as any)?.name;
+    let model = (raw as any)?.model;
     let productRecord: Product | null = null;
 
     if (productId) {
@@ -144,17 +173,17 @@ const normalizeSaleItems = async (rawItems: any, transaction: Transaction): Prom
     productName = truncateVarchar(productName, SALE_ITEM_NAME_MAX) || productName.slice(0, SALE_ITEM_NAME_MAX);
     model = truncateVarchar(model, SALE_ITEM_NAME_MAX) || model.slice(0, SALE_ITEM_NAME_MAX);
 
-    let unitPrice: number;
-    if (item.unit_price !== undefined) {
-      unitPrice = Number(item.unit_price);
-    } else if (productRecord && productRecord.selling_price !== null && productRecord.selling_price !== undefined) {
-      unitPrice = Number(productRecord.selling_price);
-    } else if (productRecord && productRecord.unit_price !== null && productRecord.unit_price !== undefined) {
-      unitPrice = Number(productRecord.unit_price);
-    } else if (productRecord && (productRecord as any).price !== null && (productRecord as any).price !== undefined) {
-      unitPrice = Number((productRecord as any).price);
-    } else {
-      unitPrice = NaN;
+    let unitPrice = incoming.unit_price;
+    if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+      if (productRecord && productRecord.selling_price !== null && productRecord.selling_price !== undefined) {
+        unitPrice = Number(productRecord.selling_price);
+      } else if (productRecord && productRecord.unit_price !== null && productRecord.unit_price !== undefined) {
+        unitPrice = Number(productRecord.unit_price);
+      } else if (productRecord && (productRecord as any).price !== null && (productRecord as any).price !== undefined) {
+        unitPrice = Number((productRecord as any).price);
+      } else {
+        unitPrice = NaN;
+      }
     }
 
     if (Number.isNaN(unitPrice) || unitPrice < 0) {
@@ -162,15 +191,18 @@ const normalizeSaleItems = async (rawItems: any, transaction: Transaction): Prom
     }
     unitPrice = roundProductPrice(unitPrice) ?? unitPrice;
 
-    const lineTotalRaw = item.line_total !== undefined ? Number(item.line_total) : quantity * unitPrice;
-    const lineTotal = roundProductPrice(lineTotalRaw) ?? lineTotalRaw;
+    let lineTotal = incoming.line_total;
+    if (!Number.isFinite(lineTotal) || lineTotal < 0) {
+      lineTotal = roundProductPrice(incoming.quantity * unitPrice) ?? incoming.quantity * unitPrice;
+    } else {
+      lineTotal = roundProductPrice(lineTotal) ?? lineTotal;
+    }
 
     if (Number.isNaN(lineTotal) || lineTotal < 0) {
       throw new Error('Each sale item must have a non-negative line_total');
     }
 
-    const gstRate = item.gst_rate !== undefined ? Number(item.gst_rate) : 0;
-
+    const gstRate = Number.isFinite(incoming.gst_rate) ? incoming.gst_rate : 0;
     if (Number.isNaN(gstRate) || gstRate < 0) {
       throw new Error('Each sale item must have a non-negative gst_rate');
     }
@@ -179,24 +211,20 @@ const normalizeSaleItems = async (rawItems: any, transaction: Transaction): Prom
       product_id: productId,
       product_name: productName,
       model,
-      quantity,
+      quantity: incoming.quantity,
       unit_price: unitPrice,
       line_total: lineTotal,
       gst_rate: gstRate,
-      serial_numbers: Array.isArray(item.serial_numbers)
-        ? item.serial_numbers.map(String)
-        : typeof item.serial_numbers === 'string'
-          ? item.serial_numbers.split(/[\n,]+/).map((v: string) => v.trim()).filter(Boolean)
-          : null
+      serial_numbers: incoming.serial_numbers ?? null
     });
 
     const serials = normalized[normalized.length - 1].serial_numbers;
     if (serials?.length) {
-      if (!isWholeSaleQuantity(quantity)) {
+      if (!isWholeSaleQuantity(incoming.quantity)) {
         throw new Error('Serial numbers require a whole-number quantity');
       }
-      if (serials.length !== Math.round(quantity)) {
-        throw new Error(`Expected ${Math.round(quantity)} serial numbers, got ${serials.length}`);
+      if (serials.length !== Math.round(incoming.quantity)) {
+        throw new Error(`Expected ${Math.round(incoming.quantity)} serial numbers, got ${serials.length}`);
       }
     }
   }
@@ -574,9 +602,6 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
       customer_name,
       items: rawItems,
       product_summary,
-      subtotal,
-      tax_amount,
-      discount_amount,
       payment_status,
       sale_date,
       company_name,
@@ -644,11 +669,20 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
 
     const normalizedItems = await normalizeSaleItems(saleItems, transaction);
     const totalQuantity = normalizedItems.reduce((sum, item) => sum + item.quantity, 0);
-    const computedSubtotal = normalizedItems.reduce((sum, item) => sum + item.line_total, 0);
-    const subtotalValue = subtotal !== undefined ? Number(subtotal) : computedSubtotal;
-    const taxAmountValue = tax_amount !== undefined ? Number(tax_amount) : 0;
-    const discountAmountValue = discount_amount !== undefined ? Number(discount_amount) : 0;
-    const totalAmountValue = subtotalValue + taxAmountValue - discountAmountValue;
+    const money = resolveSaleMoneyFields(
+      (req.body || {}) as Record<string, unknown>,
+      normalizedItems.map((item) => ({
+        quantity: item.quantity,
+        unit_price: item.unit_price,
+        gst_rate: item.gst_rate,
+        line_total: item.line_total,
+        subtotal: item.line_total
+      }))
+    );
+    const subtotalValue = money.subtotal;
+    const taxAmountValue = money.tax_amount;
+    const discountAmountValue = money.discount_amount;
+    const totalAmountValue = money.total_amount;
 
     if (Number.isNaN(subtotalValue) || subtotalValue < 0) {
       await transaction.rollback();
@@ -828,10 +862,11 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
         product_id: item.product_id,
         product_name: item.product_name,
         model: item.model,
-        quantity: item.quantity,
-        unit_price: item.unit_price,
-        line_total: item.line_total,
-        gst_rate: item.gst_rate,
+        // §22 — always persist real qty / unit_price / line amount (never amount-only zeros)
+        quantity: Number(item.quantity),
+        unit_price: Number(item.unit_price),
+        line_total: Number(item.line_total),
+        gst_rate: Number(item.gst_rate),
         serial_numbers: item.serial_numbers && item.serial_numbers.length > 0 ? item.serial_numbers : null
       }, { transaction });
       createdSaleItems.push(createdItem);
