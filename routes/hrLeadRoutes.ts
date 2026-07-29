@@ -7,6 +7,7 @@ import {
   getHrDealersForAssignment,
   getHrDealerAssignmentStats,
   getHrCallingActions,
+  getHrCallingActionsSummary,
   getHrLeadUploadBatches,
   getHrLeadUploadBatchRows,
   getHrLeadsSearchByMobile,
@@ -43,6 +44,7 @@ router.use(authorizeHrLeadAccess);
 
 router.get('/dealers', getHrDealersForAssignment);
 router.get('/dealers/assignment-stats', getHrDealerAssignmentStats);
+router.get('/calling-actions/summary', getHrCallingActionsSummary);
 router.get('/calling-actions', getHrCallingActions);
 // Alias used by some frontend builds (§J / §4.8)
 router.get('/calling-queue/actions', getHrCallingActions);

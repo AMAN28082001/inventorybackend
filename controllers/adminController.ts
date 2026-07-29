@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
-import { Quotation, QuotationPaymentPhase, QuotationInstallationDoc, QuotationProduct, CustomPanel, Dealer, Customer, Visitor, Visit } from '../models/index-quotation';
-import { Op } from 'sequelize';
+import { Quotation, QuotationPaymentPhase, QuotationInstallationDoc, QuotationProduct, CustomPanel, Dealer, Customer, Visitor, Visit, QuotationDocument } from '../models/index-quotation';
+import { Op, fn, col, literal, Sequelize } from 'sequelize';
 import { logError, logInfo } from '../utils/loggerHelper';
 import { normalizePaymentModeInput } from '../utils/paymentMode';
 import {
@@ -57,6 +57,7 @@ import {
   serializeProductNeededRow
 } from '../utils/adminProductNeeded';
 import { persistQuotationSystemKw } from '../utils/persistQuotationSystemKw';
+import { buildFinalConfirmationApiFields } from '../utils/finalConfirmationDocuments';
 
 const sumPhasePaidAmounts = (phases: { paidAmount?: number }[]): number =>
   phases.reduce((sum, p) => sum + Number((p as any).paidAmount || 0), 0);
@@ -225,19 +226,34 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
     const page = parseInt(req.query.page as string) || 1;
     const limitParam = req.query.limit as string | undefined;
     const wantsReleasedInstallerList = isReleasedToInstallerListQuery(req.query as Record<string, unknown>);
-    const limit = limitParam
-      ? Math.min(parseInt(limitParam) || 20, 1000)
-      : wantsReleasedInstallerList
-        ? 1000
-        : undefined;
-    const offset = limit ? (page - 1) * limit : undefined;
     const scope = String(req.query.scope || '').toLowerCase();
     const status = req.query.status as string;
     const installationStatusQuery = req.query.installationStatus as string;
     const operationalView = String(req.query.operationalView || '').toLowerCase();
+    // §7.4 — always bound list pages (never unbounded all-time serialization).
+    // Meter/Installer/Baldev operational views need a high default so Meter Process
+    // chip counts + tab rows survive hard refresh (FE often omits limit).
+    const limit = limitParam
+      ? Math.min(parseInt(limitParam, 10) || 20, 1000)
+      : wantsReleasedInstallerList ||
+          operationalView === 'metering' ||
+          operationalView === 'installer' ||
+          operationalView === 'baldev'
+        ? 1000
+        : 100;
+    const offset = (page - 1) * limit;
     const dealerId = req.query.dealerId as string;
     const startDate = req.query.startDate as string;
     const endDate = req.query.endDate as string;
+    const search = String(req.query.search || req.query.q || '').trim();
+    const includeMediaRaw = String(req.query.includeMedia || req.query.include_media || '').toLowerCase();
+    const includeMedia =
+      includeMediaRaw === 'true' ||
+      includeMediaRaw === '1' ||
+      operationalView === 'installer' ||
+      operationalView === 'metering' ||
+      operationalView === 'baldev' ||
+      scope === 'installer_queue';
 
     const where: any = {};
 
@@ -342,6 +358,23 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
       if (endDate) where.createdAt[Op.lte] = new Date(endDate);
     }
 
+    if (search) {
+      where[Op.and] = [
+        ...(Array.isArray(where[Op.and]) ? where[Op.and] : []),
+        {
+          [Op.or]: [
+            { id: { [Op.iLike]: `%${search}%` } },
+            Sequelize.where(Sequelize.col('customer.firstName'), { [Op.iLike]: `%${search}%` }),
+            Sequelize.where(Sequelize.col('customer.lastName'), { [Op.iLike]: `%${search}%` }),
+            Sequelize.where(Sequelize.col('customer.mobile'), { [Op.iLike]: `%${search}%` }),
+            Sequelize.where(Sequelize.col('customer.email'), { [Op.iLike]: `%${search}%` }),
+            Sequelize.where(Sequelize.col('dealer.firstName'), { [Op.iLike]: `%${search}%` }),
+            Sequelize.where(Sequelize.col('dealer.lastName'), { [Op.iLike]: `%${search}%` })
+          ]
+        }
+      ];
+    }
+
     const quotations = await Quotation.findAndCountAll({
       where,
       include: [
@@ -376,30 +409,56 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
           required: false
         }
       ],
+      distinct: true,
+      subQuery: false,
       limit,
       offset,
       order: wantsReleasedInstallerList
         ? [['installationReleasedAt', 'DESC'], ['approvedAt', 'DESC'], ['createdAt', 'DESC']]
         : [['createdAt', 'DESC']]
     });
-    const phaseRows = await QuotationPaymentPhase.findAll({
-      where: { quotationId: { [Op.in]: quotations.rows.map((q: any) => q.id) } },
-      order: [['quotationId', 'ASC'], ['phaseNumber', 'ASC']]
-    });
-    const installationDocMap = await batchLoadInstallationDocsByQuotationId(
-      quotations.rows.map((q: any) => String(q.id))
-    );
     const quotationIds = quotations.rows.map((q: any) => String(q.id));
-    const visitRows = quotationIds.length
-      ? await Visit.findAll({
+    const phaseRows = quotationIds.length
+      ? await QuotationPaymentPhase.findAll({
           where: { quotationId: { [Op.in]: quotationIds } },
-          attributes: ['quotationId', 'location', 'visitDate', 'visitTime'],
-          order: [
-            ['visitDate', 'ASC'],
-            ['visitTime', 'ASC']
+          order: [['quotationId', 'ASC'], ['phaseNumber', 'ASC']]
+        })
+      : [];
+    // §7.4 / §7.5 — skip heavy media + visit fan-out on list critical path unless opted in.
+    const installationDocMap = includeMedia
+      ? await batchLoadInstallationDocsByQuotationId(quotationIds)
+      : new Map<string, any[]>();
+    // §M — Final confirmation preview URLs on admin list (lightweight: only 4 slots).
+    const quotationDocRows = quotationIds.length
+      ? await QuotationDocument.findAll({
+          where: { quotationId: { [Op.in]: quotationIds } },
+          attributes: [
+            'quotationId',
+            'customerFinalBillFile',
+            'panelWarrantyFile',
+            'inverterWarrantyFile',
+            'workCompletionWarrantyFile'
           ]
         })
       : [];
+    const finalConfirmationByQuotationId = new Map<string, Record<string, string | null>>();
+    await Promise.all(
+      (quotationDocRows as any[]).map(async (doc) => {
+        const fields = await buildFinalConfirmationApiFields(doc);
+        finalConfirmationByQuotationId.set(String(doc.quotationId), fields);
+      })
+    );
+    const visitRows =
+      includeMedia && quotationIds.length
+        ? await Visit.findAll({
+            where: { quotationId: { [Op.in]: quotationIds } },
+            attributes: ['quotationId', 'location', 'visitDate', 'visitTime'],
+            order: [
+              ['visitDate', 'ASC'],
+              ['visitTime', 'ASC']
+            ]
+          })
+        : [];
     const visitLocationByQuotationId = buildPrimaryVisitLocationByQuotationId(
       visitRows.map((v) =>
         typeof (v as any).toJSON === 'function' ? (v as any).toJSON() : v
@@ -455,13 +514,26 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
             typeof qAny.get === 'function'
               ? (qAny.get({ plain: true }) as Record<string, unknown>)
               : (q as unknown as Record<string, unknown>);
-          const rawInstallationDocs = installationDocMap.get(String(q.id)) || [];
-          const installationPayload = await mapInstallationDocumentsForApi(rawInstallationDocs);
-          const latestMeterDoc = getLatestMeterDocMeta(rawInstallationDocs);
-          const meterDocumentFields = await buildMeterDocumentApiFields(
-            resolveMeterStoredRef((q as any).meterDocumentImageUrl, rawInstallationDocs),
-            latestMeterDoc.name
-          );
+          const rawInstallationDocs = includeMedia
+            ? installationDocMap.get(String(q.id)) || []
+            : [];
+          const installationPayload = includeMedia
+            ? await mapInstallationDocumentsForApi(rawInstallationDocs)
+            : {
+                documents: [],
+                installationDocuments: [],
+                installationPhotoUrls: [],
+                installationFieldUrls: {}
+              };
+          const latestMeterDoc = includeMedia
+            ? getLatestMeterDocMeta(rawInstallationDocs)
+            : { name: null as string | null };
+          const meterDocumentFields = includeMedia
+            ? await buildMeterDocumentApiFields(
+                resolveMeterStoredRef((q as any).meterDocumentImageUrl, rawInstallationDocs),
+                latestMeterDoc.name
+              )
+            : {};
           const productListFields = quotationProductEnrichmentFields(
             qAny.products,
             qAny.customPanels,
@@ -545,18 +617,24 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
               discomName: (q as any).discomName,
               discomLocation: (q as any).discomLocation
             }),
-            ...(await buildMeterInstallationPendingPhotoApiFields({
-              meterInstallationPhotoUrl: (q as any).meterInstallationPhotoUrl,
-              meterInstallationPhotoName: (q as any).meterInstallationPhotoName,
-              plantLivePhotoUrl: (q as any).plantLivePhotoUrl,
-              plantLivePhotoName: (q as any).plantLivePhotoName
-            })),
+            ...(includeMedia
+              ? await buildMeterInstallationPendingPhotoApiFields({
+                  meterInstallationPhotoUrl: (q as any).meterInstallationPhotoUrl,
+                  meterInstallationPhotoName: (q as any).meterInstallationPhotoName,
+                  plantLivePhotoUrl: (q as any).plantLivePhotoUrl,
+                  plantLivePhotoName: (q as any).plantLivePhotoName
+                })
+              : {}),
             meterType: (q as any).meterType || null,
             meterNo: (q as any).meterNo || null,
             solarMeterNo: (q as any).solarMeterNo || null,
             netMeterNo: (q as any).netMeterNo || null,
             ...meterDocumentFields,
-            documents: installationPayload.documents,
+            ...(finalConfirmationByQuotationId.get(String(q.id)) || {}),
+            documents: {
+              ...(finalConfirmationByQuotationId.get(String(q.id)) || {}),
+              ...installationPayload.documents
+            },
             installationDocuments: installationPayload.installationDocuments,
             installationPhotoUrls: installationPayload.installationPhotoUrls,
             installation_photo_urls: installationPayload.installationPhotoUrls,
@@ -566,9 +644,11 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
         })),
         pagination: {
           page,
-          limit: limit || quotations.count,
+          limit,
           total: quotations.count,
-          totalPages: limit ? Math.ceil(quotations.count / limit) : 1
+          totalPages: Math.max(1, Math.ceil(quotations.count / limit)),
+          hasNext: page < Math.ceil(quotations.count / limit),
+          hasPrev: page > 1
         }
       }
     });
@@ -1112,6 +1192,14 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
         // keep meterInstallationPendingAt history; status alone drives the tab
       } else {
         patch.mcoAt = null;
+        // To Discom from Meter Pending → Meter in Discom (not WCC Pending)
+        if (
+          currentStatus === 'pending_metering' ||
+          currentStatus === 'metering_in_progress'
+        ) {
+          patch.meteringWccAfterDiscom = false;
+          patch.meteringWccAfterDiscomAt = null;
+        }
       }
     }
     if (nextStatus === 'completed' && !quotation.completionAt) {
@@ -1592,6 +1680,17 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
           model: CustomPanel,
           as: 'customPanels',
           required: false
+        },
+        {
+          model: QuotationDocument,
+          as: 'documents',
+          required: false,
+          attributes: [
+            'customerFinalBillFile',
+            'panelWarrantyFile',
+            'inverterWarrantyFile',
+            'workCompletionWarrantyFile'
+          ]
         }
       ]
     });
@@ -1605,6 +1704,7 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
     }
 
     const quotationAny = quotation as any;
+    const finalConfirmationFields = await buildFinalConfirmationApiFields(quotationAny.documents);
     const phaseRows = await QuotationPaymentPhase.findAll({
       where: { quotationId: quotation.id },
       order: [['phaseNumber', 'ASC']]
@@ -1726,7 +1826,11 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
         solarMeterNo: quotationAny.solarMeterNo || null,
         netMeterNo: quotationAny.netMeterNo || null,
         ...meterDocumentFields,
-        documents: installationPayload.documents,
+        ...finalConfirmationFields,
+        documents: {
+          ...finalConfirmationFields,
+          ...installationPayload.documents
+        },
         installationDocuments: installationPayload.installationDocuments,
         installationPhotoUrls: installationPayload.installationPhotoUrls,
         installation_photo_urls: installationPayload.installationPhotoUrls,
@@ -2162,6 +2266,9 @@ export const getAdminProductNeeded = async (req: Request, res: Response): Promis
   }
 };
 
+const ADMIN_STATS_CACHE_TTL_MS = 30 * 1000;
+const adminStatsCache = new Map<string, { expiresAt: number; payload: any }>();
+
 // Get system statistics (admin)
 export const getSystemStatistics = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -2175,6 +2282,12 @@ export const getSystemStatistics = async (req: Request, res: Response): Promise<
 
     const startDate = req.query.startDate as string;
     const endDate = req.query.endDate as string;
+    const cacheKey = `stats:${startDate || ''}:${endDate || ''}`;
+    const cached = adminStatsCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      res.json(cached.payload);
+      return;
+    }
 
     const where: any = {};
     if (startDate || endDate) {
@@ -2183,83 +2296,181 @@ export const getSystemStatistics = async (req: Request, res: Response): Promise<
       if (endDate) where.createdAt[Op.lte] = new Date(endDate);
     }
 
-    const quotations = await Quotation.findAll({ where });
-    const totalQuotations = quotations.length;
-    const totalRevenue = quotations.reduce((sum, q) => sum + Number(q.finalAmount), 0);
-    const uniqueCustomers = [...new Set(quotations.map(q => q.customerId))].length;
-    const activeDealers = [...new Set(quotations.map(q => q.dealerId))].length;
-
     // This month's data
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-    const thisMonthQuotations = quotations.filter(q => new Date(q.createdAt) >= startOfMonth);
-    const thisMonth = {
-      quotations: thisMonthQuotations.length,
-      revenue: thisMonthQuotations.reduce((sum, q) => sum + Number(q.finalAmount), 0),
-      newCustomers: [...new Set(thisMonthQuotations.map(q => q.customerId))].length,
-      newVisitors: await Visitor.count({
-        where: {
+
+    const thisMonthWhere = {
+      ...where,
+      [Op.and]: [
+        ...(Array.isArray(where[Op.and]) ? where[Op.and] : []),
+        { createdAt: { [Op.gte]: startOfMonth } }
+      ]
+    };
+
+    const thisMonthApprovedWhere = {
+      status: 'approved',
+      [Op.or]: [
+        { statusApprovedAt: { [Op.gte]: startOfMonth } },
+        {
+          statusApprovedAt: null,
+          approvedAt: { [Op.gte]: startOfMonth }
+        },
+        {
+          statusApprovedAt: null,
+          approvedAt: null,
           createdAt: { [Op.gte]: startOfMonth }
         }
-      })
+      ]
     };
 
-    // Status breakdown
+    const [
+      totalQuotations,
+      overviewAggregate,
+      approvedRevenueAggregate,
+      thisMonthAggregate,
+      thisMonthApprovedAggregate,
+      statusRows,
+      topDealersRaw,
+      totalVisitors,
+      activeVisitors,
+      newVisitors
+    ] = await Promise.all([
+      Quotation.count({ where }),
+      Quotation.findOne({
+        where,
+        raw: true,
+        attributes: [
+          [fn('COALESCE', fn('SUM', col('finalAmount')), 0), 'totalRevenue'],
+          [fn('COUNT', fn('DISTINCT', col('customerId'))), 'totalCustomers'],
+          [fn('COUNT', fn('DISTINCT', col('dealerId'))), 'activeDealers']
+        ]
+      }),
+      Quotation.findOne({
+        where: { ...where, status: 'approved' },
+        raw: true,
+        attributes: [[fn('COALESCE', fn('SUM', col('finalAmount')), 0), 'totalRevenue']]
+      }),
+      Quotation.findOne({
+        where: thisMonthWhere,
+        raw: true,
+        attributes: [
+          [fn('COUNT', col('id')), 'quotations'],
+          [fn('COALESCE', fn('SUM', col('finalAmount')), 0), 'revenue'],
+          [fn('COUNT', fn('DISTINCT', col('customerId'))), 'newCustomers']
+        ]
+      }),
+      Quotation.findOne({
+        where: thisMonthApprovedWhere,
+        raw: true,
+        attributes: [
+          [fn('COUNT', col('id')), 'approvedQuotations'],
+          [fn('COALESCE', fn('SUM', col('finalAmount')), 0), 'approvedRevenue'],
+          [fn('COUNT', fn('DISTINCT', col('customerId'))), 'approvedCustomers']
+        ]
+      }),
+      Quotation.findAll({
+        where,
+        raw: true,
+        attributes: ['status', [fn('COUNT', col('id')), 'count']],
+        group: ['status']
+      }),
+      Quotation.findAll({
+        where,
+        raw: true,
+        attributes: [
+          'dealerId',
+          [fn('COUNT', col('id')), 'quotationCount'],
+          [fn('COALESCE', fn('SUM', col('finalAmount')), 0), 'revenue']
+        ],
+        group: ['dealerId'],
+        order: [[literal('"revenue"'), 'DESC']],
+        limit: 10
+      }),
+      Visitor.count(),
+      Visitor.count({ where: { isActive: true } }),
+      Visitor.count({ where: { createdAt: { [Op.gte]: startOfMonth } } })
+    ]);
+
+    const statusMap = new Map<string, number>();
+    for (const row of statusRows as any[]) {
+      statusMap.set(String(row.status || '').toLowerCase(), Number(row.count || 0));
+    }
     const statusBreakdown = {
-      pending: quotations.filter(q => q.status === 'pending').length,
-      approved: quotations.filter(q => q.status === 'approved').length,
-      rejected: quotations.filter(q => q.status === 'rejected').length,
-      completed: quotations.filter(q => q.status === 'completed').length
+      pending: statusMap.get('pending') || 0,
+      approved: statusMap.get('approved') || 0,
+      rejected: statusMap.get('rejected') || 0,
+      completed: statusMap.get('completed') || 0
     };
 
-    // Top dealers
-    const dealerStats = new Map<string, { count: number; revenue: number }>();
-    quotations.forEach(q => {
-      const existing = dealerStats.get(q.dealerId) || { count: 0, revenue: 0 };
-      dealerStats.set(q.dealerId, {
-        count: existing.count + 1,
-        revenue: existing.revenue + Number(q.finalAmount)
-      });
-    });
-
-    const topDealers = Array.from(dealerStats.entries())
-      .map(([dealerId, stats]) => ({ dealerId, ...stats }))
-      .sort((a, b) => b.revenue - a.revenue)
-      .slice(0, 10);
-
-    // Get dealer names
-    const dealerIds = topDealers.map(d => d.dealerId);
-    const dealers = await Dealer.findAll({
-      where: { id: { [Op.in]: dealerIds } },
-      attributes: ['id', 'firstName', 'lastName']
-    });
-
-    const topDealersWithNames = topDealers.map(td => {
-      const dealer = dealers.find(d => d.id === td.dealerId);
+    const dealerIds = (topDealersRaw as any[])
+      .map((row) => String(row.dealerId || ''))
+      .filter(Boolean);
+    const dealers = dealerIds.length
+      ? await Dealer.findAll({
+          where: { id: { [Op.in]: dealerIds } },
+          attributes: ['id', 'firstName', 'lastName'],
+          raw: true
+        })
+      : [];
+    const dealerNameById = new Map<string, string>();
+    for (const dealer of dealers as any[]) {
+      dealerNameById.set(
+        String(dealer.id),
+        `${String(dealer.firstName || '').trim()} ${String(dealer.lastName || '').trim()}`.trim() || 'Unknown'
+      );
+    }
+    const topDealersWithNames = (topDealersRaw as any[]).map((row) => {
+      const dealerId = String(row.dealerId || '');
       return {
-        dealerId: td.dealerId,
-        dealerName: dealer ? `${dealer.firstName} ${dealer.lastName}` : 'Unknown',
-        quotationCount: td.count,
-        revenue: td.revenue
+        dealerId,
+        dealerName: dealerNameById.get(dealerId) || 'Unknown',
+        quotationCount: Number(row.quotationCount || 0),
+        revenue: Number(row.revenue || 0)
       };
     });
 
-    res.json({
+    const approvedCustomers = Number((thisMonthApprovedAggregate as any)?.approvedCustomers || 0);
+    const thisMonth = {
+      quotations: Number((thisMonthAggregate as any)?.quotations || 0),
+      revenue: Number(
+        (thisMonthApprovedAggregate as any)?.approvedRevenue ??
+          (thisMonthAggregate as any)?.revenue ??
+          0
+      ),
+      newCustomers: Number((thisMonthAggregate as any)?.newCustomers || 0),
+      approvedCustomers,
+      approved_customers: approvedCustomers,
+      approvedQuotations: Number((thisMonthApprovedAggregate as any)?.approvedQuotations || 0),
+      newVisitors
+    };
+
+    const payload = {
       success: true,
       data: {
         overview: {
           totalQuotations,
-          totalRevenue,
-          totalCustomers: uniqueCustomers,
-          activeDealers,
-          totalVisitors: await Visitor.count(),
-          activeVisitors: await Visitor.count({ where: { isActive: true } })
+          totalRevenue: Number(
+            (approvedRevenueAggregate as any)?.totalRevenue ??
+              (overviewAggregate as any)?.totalRevenue ??
+              0
+          ),
+          totalCustomers: Number((overviewAggregate as any)?.totalCustomers || 0),
+          activeDealers: Number((overviewAggregate as any)?.activeDealers || 0),
+          totalVisitors,
+          activeVisitors
         },
         thisMonth,
         statusBreakdown,
         topDealers: topDealersWithNames
       }
+    };
+
+    adminStatsCache.set(cacheKey, {
+      expiresAt: Date.now() + ADMIN_STATS_CACHE_TTL_MS,
+      payload
     });
+    res.json(payload);
   } catch (error) {
     logError('Get system statistics error', error);
     res.status(500).json({

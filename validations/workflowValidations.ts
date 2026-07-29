@@ -65,13 +65,24 @@ export const meteringStatusSchema = z
     installationStatus: z.string().max(64).optional(),
     installation_status: z.string().max(64).optional(),
     meteringStatus: z.string().max(64).optional(),
+    metering_status: z.string().max(64).optional(),
     status: z.string().max(64).optional()
   })
+  .passthrough()
   .refine(
     (d) =>
       d.action !== undefined ||
-      Boolean(d.installationStatus || d.installation_status || d.meteringStatus || d.status),
-    { message: 'Provide action or one of installationStatus, installation_status, meteringStatus, status' }
+      Boolean(
+        d.installationStatus ||
+          d.installation_status ||
+          d.meteringStatus ||
+          d.metering_status ||
+          d.status
+      ),
+    {
+      message:
+        'Provide action or one of installationStatus, installation_status, meteringStatus, metering_status, status'
+    }
   );
 
 export const meteringDetailsSchema = z.object({

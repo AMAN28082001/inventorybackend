@@ -778,6 +778,193 @@ Quick QA:
 
 ---
 
+### 7.2 Admin Overview — first-load optimization (instant cards)
+
+**Frontend issue observed:** on first Admin Panel open, Overview cards briefly show `0` / `₹0.0L` while heavy list calls are still in-flight.
+
+Goal: make `GET /api/admin/statistics` a lightweight aggregated endpoint so Overview cards paint with real values immediately.
+
+#### Required backend contract
+
+- Keep endpoint: `GET /api/admin/statistics` (no frontend route change).
+- Keep stable response shape (fast parse, no extra transforms):
+  - `data.overview.totalQuotations`
+  - `data.overview.totalRevenue`
+  - `data.thisMonth.quotations`
+  - `data.thisMonth.revenue`
+  - `data.thisMonth.approvedCustomers` (alias support accepted when wired)
+- Use SQL aggregates/grouping at DB layer (no full quotation row materialization in Node for stats).
+
+#### Query strategy (recommended)
+
+- Use aggregate queries (`COUNT`, `SUM`, `COUNT DISTINCT`, grouped status/dealer queries) instead of `findAll + reduce`.
+- Run independent aggregates in parallel (`Promise.all`) for:
+  - overview totals
+  - this-month totals
+  - status breakdown
+  - top dealers
+  - visitor counters
+- Keep heavy list endpoints (`/api/admin/quotations`) separate from card counters.
+
+#### Caching and invalidation
+
+- Add short TTL cache on statistics response (recommended: 10–30s; max 60s for low-change windows).
+- Invalidate/refresh cache on writes that impact counters:
+  - quotation create/update/status/payment changes
+  - visitor create/activation changes
+- Keep cache scoped to filter set (`startDate`, `endDate`, dealer filters if present).
+
+#### Index guidance
+
+Recommended DB indexes for common stats filters:
+- `quotations(status, createdAt)`
+- `quotations(statusApprovedAt)` when approval-window metrics are used
+- `quotations(dealerId, createdAt)`
+- `quotations(paymentStatus, createdAt)`
+- optional: `calling_action_history(dealerId, action, actionAt)` for related overview widgets
+
+#### Performance target
+
+- Target `GET /api/admin/statistics` p95 < **300ms** under normal production load.
+- Cold start should still paint non-zero card values before heavy list/table requests complete.
+
+#### QA checklist
+
+1. Hard refresh Admin Panel → Overview cards show real values quickly (no prolonged `0` placeholder state).
+2. Values from statistics endpoint match totals derived from filtered DB data.
+3. Refresh and second open within TTL returns fast response.
+4. After quotation/visitor writes, counters reflect updated values within cache policy.
+5. High-volume dataset test: no timeouts; endpoint remains significantly faster than full quotations list.
+
+---
+
+### 7.3 Admin Calling Reports — first-load optimization (instant counters)
+
+**Frontend:** `app/dashboard/admin/page.tsx` → **Calling Reports** tab (`Employee Calling Actions` cards)
+
+Goal: first load should show counters quickly, without waiting for large action-history payloads.
+
+#### Required backend contract
+
+- Optimize `GET /api/admin/calling-actions` for fast filtered fetch (`dealerId`, `startDate`, `endDate`, `range`).
+- Make the critical path `limit`-aware for first paint (frontend requests this tab independently with bounded `limit=1000`).
+- Support low-latency first-page responses when `limit` is present (avoid unbounded all-time fetch by default).
+- Default sort: `actionAt DESC` (newest first) for fast recent-first rendering.
+- Avoid expensive joins in the critical path when they are not needed for counters/classification.
+- Keep stable fields for instant client-side classification:
+  - `id`, `leadId`, `dealerId`, `dealerName`
+  - `action`, `actionAt`, `callRemark`
+  - `statusText` / `status_text`
+  - `statusCategory` / `status_category`
+- Ensure logical event de-duplication (no duplicate action rows on retries/reloads).
+- Support fast server-side filtering for `dealerId`, `startDate`, `endDate` so frontend does not process very large all-time datasets on first render.
+
+#### Optional fast summary endpoint
+
+- `GET /api/admin/calling-actions/summary?dealerId=&startDate=&endDate=`
+- Return only aggregated counters needed by cards:
+  - `interested`, `followUp`, `notInterested`, `others`, `total`
+- Keep this endpoint lightweight and independent of paginated detail list.
+
+#### Pagination-friendly list response (recommended)
+
+- Return first chunk fast (bounded by `limit`) with pagination metadata.
+- Include either `total` + page metadata or cursor metadata (`nextCursor`) so frontend can fetch more lazily.
+- Do not block first response on heavy full-table serialization when bounded `limit` is provided.
+
+#### Caching + performance targets
+
+- Add short TTL cache for summary responses (recommended 10–30s; max 60s).
+- Scope cache key by filters (`dealerId`, date window, `range`).
+- Invalidate/refresh on new action writes if strict freshness is required.
+- Targets:
+  - summary p95 < **200ms**
+  - filtered list p95 < **400ms**
+
+#### QA checklist
+
+1. First open of Calling Reports shows counters quickly (no long zero/empty delay).
+2. Dealer/date filter change updates counters and list quickly.
+3. Counter totals match list rows for same filter window.
+4. Repeat open within TTL is faster and returns consistent values.
+5. No duplicate increments from retry/double-submit events.
+6. `GET /api/admin/calling-actions?limit=1000` returns quickly without full-table heavy serialization behavior.
+
+---
+
+### 7.4 Admin Quotations tab — first-load optimization (instant list)
+
+**Frontend:** `app/dashboard/admin/page.tsx` → **Quotations** tab
+
+Goal: first page should render quickly with a lightweight list payload, then progressively load additional pages/details.
+
+#### Required backend contract
+
+- Optimize `GET /api/admin/quotations?page=1&limit=...` for fast first paint.
+- Keep lightweight row fields required for immediate list render (id/status/customer/dealer/amount/date and key workflow badges).
+- Keep pagination metadata stable:
+  - `total`
+  - `pagination.totalPages`
+  - `pagination.page`, `pagination.limit`, `pagination.hasNext`, `pagination.hasPrev`
+- Default deterministic sort recommendation:
+  - newest first (`createdAt DESC`) unless explicit filter/sort is requested.
+
+#### List payload guidance
+
+- Keep list endpoint focused on tab-render fields.
+- Move or defer heavy detail/media enrichment from list critical path when not required for first-page draw.
+- Avoid expensive joins for optional detail objects on page-1 query path.
+- Keep detail/media-heavy data in quotation detail endpoint(s) or lazy follow-up fetches.
+
+#### Performance targets
+
+- p95 first page (`page=1`) < **300ms**
+- p95 next pages < **400ms**
+
+#### QA checklist
+
+1. Cold open of Quotations tab loads first page quickly with visible rows.
+2. Pagination to next pages remains responsive and deterministic.
+3. Sorting/filtering does not cause heavy full-table serialization for bounded `limit`.
+4. `total` and `pagination.totalPages` remain accurate with active filters.
+5. Detail/media views still work via detail endpoint/lazy loading path.
+
+---
+
+### 7.5 Admin Installation — queue + list fields (first-load)
+
+**Frontend:** Admin Panel → **Installation** tab; installer dashboard queue.
+
+Goal: Installation tabs should not fire N× detail calls to discover release/status; queue lists should stay fast without heavy media.
+
+#### Required on Admin quotations list rows
+
+Echo on `GET /api/admin/quotations` (and installer-scoped variants):
+
+- `installationReadyForInstaller` / `installation_ready_for_installer`
+- `installationReleasedAt` / `installation_released_at`
+- `installationStatus` / `installation_status`
+- `installationScheduledAt`, `installationTeamId` when set
+
+#### Installer queue
+
+- `GET /api/installer/quotations` (and aliases) — fast first page; **no heavy media** on critical path by default.
+- Include status, customer, dealer, release flags.
+- Optional `?includeMedia=true` for photo URLs when needed.
+- Target p95 < **300ms**.
+
+#### Optional dedicated list
+
+`GET /api/admin/installation/quotations?status=pending_installer|partial|approved&page=&limit=&search=`
+
+#### QA
+
+1. Installation tabs populate from list fields without per-row detail fetches.
+2. Installer queue first page is fast; photos load via detail or `includeMedia`.
+3. Release flags match Payment Management “Sent to installer” state.
+
+---
+
 ## 9. Dealer Customer Journey + HEIC uploads
 
 **Status: implemented**

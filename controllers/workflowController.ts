@@ -4,7 +4,7 @@ import crypto from 'crypto';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { Op } from 'sequelize';
-import { Quotation, QuotationInstallationDoc, Dealer, Customer, QuotationProduct, Visit, VisitAssignment, Visitor, CustomPanel } from '../models/index-quotation';
+import { Quotation, QuotationInstallationDoc, Dealer, Customer, QuotationProduct, Visit, VisitAssignment, Visitor, CustomPanel, QuotationDocument } from '../models/index-quotation';
 import { logError, logInfo } from '../utils/loggerHelper';
 import {
   buildReleasedToInstallerWhere,
@@ -39,6 +39,7 @@ import {
   meteringDetailsEchoFields,
   parseTruthyFlag
 } from '../utils/installationPartialApi';
+import { buildFinalConfirmationApiFields } from '../utils/finalConfirmationDocuments';
 
 const assertInstallationTeamQuotationScope = (req: Request, quotation: Quotation, res: Response): boolean => {
   const tid = getInstallationTeamIdFromRequest(req);
@@ -186,7 +187,9 @@ const getWorkflowQueue = async (
 ) => {
   try {
     const page = parseInt(req.query.page as string) || 1;
-    const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
+    // Metering queue needs a higher default so Meter Process tabs/counts survive refresh.
+    const defaultLimit = extraWhere.meteringQueue === true ? 1000 : 20;
+    const limit = Math.min(parseInt(req.query.limit as string) || defaultLimit, 1000);
     const offset = (page - 1) * limit;
     const status = (req.query.status as string) || targetStatus;
     const sortBy = (req.query.sortBy as string) || 'createdAt';
@@ -239,57 +242,92 @@ const getWorkflowQueue = async (
 
     const allowedSortFields = new Set(['createdAt', 'approvedAt', 'installerApprovedAt', 'updatedAt']);
     const orderByField = allowedSortFields.has(sortBy) ? sortBy : 'createdAt';
+    const includeMediaRaw = String(req.query.includeMedia || req.query.include_media || '').toLowerCase();
+    const includeVisitsRaw = String(req.query.includeVisits || req.query.include_visits || '').toLowerCase();
+    // §7.5 — installer queue skips heavy media/visits unless opted in; metering/baldev keep media by default.
+    const includeMedia =
+      includeMediaRaw === 'true' || includeMediaRaw === '1'
+        ? true
+        : includeMediaRaw === 'false' || includeMediaRaw === '0'
+          ? false
+          : !releaseRequired;
+    const includeVisits =
+      includeVisitsRaw === 'true' || includeVisitsRaw === '1'
+        ? true
+        : includeVisitsRaw === 'false' || includeVisitsRaw === '0'
+          ? false
+          : includeMedia;
+
+    const includes: any[] = [
+      { model: Dealer, as: 'dealer', attributes: ['id', 'firstName', 'lastName', 'email', 'mobile'] },
+      {
+        model: Customer,
+        as: 'customer',
+        attributes: ['id', 'firstName', 'lastName', 'mobile', 'email', 'streetAddress', 'city', 'state', 'pincode']
+      },
+      { model: QuotationProduct, as: 'products', required: false },
+      { model: CustomPanel, as: 'customPanels', required: false },
+      // §M — Final confirmation preview fields for Baldev / Final process tabs.
+      {
+        model: QuotationDocument,
+        as: 'documents',
+        required: false,
+        attributes: [
+          'customerFinalBillFile',
+          'panelWarrantyFile',
+          'inverterWarrantyFile',
+          'workCompletionWarrantyFile'
+        ]
+      }
+    ];
+    // §7.5 — skip heavy media/visits on queue list critical path unless opted in.
+    if (includeMedia) {
+      includes.push({ model: QuotationInstallationDoc, as: 'installationDocs', required: false });
+    }
+    if (includeVisits) {
+      includes.push({
+        model: Visit,
+        as: 'visits',
+        required: false,
+        attributes: [
+          'id',
+          'visitDate',
+          'visitTime',
+          'location',
+          'locationLink',
+          'status',
+          'createdAt',
+          'length',
+          'width',
+          'height',
+          'unit',
+          'backLegFeet',
+          'midLegFeet',
+          'frontLegFeet',
+          'notes'
+        ],
+        include: [
+          {
+            model: VisitAssignment,
+            as: 'assignments',
+            required: false,
+            attributes: ['visitorId', 'visitorName'],
+            include: [
+              {
+                model: Visitor,
+                as: 'visitor',
+                required: false,
+                attributes: ['id', 'username', 'firstName', 'lastName', 'mobile', 'email']
+              }
+            ]
+          }
+        ]
+      });
+    }
+
     const quotations = await Quotation.findAndCountAll({
       where,
-      include: [
-        { model: Dealer, as: 'dealer', attributes: ['id', 'firstName', 'lastName', 'email', 'mobile'] },
-        {
-          model: Customer,
-          as: 'customer',
-          attributes: ['id', 'firstName', 'lastName', 'mobile', 'email', 'streetAddress', 'city', 'state', 'pincode']
-        },
-        { model: QuotationProduct, as: 'products', required: false },
-        { model: CustomPanel, as: 'customPanels', required: false },
-        { model: QuotationInstallationDoc, as: 'installationDocs', required: false },
-        {
-          model: Visit,
-          as: 'visits',
-          required: false,
-          attributes: [
-            'id',
-            'visitDate',
-            'visitTime',
-            'location',
-            'locationLink',
-            'status',
-            'createdAt',
-            'length',
-            'width',
-            'height',
-            'unit',
-            'backLegFeet',
-            'midLegFeet',
-            'frontLegFeet',
-            'notes'
-          ],
-          include: [
-            {
-              model: VisitAssignment,
-              as: 'assignments',
-              required: false,
-              attributes: ['visitorId', 'visitorName'],
-              include: [
-                {
-                  model: Visitor,
-                  as: 'visitor',
-                  required: false,
-                  attributes: ['id', 'username', 'firstName', 'lastName', 'mobile', 'email']
-                }
-              ]
-            }
-          ]
-        }
-      ],
+      include: includes,
       subQuery: false,
       distinct: true,
       order: [[orderByField, sortOrder]],
@@ -301,7 +339,7 @@ const getWorkflowQueue = async (
       success: true,
       data: {
         quotations: await Promise.all(quotations.rows.map(async (q: any) => {
-          const rawVisits = Array.isArray(q.visits) ? q.visits : [];
+          const rawVisits = includeVisits && Array.isArray(q.visits) ? q.visits : [];
           const sortedVisits = [...rawVisits].sort((a: any, b: any) => {
             const da = new Date(`${a.visitDate || ''} ${a.visitTime || '00:00'}`).getTime();
             const db = new Date(`${b.visitDate || ''} ${b.visitTime || '00:00'}`).getTime();
@@ -343,23 +381,39 @@ const getWorkflowQueue = async (
             };
           });
           const primaryVisit = visits[0] || null;
-          const rawInstallationDocs = (q.installationDocs || []).map((doc: any) =>
-            (typeof doc.toJSON === 'function' ? doc.toJSON() : doc)
-          );
-          const installationPayload = await mapInstallationDocumentsForApi(rawInstallationDocs);
-          const latestMeterDoc = getLatestMeterDocMeta(rawInstallationDocs);
-          const mcoDocFields = await buildMcoDocApiFields(rawInstallationDocs);
-          const meterStoredRef = resolveMeterStoredRef(q.meterDocumentImageUrl, rawInstallationDocs);
-          const meterDocumentFields = await buildMeterDocumentApiFields(
-            meterStoredRef,
-            latestMeterDoc.name
-          );
+          const rawInstallationDocs = includeMedia
+            ? (q.installationDocs || []).map((doc: any) =>
+                typeof doc.toJSON === 'function' ? doc.toJSON() : doc
+              )
+            : [];
+          const installationPayload = includeMedia
+            ? await mapInstallationDocumentsForApi(rawInstallationDocs)
+            : {
+                documents: [],
+                installationDocuments: [],
+                installationPhotoUrls: [],
+                installationFieldUrls: {}
+              };
+          const latestMeterDoc = includeMedia
+            ? getLatestMeterDocMeta(rawInstallationDocs)
+            : { name: null as string | null };
+          const mcoDocFields = includeMedia
+            ? await buildMcoDocApiFields(rawInstallationDocs)
+            : {};
+          const meterStoredRef = includeMedia
+            ? resolveMeterStoredRef(q.meterDocumentImageUrl, rawInstallationDocs)
+            : null;
+          const meterDocumentFields = includeMedia
+            ? await buildMeterDocumentApiFields(meterStoredRef, latestMeterDoc.name)
+            : {};
+          const finalConfirmationFields = await buildFinalConfirmationApiFields(q.documents);
           return {
             id: q.id,
             status: q.status,
             installationReadyForInstaller: Boolean(q.installationReadyForInstaller),
             installation_ready_for_installer: Boolean(q.installationReadyForInstaller),
             installationReleasedAt: q.installationReleasedAt || null,
+            installation_released_at: q.installationReleasedAt || null,
             installationScheduledAt: toDateOnlyStringOrNull(q.installationScheduledAt ?? (q as any).installation_scheduled_at),
             installation_scheduled_at: toDateOnlyStringOrNull(q.installationScheduledAt ?? (q as any).installation_scheduled_at),
             installationTeamId: q.installationTeamId ?? null,
@@ -389,12 +443,14 @@ const getWorkflowQueue = async (
             ...quotationPaymentApiFields(
               typeof q.toJSON === 'function' ? q.toJSON() : (q as any)
             ),
-            ...(await buildMeterInstallationPendingPhotoApiFields({
-              meterInstallationPhotoUrl: (q as any).meterInstallationPhotoUrl,
-              meterInstallationPhotoName: (q as any).meterInstallationPhotoName,
-              plantLivePhotoUrl: (q as any).plantLivePhotoUrl,
-              plantLivePhotoName: (q as any).plantLivePhotoName
-            })),
+            ...(includeMedia
+              ? await buildMeterInstallationPendingPhotoApiFields({
+                  meterInstallationPhotoUrl: (q as any).meterInstallationPhotoUrl,
+                  meterInstallationPhotoName: (q as any).meterInstallationPhotoName,
+                  plantLivePhotoUrl: (q as any).plantLivePhotoUrl,
+                  plantLivePhotoName: (q as any).plantLivePhotoName
+                })
+              : {}),
             discomName: q.discomName || null,
             meterType: q.meterType || null,
             meterNo: q.meterNo || null,
@@ -402,6 +458,7 @@ const getWorkflowQueue = async (
             netMeterNo: q.netMeterNo || null,
             ...meterDocumentFields,
             ...mcoDocFields,
+            ...finalConfirmationFields,
             dealer: q.dealer
               ? {
                 id: q.dealer.id,
@@ -450,7 +507,10 @@ const getWorkflowQueue = async (
             },
             approvedAt: q.approvedAt || null,
             installerApprovedAt: q.installerApprovedAt || null,
-            documents: installationPayload.documents,
+            documents: {
+              ...finalConfirmationFields,
+              ...installationPayload.documents
+            },
             installationDocuments: installationPayload.installationDocuments,
             installationPhotoUrls: installationPayload.installationPhotoUrls,
             installation_photo_urls: installationPayload.installationPhotoUrls,
@@ -461,13 +521,21 @@ const getWorkflowQueue = async (
             quotation: {
               id: q.id,
               status: q.status,
-              installationStatus: q.installationStatus,
-              installation_status: q.installationStatus,
+              ...meteringWorkflowApiFields({
+                installationStatus: q.installationStatus,
+                meteringApprovedAt: q.meteringApprovedAt,
+                mcoAt: q.mcoAt,
+                completionAt: q.completionAt,
+                meterInstallationPendingAt: (q as any).meterInstallationPendingAt,
+                meteringWccAfterDiscom: (q as any).meteringWccAfterDiscom,
+                meteringWccAfterDiscomAt: (q as any).meteringWccAfterDiscomAt
+              }),
               installationTeamId: q.installationTeamId ?? null,
               installation_team_id: q.installationTeamId ?? null,
               installationReadyForInstaller: Boolean(q.installationReadyForInstaller),
               installation_ready_for_installer: Boolean(q.installationReadyForInstaller),
               installationReleasedAt: q.installationReleasedAt || null,
+              installation_released_at: q.installationReleasedAt || null,
               installationScheduledAt: toDateOnlyStringOrNull(q.installationScheduledAt ?? (q as any).installation_scheduled_at),
               installation_scheduled_at: toDateOnlyStringOrNull(q.installationScheduledAt ?? (q as any).installation_scheduled_at)
             }
@@ -510,7 +578,10 @@ export const getMeteringQueue = async (req: Request, res: Response): Promise<voi
   const aliasMap: Record<string, string> = {
     // Processing must only include stages metering can actively work on.
     processing: 'pending_metering,metering_in_progress',
+    pending: 'pending_metering,metering_in_progress',
     approved: 'metering_approved',
+    meter_installation_pending: METER_INSTALLATION_PENDING_STATUS,
+    meter_install_pending: METER_INSTALLATION_PENDING_STATUS,
     mco: 'mco'
   };
   if (aliasMap[status]) {
@@ -591,9 +662,11 @@ export const meteringStatusUpdate = async (req: Request, res: Response): Promise
 
     const patch: Record<string, unknown> = {
       meteringId: req.user?.id || req.dealer?.id || quotation.meteringId || null,
-      meteringActionAt: new Date(),
-      meteringRemarks: (remarks as string | undefined) || null
+      meteringActionAt: new Date()
     };
+    if (remarks !== undefined) {
+      patch.meteringRemarks = (remarks as string | undefined) || null;
+    }
 
     const wf003Message = (act: string, stage: string): string => {
       if (act === 'send_to_mco' && !valid.send_to_mco.includes(stage)) {
@@ -630,6 +703,9 @@ export const meteringStatusUpdate = async (req: Request, res: Response): Promise
         }
         patch.installationStatus = 'metering_approved';
         patch.meteringApprovedAt = new Date();
+        // Land in Meter in Discom (not WCC Pending)
+        patch.meteringWccAfterDiscom = false;
+        patch.meteringWccAfterDiscomAt = null;
       }
       if (action === 'send_to_mco') {
         patch.installationStatus = 'mco';
@@ -728,6 +804,8 @@ export const meteringStatusUpdate = async (req: Request, res: Response): Promise
           }
           patch.installationStatus = 'metering_approved';
           patch.meteringApprovedAt = new Date();
+          patch.meteringWccAfterDiscom = false;
+          patch.meteringWccAfterDiscomAt = null;
         }
       } else if (target === METER_INSTALLATION_PENDING_STATUS) {
         if (current !== 'metering_approved' && current !== METER_INSTALLATION_PENDING_STATUS) {
@@ -1580,7 +1658,9 @@ export const saveMeteringDetails = async (req: Request, res: Response): Promise<
           meteringApprovedAt: quotation.meteringApprovedAt,
           mcoAt: quotation.mcoAt,
           completionAt: quotation.completionAt,
-          meterInstallationPendingAt: (quotation as any).meterInstallationPendingAt
+          meterInstallationPendingAt: (quotation as any).meterInstallationPendingAt,
+          meteringWccAfterDiscom: (quotation as any).meteringWccAfterDiscom,
+          meteringWccAfterDiscomAt: (quotation as any).meteringWccAfterDiscomAt
         }),
         ...meteringDetailsEchoFields({
           meteringRemarks: quotation.meteringRemarks,

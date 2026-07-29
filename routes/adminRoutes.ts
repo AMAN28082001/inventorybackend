@@ -32,7 +32,7 @@ import {
   updateVisitorPassword,
   deleteVisitor
 } from '../controllers/adminVisitorController';
-import { getAdminCallingActions, getHrLeadUploadBatchRows, assignHrUploadUnassigned } from '../controllers/callingLeadController';
+import { getAdminCallingActions, getAdminCallingActionsSummary, getHrLeadUploadBatchRows, assignHrUploadUnassigned } from '../controllers/callingLeadController';
 import { assignUnassignedLeadsSchema } from '../validations/callingLeadValidations';
 import {
   listInstallationTeams,
@@ -415,6 +415,7 @@ router.patch('/dealers/:dealerId/activate', activateDealer);
  *       - bearerAuth: []
  */
 router.get('/statistics', getSystemStatistics);
+router.get('/calling-actions/summary', getAdminCallingActionsSummary);
 router.get('/calling-actions', getAdminCallingActions);
 router.get('/calling-queue/actions', getAdminCallingActions);
 router.get('/leads/actions', getAdminCallingActions);

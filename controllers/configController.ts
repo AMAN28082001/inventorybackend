@@ -12,15 +12,32 @@ import {
 } from '../utils/defaultPricingTables';
 import { normalizeProductCatalog } from '../utils/productCatalogNormalize';
 
+const CONFIG_CACHE_TTL_MS = 60 * 1000;
+let productCatalogCache: { value: any; expiresAt: number } | null = null;
+let pricingTablesCache: { value: any; expiresAt: number } | null = null;
+
 // Get product catalog
 export const getProductCatalog = async (_req: Request, res: Response): Promise<void> => {
   try {
+    const now = Date.now();
+    if (productCatalogCache && productCatalogCache.expiresAt > now) {
+      res.json({
+        success: true,
+        data: productCatalogCache.value
+      });
+      return;
+    }
+
     const config = await SystemConfig.findByPk('product_catalog');
 
     if (!config) {
       // Return default empty structure if no config exists
       const defaultCatalog = normalizeProductCatalog(null);
 
+      productCatalogCache = {
+        value: defaultCatalog,
+        expiresAt: now + CONFIG_CACHE_TTL_MS
+      };
       res.json({
         success: true,
         data: defaultCatalog
@@ -45,6 +62,10 @@ export const getProductCatalog = async (_req: Request, res: Response): Promise<v
 
     // Normalize catalog to ensure all arrays are arrays (never null/undefined)
     const normalizedCatalog = normalizeProductCatalog(catalog);
+    productCatalogCache = {
+      value: normalizedCatalog,
+      expiresAt: now + CONFIG_CACHE_TTL_MS
+    };
 
     res.json({
       success: true,
@@ -182,6 +203,8 @@ export const updateProductCatalog = async (req: Request, res: Response): Promise
       });
     }
 
+    productCatalogCache = null;
+
     logInfo('Product catalog updated', {
       updatedBy: userId,
       timestamp: new Date().toISOString()
@@ -258,12 +281,25 @@ const normalizePricingTables = (pricing: any): any => {
 // Get pricing tables
 export const getPricingTables = async (_req: Request, res: Response): Promise<void> => {
   try {
+    const now = Date.now();
+    if (pricingTablesCache && pricingTablesCache.expiresAt > now) {
+      res.json({
+        success: true,
+        data: pricingTablesCache.value
+      });
+      return;
+    }
+
     const config = await SystemConfig.findByPk('pricing_tables');
 
     if (!config) {
       // Return default empty structure if no config exists
       const defaultPricing = normalizePricingTables(null);
 
+      pricingTablesCache = {
+        value: defaultPricing,
+        expiresAt: now + CONFIG_CACHE_TTL_MS
+      };
       res.json({
         success: true,
         data: defaultPricing
@@ -288,6 +324,10 @@ export const getPricingTables = async (_req: Request, res: Response): Promise<vo
 
     // Normalize pricing to ensure all arrays are arrays
     const normalizedPricing = normalizePricingTables(pricing);
+    pricingTablesCache = {
+      value: normalizedPricing,
+      expiresAt: now + CONFIG_CACHE_TTL_MS
+    };
 
     res.json({
       success: true,
@@ -367,6 +407,8 @@ export const updatePricingTables = async (req: Request, res: Response): Promise<
         updatedAt: new Date()
       });
     }
+
+    pricingTablesCache = null;
 
     logInfo('Pricing tables updated', {
       updatedBy: userId,

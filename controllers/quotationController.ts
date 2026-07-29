@@ -66,7 +66,8 @@ import {
 } from '../utils/quotationProductPdfDisplay';
 import {
   FINAL_CONFIRMATION_DOCUMENT_FIELDS,
-  isFinalConfirmationDocumentField
+  isFinalConfirmationDocumentField,
+  buildFinalConfirmationApiFields
 } from '../utils/finalConfirmationDocuments';
 import { isPanelSizeAllowed, isAllowedPanelBrandForCatalog, normalizeProductCatalog } from '../utils/productCatalogNormalize';
 import { isAllowedDisplayCableSize, isAsPerTheSet } from '../utils/productDisplayValues';
@@ -85,17 +86,32 @@ import {
   standardImageValidationMessage
 } from '../utils/uploadMimeTypes';
 
+const PRODUCT_CATALOG_CACHE_TTL_MS = 60 * 1000;
+let productCatalogCacheValue: any | null = null;
+let productCatalogCacheUntil = 0;
+
 // Helper function to get product catalog
 const getProductCatalogData = async (): Promise<any> => {
   try {
+    const now = Date.now();
+    if (productCatalogCacheValue && productCatalogCacheUntil > now) {
+      return productCatalogCacheValue;
+    }
+
     const config = await SystemConfig.findByPk('product_catalog');
     if (!config) {
-      return normalizeProductCatalog(null);
+      const normalized = normalizeProductCatalog(null);
+      productCatalogCacheValue = normalized;
+      productCatalogCacheUntil = now + PRODUCT_CATALOG_CACHE_TTL_MS;
+      return normalized;
     }
     const catalog = typeof config.configValue === 'string' 
       ? JSON.parse(config.configValue) 
       : config.configValue;
-    return normalizeProductCatalog(catalog);
+    const normalized = normalizeProductCatalog(catalog);
+    productCatalogCacheValue = normalized;
+    productCatalogCacheUntil = now + PRODUCT_CATALOG_CACHE_TTL_MS;
+    return normalized;
   } catch (error) {
     logError('Failed to get product catalog', error);
     return normalizeProductCatalog(null);
@@ -1534,11 +1550,6 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
             required: false
           },
           {
-            model: QuotationInstallationDoc,
-            as: 'installationDocs',
-            required: false
-          },
-          {
             model: Dealer,
             as: 'dealer',
             attributes: ['id', 'firstName', 'lastName', 'email', 'mobile', 'username', 'role'],
@@ -1574,11 +1585,6 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
             required: false
           },
           {
-            model: QuotationInstallationDoc,
-            as: 'installationDocs',
-            required: false
-          },
-          {
             model: Dealer,
             as: 'dealer',
             attributes: ['id', 'firstName', 'lastName', 'email', 'mobile', 'username', 'role'],
@@ -1591,13 +1597,29 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
       });
     }
 
-    const phaseMap = await fetchPaymentPhasesByQuotationIds(quotations.rows.map((q: any) => String(q.id)));
+    const quotationIds = quotations.rows.map((q: any) => String(q.id));
+    const phaseMap = await fetchPaymentPhasesByQuotationIds(quotationIds);
+
+    // Avoid costly JOIN fan-out on list queries; load installation docs in one batched query.
+    const installationDocsByQuotationId = new Map<string, any[]>();
+    if (quotationIds.length > 0) {
+      const installationDocsRows = await QuotationInstallationDoc.findAll({
+        where: { quotationId: { [Op.in]: quotationIds } },
+        order: [['createdAt', 'ASC']]
+      });
+      for (const row of installationDocsRows as any[]) {
+        const qId = String(row.quotationId);
+        if (!installationDocsByQuotationId.has(qId)) installationDocsByQuotationId.set(qId, []);
+        installationDocsByQuotationId.get(qId)!.push(row);
+      }
+    }
+
     const formattedQuotations = await Promise.all(quotations.rows.map(async q => {
       const customer = (q as any).customer;
       const products = (q as any).products;
       const dealer = (q as any).dealer;
       const documents = (q as any).documents;
-      const installationDocs = (q as any).installationDocs || [];
+      const installationDocs = installationDocsByQuotationId.get(String(q.id)) || [];
       const phaseRows = phaseMap.get(String(q.id)) || ((q as any).paymentPhases || []);
       const resolvedDocuments = await resolveQuotationDocumentUrls(documents);
       
@@ -1718,6 +1740,7 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
           ...(resolvedDocuments || {}),
           ...installationPayload.documents
         },
+        ...(await buildFinalConfirmationApiFields(resolvedDocuments)),
         ...installationPayload.installationFieldUrls,
         phoneNumber: prefillPhoneNumber,
         phone_number: prefillPhoneNumber,
@@ -2201,6 +2224,7 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
           ...(resolvedDocuments || {}),
           ...installationPayload.documents
         },
+        ...(await buildFinalConfirmationApiFields(resolvedDocuments)),
         phoneNumber: prefillPhoneNumber,
         phone_number: prefillPhoneNumber,
         emailId: prefillEmailId,
@@ -4081,15 +4105,9 @@ const requestIsFinalConfirmationOnlyUpload = (req: Request): boolean => {
   return !hasKycText;
 };
 
-const buildFinalConfirmationResponseExtras = (resolved: Record<string, unknown>) => {
-  const extras: Record<string, string | null> = {};
-  for (const field of FINAL_CONFIRMATION_DOCUMENT_FIELDS) {
-    const value = (resolved[field] as string | null | undefined) ?? null;
-    extras[field] = value;
-    extras[`${field}Url`] = value;
-  }
-  return extras;
-};
+const buildFinalConfirmationResponseExtras = async (
+  resolved: Record<string, unknown>
+): Promise<Record<string, string | null>> => buildFinalConfirmationApiFields(resolved);
 
 const upsertFinalConfirmationDocumentFields = async (
   quotationId: string,
@@ -4117,7 +4135,7 @@ const upsertFinalConfirmationDocumentFields = async (
 /** POST …/final-confirmation-documents — admin / baldev partial uploads (§M). */
 export const saveFinalConfirmationDocuments = async (req: Request, res: Response): Promise<void> => {
   try {
-    const role = req.user?.role;
+    const role = req.user?.role || req.dealer?.role;
     if (!isOperationalDocumentsEditorRole(role)) {
       res.status(403).json({
         success: false,
@@ -4198,13 +4216,17 @@ export const saveFinalConfirmationDocuments = async (req: Request, res: Response
 
     const documents = await upsertFinalConfirmationDocumentFields(quotation.id, fieldUpdates, existing);
     const resolvedSavedDocuments = await resolveQuotationDocumentUrls(documents);
+    const finalConfirmationFields = await buildFinalConfirmationResponseExtras(resolvedSavedDocuments);
 
     res.json({
       success: true,
       data: {
         quotationId: quotation.id,
-        documents: resolvedSavedDocuments,
-        ...buildFinalConfirmationResponseExtras(resolvedSavedDocuments)
+        documents: {
+          ...resolvedSavedDocuments,
+          ...finalConfirmationFields
+        },
+        ...finalConfirmationFields
       }
     });
   } catch (error: any) {
@@ -4337,7 +4359,9 @@ export const uploadQuotationDocument = async (req: Request, res: Response): Prom
           [fieldName]: usableUrl,
           [urlKey]: usableUrl
         },
-        ...(persistedDocuments ? buildFinalConfirmationResponseExtras(persistedDocuments) : {})
+        ...(persistedDocuments
+          ? await buildFinalConfirmationResponseExtras(persistedDocuments)
+          : {})
       }
     });
   } catch (error: any) {

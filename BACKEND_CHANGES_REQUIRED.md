@@ -656,6 +656,132 @@ Set on create/update from products; return as `systemKw` / `system_kw` on list (
 
 ---
 
+## §6.5.2 — Admin Overview first paint and stats endpoint optimization
+
+**Handoff:** `BACKEND_CHANGES_HANDOFF.md` §7.2.
+
+### Problem
+
+On first Admin Overview load, cards may render as `0` / `₹0.0L` while full quotation list APIs are still loading.
+
+### Required backend behavior
+
+| Item | Requirement |
+|------|-------------|
+| Endpoint | Keep `GET /api/admin/statistics` lightweight and dedicated for card counters |
+| Response shape | Stable keys for quick frontend mapping: `overview.totalQuotations`, `overview.totalRevenue`, `thisMonth.quotations`, `thisMonth.revenue`, `thisMonth.approvedCustomers` |
+| Query model | DB-side aggregates only (`COUNT`, `SUM`, `COUNT DISTINCT`, grouped queries); avoid full-row serialization for stats |
+| Isolation | Card counters must not depend on heavy `/api/admin/quotations` response timing |
+
+### Query plan (recommended)
+
+- Parallelize independent stats with `Promise.all`.
+- Use grouped queries for status and top-dealer blocks.
+- Keep date-window filters index-friendly and avoid non-sargable expressions.
+
+### Caching
+
+| Topic | Requirement |
+|-------|-------------|
+| TTL | Short cache (recommended 10–30s; acceptable up to 60s) |
+| Scope | Key by request filters (`startDate`, `endDate`, dealer filter) |
+| Invalidation | Clear or refresh cache after writes that affect overview counters |
+
+### Index guidance
+
+Recommended indexes (or equivalents):
+- `quotations(status, createdAt)`
+- `quotations(statusApprovedAt)` for approval-window metrics
+- `quotations(dealerId, createdAt)`
+- `quotations(paymentStatus, createdAt)`
+- optional: `visitors(createdAt, isActive)`
+
+### Performance SLO
+
+- `GET /api/admin/statistics` target p95: **< 300ms** in production-like load.
+
+### QA
+
+1. Cold hard-refresh: Overview cards populate quickly with non-zero values.
+2. Stats endpoint returns before full list APIs in common path.
+3. Values are consistent with DB aggregates for the same filter window.
+4. Post-write consistency: counters update within cache TTL/invalidation policy.
+5. Large data volume: endpoint remains fast and stable (no timeout/spike regressions).
+
+---
+
+## §6.5.3 — Admin Quotations tab first page performance
+
+**Frontend:** `app/dashboard/admin/page.tsx` → Quotations tab  
+**Handoff:** `BACKEND_CHANGES_HANDOFF.md` §7.4.
+
+### Problem
+
+Admin Quotations tab can feel slow when list rendering waits on heavy row enrichment/media payloads.
+
+### Required backend behavior
+
+| Item | Requirement |
+|------|-------------|
+| First page speed | Optimize `GET /api/admin/quotations?page=1&limit=...` for fast first paint |
+| Lightweight rows | Return fields needed for immediate table render; avoid loading heavy optional detail/media in critical path |
+| Pagination contract | Return stable metadata (`total`, `pagination.totalPages`, page/limit/hasNext/hasPrev) |
+| Default ordering | Deterministic newest-first order (`createdAt DESC`) unless explicit sort is passed |
+| Progressive loading | Keep page-1 response fast; next pages should not require first-page blocking enrichments |
+
+### List payload guidance
+
+- Prioritize core table columns (id, status, customer/dealer identity, primary amounts, key timestamps/workflow badges).
+- Avoid expensive joins for optional nested objects on page-1 query path.
+- Keep detail/media-heavy enrichment in quotation detail endpoints or lazy follow-up calls.
+
+### Performance SLO
+
+| Path | Target |
+|------|--------|
+| First page p95 | **< 300ms** |
+| Next pages p95 | **< 400ms** |
+
+### QA
+
+1. Cold-load Quotations tab: first page rows appear quickly.
+2. Pagination (page 2/3/...) remains responsive with stable ordering.
+3. Bounded `limit` does not trigger unbounded heavy serialization.
+4. `total` and `pagination.totalPages` stay accurate under filters/search.
+5. Opening row details still returns full enriched payload from detail path.
+
+---
+
+## §6.5.4 — Admin Installation queue + list fields (first-load)
+
+**Frontend:** Admin Installation tab + installer dashboard  
+**Handoff:** `BACKEND_CHANGES_HANDOFF.md` §7.5.
+
+### Problem
+
+Installation UIs re-fetch detail per row when list omits release/status fields, and queue lists are slow when every row resolves media/visits.
+
+### Required backend behavior
+
+| Item | Requirement |
+|------|-------------|
+| List fields | Admin quotation rows include release + `installationStatus` (+ scheduled/team when set) |
+| Installer queue | Fast first page; skip heavy media/visits by default |
+| Media opt-in | `?includeMedia=true` when thumbnails are required |
+| SLO | Installer queue p95 **< 300ms** |
+
+### Optional
+
+`GET /api/admin/installation/quotations?status=pending_installer|partial|approved&page=&limit=&search=`
+
+### QA
+
+1. List rows alone are enough for Pending / Partial / Approved tab filters.
+2. Queue without `includeMedia` returns quickly with empty/omitted photo arrays.
+3. Detail endpoint still returns full media when opening a job.
+
+---
+
 ## §L.1 — Quotations tab → Send to Metering (`pending_metering`)
 
 **Handoff:** `BACKEND_CHANGES_HANDOFF.md` §21 (frontend pack may label §11). **Status: implemented.** **No new route.**
@@ -1101,6 +1227,81 @@ curl -s -X PATCH "$BASE/api/dealers/me/calling-queue/$LEAD_ID/action" \
 curl -s "$BASE/api/dealers/calling-actions?limit=50" \
   -H "Authorization: Bearer $DEALER_JWT"
 ```
+
+---
+
+## §J.2.1 — Admin Calling Reports first-load optimization
+
+**Frontend:** `app/dashboard/admin/page.tsx` → Calling Reports (`Employee Calling Actions` cards)
+
+### Problem
+
+Admin Calling Reports first paint can feel slow when counters wait on heavy action list fetch/parse.
+
+### Required backend behavior
+
+| Item | Requirement |
+|------|-------------|
+| List API | Optimize `GET /api/admin/calling-actions` for filtered fetch (`dealerId`, `startDate`, `endDate`, `range`) |
+| Limit-aware first paint | When `limit` is present (frontend uses bounded first fetch, currently `limit=1000`), return quickly without scanning/serializing unbounded all-time rows |
+| Default ordering | `actionAt DESC` (newest first) for instant recent-first render |
+| Stable row fields | Return `id`, `leadId`, `dealerId`, `dealerName`, `action`, `actionAt`, `callRemark`, `statusText`/`status_text`, `statusCategory`/`status_category` |
+| De-duplication | Prevent duplicate logical events in list output and counting path |
+| Classification support | Keep status fields consistent so frontend can classify cards instantly without extra transforms |
+| Join strategy | Avoid expensive joins in the critical path unless required for the card/list contract |
+
+### Filter-first API behavior
+
+- Prioritize server-side filters (`dealerId`, `startDate`, `endDate`) before serialization.
+- Respect bounded `limit` for first paint and keep default behavior pagination-friendly.
+- Avoid returning unbounded all-time rows by default.
+
+### Optional summary endpoint
+
+`GET /api/admin/calling-actions/summary?dealerId=&startDate=&endDate=`
+
+Recommended response:
+
+```json
+{
+  "success": true,
+  "data": {
+    "summary": {
+      "interested": 0,
+      "followUp": 0,
+      "notInterested": 0,
+      "others": 0,
+      "total": 0
+    }
+  }
+}
+```
+
+### Caching + SLO
+
+| Area | Target |
+|------|--------|
+| Summary API p95 | **< 200ms** |
+| Filtered list API p95 | **< 400ms** |
+| Cache TTL | 10–30s recommended (max 60s) |
+
+Cache key should include `dealerId`, date window, and `range`. Invalidate/refresh on action writes if strict freshness is needed.
+
+### Pagination-friendly response (recommended)
+
+- Return first chunk fast with metadata:
+  - page mode: `page`, `limit`, `total`, `totalPages`
+  - or cursor mode: `nextCursor`
+- Ensure metadata calculation does not block first-response latency for bounded `limit` requests.
+
+### QA
+
+1. First load: counters render quickly, before or alongside list.
+2. Dealer/date filters: counters and list both update with low latency.
+3. Summary counts match list classification for same filters.
+4. Re-open within TTL: faster response with consistent values.
+5. Retry/double-submit does not create duplicate rows or double counter increments.
+6. `GET /api/admin/calling-actions?limit=1000` does not trigger full-table heavy serialization and returns fast.
 
 ---
 

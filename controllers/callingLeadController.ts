@@ -64,6 +64,10 @@ const STATUS_CATEGORY_ALIASES: Record<string, (typeof ALLOWED_STATUS_CATEGORIES)
   other: 'other'
 };
 const DATE_RANGE_ALIASES = ['today', 'week', 'month', 'custom'] as const;
+const CALLING_DEALERS_CACHE_TTL_MS = 60 * 1000;
+
+let cachedActiveDealers: Array<{ id: string; firstName: string; lastName: string }> | null = null;
+let cachedActiveDealersExpiresAt = 0;
 
 type CallingActionType = 'called' | 'follow_up' | 'not_interested' | 'rescheduled';
 type CallingActionFilterRange = (typeof CALLING_ACTION_FILTER_RANGES)[number];
@@ -1381,45 +1385,72 @@ const buildCallingActionsResponse = async (req: Request) => {
   const page = parsePositiveInt(req.query.page, 1);
   const limit = Math.min(parsePositiveInt(req.query.limit, 20), 2000);
   const offset = (page - 1) * limit;
+  const hasExplicitLimit = req.query.limit !== undefined && req.query.limit !== null;
+  const summaryScope = String(req.query.summaryScope || req.query.summary_scope || 'page').trim().toLowerCase();
+  const wantsFullSummary = !hasExplicitLimit && summaryScope === 'full';
   const where = buildCallingActionsFilter(req);
 
-  const [rows, summarySourceRows] = await Promise.all([
-    CallingActionHistory.findAndCountAll({
-      where,
-      order: [['actionAt', 'DESC'], ['createdAt', 'DESC']],
-      limit,
-      offset
-    }),
-    CallingActionHistory.findAll({
-      where,
-      attributes: [
-        'action',
-        'statusLabel',
-        'statusReason',
-        'callRemark',
-        'statusCategory',
-        'reasonCategory'
-      ]
-    })
-  ]);
+  const rows = await CallingActionHistory.findAndCountAll({
+    where,
+    raw: true,
+    order: [['actionAt', 'DESC'], ['id', 'DESC']],
+    limit,
+    offset
+  });
 
-  const actionDealerIds = Array.from(new Set(rows.rows.map((row) => row.dealerId)));
-  const [allDealers, actionDealers] = await Promise.all([
-    Dealer.findAll({
-      where: { role: 'dealer', isActive: true },
-      attributes: ['id', 'firstName', 'lastName'],
-      order: [['firstName', 'ASC'], ['lastName', 'ASC']]
-    }),
-    actionDealerIds.length
-      ? Dealer.findAll({
-        where: { id: { [Op.in]: actionDealerIds } },
-        attributes: ['id', 'firstName', 'lastName']
+  const summarySourceRows = wantsFullSummary
+    ? await CallingActionHistory.findAll({
+        where,
+        raw: true,
+        attributes: [
+          'action',
+          'statusLabel',
+          'statusReason',
+          'callRemark',
+          'statusCategory',
+          'reasonCategory'
+        ]
       })
+    : rows.rows;
+
+  const actionDealerIds = Array.from(new Set(rows.rows.map((row: any) => String(row.dealerId || '')).filter(Boolean)));
+  const now = Date.now();
+  const activeDealersPromise =
+    cachedActiveDealers && cachedActiveDealersExpiresAt > now
+      ? Promise.resolve(cachedActiveDealers)
+      : Dealer.findAll({
+          where: { role: 'dealer', isActive: true },
+          raw: true,
+          attributes: ['id', 'firstName', 'lastName'],
+          order: [['firstName', 'ASC'], ['lastName', 'ASC']]
+        }).then((dealers) => {
+          cachedActiveDealers = (dealers as any[]).map((d) => ({
+            id: String(d.id),
+            firstName: String(d.firstName || ''),
+            lastName: String(d.lastName || '')
+          }));
+          cachedActiveDealersExpiresAt = Date.now() + CALLING_DEALERS_CACHE_TTL_MS;
+          return cachedActiveDealers;
+        });
+
+  const missingDealerIds = actionDealerIds.filter((dealerId) => {
+    const row = rows.rows.find((r: any) => String(r.dealerId || '') === dealerId);
+    return !String((row as any)?.dealerName || '').trim();
+  });
+
+  const [allDealers, actionDealers] = await Promise.all([
+    activeDealersPromise,
+    missingDealerIds.length
+      ? Dealer.findAll({
+          where: { id: { [Op.in]: missingDealerIds } },
+          raw: true,
+          attributes: ['id', 'firstName', 'lastName']
+        })
       : Promise.resolve([])
   ]);
   const dealerNameMap = new Map<string, string>();
-  for (const dealer of actionDealers) {
-    dealerNameMap.set(dealer.id, `${dealer.firstName || ''} ${dealer.lastName || ''}`.trim());
+  for (const dealer of actionDealers as any[]) {
+    dealerNameMap.set(String(dealer.id), `${dealer.firstName || ''} ${dealer.lastName || ''}`.trim());
   }
 
   const total = rows.count;
@@ -1430,7 +1461,7 @@ const buildCallingActionsResponse = async (req: Request) => {
     others: 0,
     total: summarySourceRows.length
   };
-  const summary = summarySourceRows.reduce((acc, row) => {
+  const summary = (summarySourceRows as any[]).reduce((acc, row) => {
     const bucket = classifyCallingActionSummaryBucket({
       action: row.action,
       statusLabel: row.statusLabel,
@@ -1445,7 +1476,7 @@ const buildCallingActionsResponse = async (req: Request) => {
     return acc;
   }, summarySeed);
 
-  const actionRows = rows.rows.map((row) => {
+  const actionRows = rows.rows.map((row: any) => {
     const statusText = resolveCallingActionStatusText({
       statusLabel: row.statusLabel,
       statusReason: row.statusReason,
@@ -1489,8 +1520,8 @@ const buildCallingActionsResponse = async (req: Request) => {
     };
   });
 
-  const dealers = allDealers.map((dealer) => ({
-    dealerId: dealer.id,
+  const dealers = (allDealers as any[]).map((dealer) => ({
+    dealerId: String(dealer.id),
     dealerName: `${dealer.firstName || ''} ${dealer.lastName || ''}`.trim()
   }));
 
@@ -1521,6 +1552,70 @@ const buildCallingActionsResponse = async (req: Request) => {
       hasPrev: page > 1
     }
   };
+};
+
+const CALLING_SUMMARY_CACHE_TTL_MS = 20 * 1000;
+const callingSummaryCache = new Map<string, { expiresAt: number; summary: any }>();
+
+const buildCallingActionsSummaryOnly = async (req: Request) => {
+  const where = buildCallingActionsFilter(req);
+  const dealerId = String(req.query.dealerId || req.query.dealer_id || '');
+  const startDate = String(req.query.startDate || req.query.start_date || '');
+  const endDate = String(req.query.endDate || req.query.end_date || '');
+  const range = String(req.query.range || req.query.dateRange || '');
+  const cacheKey = `sum:${dealerId}:${startDate}:${endDate}:${range}`;
+  const cached = callingSummaryCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.summary;
+  }
+
+  const summarySourceRows = await CallingActionHistory.findAll({
+    where,
+    raw: true,
+    attributes: [
+      'action',
+      'statusLabel',
+      'statusReason',
+      'callRemark',
+      'statusCategory',
+      'reasonCategory'
+    ]
+  });
+
+  const summarySeed = {
+    interested: 0,
+    follow_up: 0,
+    not_interested: 0,
+    others: 0,
+    total: summarySourceRows.length
+  };
+  const summary = (summarySourceRows as any[]).reduce((acc, row) => {
+    const bucket = classifyCallingActionSummaryBucket({
+      action: row.action,
+      statusLabel: row.statusLabel,
+      statusReason: row.statusReason,
+      callRemark: row.callRemark,
+      statusCategory: row.statusCategory
+    });
+    if (bucket === 'interested') acc.interested += 1;
+    else if (bucket === 'followUp') acc.follow_up += 1;
+    else if (bucket === 'notInterested') acc.not_interested += 1;
+    else acc.others += 1;
+    return acc;
+  }, summarySeed);
+
+  const payload = {
+    interested: summary.interested,
+    followUp: summary.follow_up,
+    notInterested: summary.not_interested,
+    others: summary.others,
+    total: summary.total
+  };
+  callingSummaryCache.set(cacheKey, {
+    expiresAt: Date.now() + CALLING_SUMMARY_CACHE_TTL_MS,
+    summary: payload
+  });
+  return payload;
 };
 
 const resolveAssignedByUserId = async (req: Request, transaction: any): Promise<string> => {
@@ -4812,6 +4907,29 @@ export const getAdminCallingActions = async (req: Request, res: Response): Promi
   }
 };
 
+export const getAdminCallingActionsSummary = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const summary = await buildCallingActionsSummaryOnly(req);
+    res.json({
+      success: true,
+      data: {
+        summary,
+        interested: summary.interested,
+        followUp: summary.followUp,
+        notInterested: summary.notInterested,
+        others: summary.others,
+        total: summary.total
+      }
+    });
+  } catch (error) {
+    logError('Get admin calling actions summary error', error, { userId: req.user?.id });
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
+};
+
 export const getHrCallingActions = async (req: Request, res: Response): Promise<void> => {
   try {
     const data = await buildCallingActionsResponse(req);
@@ -4821,6 +4939,29 @@ export const getHrCallingActions = async (req: Request, res: Response): Promise<
     });
   } catch (error) {
     logError('Get HR calling actions error', error, { userId: req.user?.id });
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
+};
+
+export const getHrCallingActionsSummary = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const summary = await buildCallingActionsSummaryOnly(req);
+    res.json({
+      success: true,
+      data: {
+        summary,
+        interested: summary.interested,
+        followUp: summary.followUp,
+        notInterested: summary.notInterested,
+        others: summary.others,
+        total: summary.total
+      }
+    });
+  } catch (error) {
+    logError('Get HR calling actions summary error', error, { userId: req.user?.id });
     res.status(500).json({
       success: false,
       error: { code: 'SYS_001', message: 'Internal server error' }
