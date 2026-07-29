@@ -559,6 +559,24 @@ Missing `installationStatus` → Excel shows **Workflow Pending** for all rows a
 **QA:** Quotation Admin token → `GET /api/users` and `GET /api/users/agents` → **200** (not 401).  
 **No second login:** Same token → `GET /api/inventory-auth/me` → 200 with `requiresInventoryLogin: false` (do not force `/inventory-auth/login`).
 
+### Review & Dispatch — `dispatched_by_id` FK (Jul 2026) — IMPLEMENTED
+
+**Handoff:** `BACKEND_CHANGES_HANDOFF.md` §16 · **Ref:** `BACKEND_STOCK_REQUESTS_DISPATCHED_BY.ts`
+
+`POST /api/stock-requests/:id/dispatch` resolves/upserts an inventory `users` row before writing `dispatched_by_id` (body id → JWT id → upsert). Missing actor → **400 `INV_USER_MISSING`** (never raw `stock_requests_dispatched_by_id_fkey`).
+
+### Agent Record Sale — `sales_created_by_fkey` (Jul 2026) — IMPLEMENTED
+
+**Handoff:** `BACKEND_CHANGES_HANDOFF.md` §20 · **Ref:** `BACKEND_SALES_CREATED_BY.ts`
+
+`POST /api/sales` resolves/upserts an inventory `users` row before writing `sales.created_by` (body `created_by` / `createdBy` / `created_by_id` / `createdById` → JWT id → upsert). Missing actor → **400 `INV_USER_MISSING`** (never raw `sales_created_by_fkey`).
+
+### Agent sell-from-admin — use `admin_inventory` (Jul 2026) — IMPLEMENTED
+
+**Handoff:** `BACKEND_CHANGES_HANDOFF.md` §21 · **Ref:** `BACKEND_SALES_ADMIN_STOCK.ts`
+
+When body has `admin_id` / `adminId` / `sell_from_admin_id` / `stock_admin_id` (or `stock_source: "admin"` / `use_admin_stock`), `POST /api/sales` checks and deducts **`admin_inventory` only** — never central `products.quantity`. Short → **400 `INSUFFICIENT_ADMIN_STOCK`**. Persists `sales.admin_id`.
+
 ---
 
 ### Admin Overview kW — verify list payload (no new endpoint)

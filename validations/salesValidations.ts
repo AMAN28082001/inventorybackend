@@ -52,8 +52,20 @@ export const createSaleSchema = z.object({
   customer_email: z.string().email().nullable().optional(),
   customer_phone: z.string().nullable().optional(),
   delivery_instructions: z.string().nullable().optional(),
-  notes: z.string().nullable().optional()
-}).refine((data) => {
+  notes: z.string().nullable().optional(),
+  // Agent / Quotation Admin — sell from a specific admin warehouse (§21)
+  admin_id: z.string().optional(),
+  adminId: z.string().optional(),
+  sell_from_admin_id: z.string().optional(),
+  stock_admin_id: z.string().optional(),
+  stock_source: z.string().optional(),
+  use_admin_stock: z.union([z.boolean(), z.string(), z.number()]).optional(),
+  created_by: z.string().optional(),
+  createdBy: z.string().optional(),
+  created_by_id: z.string().optional(),
+  createdById: z.string().optional(),
+  serial_numbers: z.any().optional()
+}).passthrough().refine((data) => {
   // Either items array/string is provided, or legacy single-item fields are provided
   return data.items !== undefined || (data.product_id !== undefined || (data.product_name !== undefined && data.model !== undefined));
 }, {

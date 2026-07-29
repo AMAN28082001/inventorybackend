@@ -40,9 +40,12 @@
 | 28 | High | Admin Overview → Product Needed (installation-pending brands) | **Done** | §13 / `BACKEND_ADMIN_PRODUCT_NEEDED.ts` |
 | 29 | High | Inventory Tally import — `POST /products` without serials + clear errors | **Done** | §14 |
 | 30 | High | Calling FCFS + `/current` never 500 + assign-unassigned (Unassigned→0) | **Done** | §15 / `BACKEND_ASSIGN_UNASSIGNED.ts` |
-| 31 | High | Metering dual track — Bank process + installer auth | **Done** | §17 / `BACKEND_METERING_DUAL_TRACK.md` |
-| 32 | High | Document Submission — Property Documents PDF optional | **Done** | §18 / `BACKEND_PROPERTY_DOCUMENT_OPTIONAL.md` |
-| 33 | High | Non-DCR 80kW set — Renew Energy / Waaree / Adani | **Done** | §19 / `BACKEND_NON_DCR_80KW.md` |
+| 31 | High | Inventory Review & Dispatch — `dispatched_by_id` FK (Quotation Admin) | **Done** | §16 / `BACKEND_STOCK_REQUESTS_DISPATCHED_BY.ts` |
+| 32 | High | Inventory Agent sale — `sales_created_by_fkey` | **Done** | §20 / `BACKEND_SALES_CREATED_BY.ts` |
+| 33 | High | Inventory Agent sale — admin stock (not central) | **Done** | §21 / `BACKEND_SALES_ADMIN_STOCK.ts` |
+| 34 | High | Metering dual track — Bank process + installer auth | **Done** | §17 / `BACKEND_METERING_DUAL_TRACK.md` |
+| 35 | High | Document Submission — Property Documents PDF optional | **Done** | §18 / `BACKEND_PROPERTY_DOCUMENT_OPTIONAL.md` |
+| 36 | High | Non-DCR 80kW set — Renew Energy / Waaree / Adani | **Done** | §19 / `BACKEND_NON_DCR_80KW.md` |
 
 **Deploy before QA:**
 
@@ -1895,6 +1898,92 @@ SPA already aggregates from `GET /admin/quotations` when this route is missing.
 3. Two Tata “As per the set” qty 0 → **2 sets**.
 4. Filter by dealer → totals for that dealer only.
 5. Non-admin → **403**.
+
+---
+
+## 16. Inventory — Review & Dispatch `dispatched_by_id` FK (Jul 2026)
+
+**Frontend:** Inventory → Review & Dispatch  
+**Failing call (before fix):** `POST /api/stock-requests/:id/dispatch` → FK `stock_requests_dispatched_by_id_fkey`
+
+**Cause:** Quotation Admin JWT `sub` is a Dealer id, not an inventory `users.id`.
+
+**Shipped:**
+
+| Piece | Implementation |
+|-------|----------------|
+| Resolve/upsert before update | `resolveInventoryDispatchedBy` in `utils/resolveInventoryCreatedBy.ts` |
+| Dispatch handler | `controllers/stockRequestController.ts` → `dispatchStockRequest` |
+| Missing actor | **400** `INV_USER_MISSING` (never raw Postgres FK as sole message) |
+
+**Order:** body `dispatched_by_id` / `dispatched_by` / `dispatchedById` / `dispatchedBy` (if in users) → JWT id if in users → upsert JWT into users → else `INV_USER_MISSING`.
+
+**Ref:** `BACKEND_STOCK_REQUESTS_DISPATCHED_BY.ts` (same bridge idea as §14 `created_by`).
+
+**QA:** Quotation Admin → Review & Dispatch → **200** `status: dispatched`; `dispatched_by_id` exists in `users`; no FK error.
+
+---
+
+## 20. Inventory — `sales_created_by_fkey` on POST /sales (Jul 2026)
+
+**Frontend:** Quotation Admin → Inventory → Agent → **New B2B / B2C Sale** → **Record Sale**  
+**Failing call (before fix):** `POST /api/sales` → **500**  
+**Live error:** `insert or update on table "sales" violates foreign key constraint "sales_created_by_fkey"`
+
+### Root cause
+
+Same as §14 / §16: Quotation Admin JWT `sub` is written to `sales.created_by`, but that id is **not** in inventory `users`.
+
+### Shipped
+
+| Piece | Implementation |
+|-------|----------------|
+| Resolve/upsert before INSERT | `resolveInventorySaleCreatedBy` in `utils/resolveInventoryCreatedBy.ts` |
+| Create handler | `controllers/salesController.ts` → `createSale` |
+| Missing actor / FK | **400** `INV_USER_MISSING` (never raw Postgres FK as sole message) |
+
+**Order:** body `created_by` / `createdBy` / `created_by_id` / `createdById` (if in users) → JWT id if in users → upsert JWT into users → else `INV_USER_MISSING`.
+
+**Ref:** `BACKEND_SALES_CREATED_BY.ts`, `BACKEND_PRODUCTS_CREATED_BY.ts`, `BACKEND_STOCK_REQUESTS_DISPATCHED_BY.ts`
+
+### QA
+
+1. Quotation Admin → Agent → New B2B Sale → Record Sale → **201**
+2. Row `created_by` exists in inventory `users`
+3. No `sales_created_by_fkey` in response
+4. Body `created_by` accepted when JWT user missing
+5. After first success, `SELECT * FROM users WHERE id = '<jwt-sub>';` → row exists (upsert path)
+
+---
+
+## 21. Inventory — Agent sale uses admin stock, not central (Jul 2026)
+
+**Frontend:** Inventory → Agent → Sell from admin (e.g. CHAIRBORD HEAD OFFICE) → **Record Sale**  
+**Failing call (before fix):** `POST /api/sales` → **400** `Insufficient central inventory for sale`
+
+### Root cause
+
+UI checks `admin_inventory` (Available > 0) and sends `adminId` / `sell_from_admin_id` / `stock_source: "admin"`, but Zod stripped those fields and the handler only read `admin_id` — then deducted `products.quantity` (central).
+
+### Shipped
+
+| Piece | Implementation |
+|-------|----------------|
+| Keep body aliases | `validations/salesValidations.ts` (+ `.passthrough()`) |
+| Resolve admin warehouse | `parseSaleAdminIdFromBody` / `wantsAdminStockSource` in `salesController.ts` |
+| Deduct admin only | `tryReduceAdminInventory` — never touch central when admin path |
+| Persist warehouse | `sales.admin_id` (+ migration `20260729160000-add-admin-id-to-sales.js`) |
+| Short stock | **400** `INSUFFICIENT_ADMIN_STOCK` (not the central message) |
+
+**Ref:** `BACKEND_SALES_ADMIN_STOCK.ts`
+
+### QA
+
+1. Admin stock Available 130, central 0 → Record Sale → **201**
+2. `admin_inventory.quantity` decreases; `products.quantity` unchanged
+3. Sale without `admin_id` still uses central rules / central error message
+
+**Deploy:** `yarn migrate` (adds `sales.admin_id`)
 
 ---
 

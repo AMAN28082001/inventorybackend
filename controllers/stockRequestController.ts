@@ -19,6 +19,10 @@ import {
   findProductSerialNumbers,
   productRequiresSerialOnDispatch
 } from '../utils/productSerialLookup';
+import {
+  InventoryUserMissingError,
+  resolveInventoryDispatchedBy
+} from '../utils/resolveInventoryCreatedBy';
 
 const isSuperAdminRole = (role: string | undefined): boolean =>
   role === 'super-admin' || role === 'super-admin-manager';
@@ -1331,12 +1335,28 @@ export const dispatchStockRequest = async (req: Request, res: Response): Promise
       await deleteFileFromS3IfExists(request.dispatch_image);
     }
 
+    // §16 — resolve inventory users.id before writing dispatched_by_id (Quotation Admin JWT ≠ users row).
+    const dispatchedById = await resolveInventoryDispatchedBy(
+      req.user as any,
+      (req.body || {}) as Record<string, unknown>
+    );
+    const dispatcherRow = await User.findByPk(dispatchedById, {
+      attributes: ['id', 'name', 'username'],
+      transaction
+    });
+    const dispatchedByName =
+      dispatcherRow?.name ||
+      dispatcherRow?.username ||
+      (req.user as any).name ||
+      req.user.username ||
+      'Quotation Admin';
+
     // Update request with dispatch info
     // If requested_from was "admin" (placeholder), update it to the actual admin ID
     const updateData: any = {
       status: 'dispatched',
-      dispatched_by_id: req.user.id,
-      dispatched_by_name: (req.user as any).name || req.user.username,
+      dispatched_by_id: dispatchedById,
+      dispatched_by_name: dispatchedByName,
       dispatched_date: new Date(),
       dispatch_image: dispatchImage,
       rejection_reason: null
@@ -1364,7 +1384,7 @@ export const dispatchStockRequest = async (req: Request, res: Response): Promise
         destinationName: request.requested_by_name,
         item: normalizedItem,
         requestId: request.id,
-        userId: req.user.id,
+        userId: dispatchedById,
         transaction
       });
     }
@@ -1376,12 +1396,15 @@ export const dispatchStockRequest = async (req: Request, res: Response): Promise
     });
 
     if (!updated) {
-      await transaction.rollback();
       res.status(500).json({ error: 'Failed to retrieve updated request' });
       return;
     }
 
-    logInfo('Stock request dispatched', { requestId: id, dispatchedBy: req.user.id, status: updated.status });
+    logInfo('Stock request dispatched', {
+      requestId: id,
+      dispatchedBy: dispatchedById,
+      status: updated.status
+    });
     const response = updated.toJSON() as any;
     if (Object.keys(transferredSerialsByProduct).length > 0) {
       response.serial_numbers = transferredSerialsByProduct;
@@ -1389,7 +1412,33 @@ export const dispatchStockRequest = async (req: Request, res: Response): Promise
     res.json(response);
   } catch (error: any) {
     await transaction.rollback();
-    logError('Dispatch stock request error', error, { requestId: req.params.id, dispatchedBy: req.user?.id });
+    logError('Dispatch stock request error', error, {
+      requestId: req.params.id,
+      dispatchedBy: req.user?.id
+    });
+    if (
+      error instanceof InventoryUserMissingError ||
+      error?.code === 'INV_USER_MISSING'
+    ) {
+      res.status(400).json({
+        success: false,
+        error: error.message || 'Inventory user missing for dispatched_by_id',
+        code: 'INV_USER_MISSING'
+      });
+      return;
+    }
+    const isFk =
+      error?.name === 'SequelizeForeignKeyConstraintError' ||
+      String(error?.message || '').includes('stock_requests_dispatched_by_id_fkey');
+    if (isFk) {
+      res.status(400).json({
+        success: false,
+        error:
+          'dispatched_by_id must reference an inventory user. Retry dispatch so the Quotation Admin JWT is upserted into users.',
+        code: 'INV_USER_MISSING'
+      });
+      return;
+    }
     res.status(400).json({ error: error.message || 'Unable to dispatch stock request' });
   }
 };

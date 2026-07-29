@@ -19,6 +19,11 @@ import { lookupQuotationCustomerByPhone } from '../utils/customerPhoneLookup';
 import { persistableMediaReference } from '../utils/s3Service';
 import { normalizeSaleQuantity, isWholeSaleQuantity, hasSufficientStock } from '../utils/saleQuantity';
 import { roundProductPrice } from '../utils/productUnit';
+import {
+  InventoryCreatedByError,
+  InventoryUserMissingError,
+  resolveInventorySaleCreatedBy
+} from '../utils/resolveInventoryCreatedBy';
 
 const SALE_PRODUCT_SUMMARY_MAX = 2000;
 const SALE_IMAGE_MAX = 2048;
@@ -300,6 +305,43 @@ const tryReduceAdminInventory = async (adminId: string, productId: string, quant
 
   return true;
 };
+
+/** Parse sell-from-admin id aliases from POST /sales body (§21). */
+const parseSaleAdminIdFromBody = (body: Record<string, unknown> | null | undefined): string => {
+  if (!body) return '';
+  const raw =
+    body.admin_id ??
+    body.adminId ??
+    body.sell_from_admin_id ??
+    body.stock_admin_id;
+  return String(raw ?? '').trim();
+};
+
+/** True when SPA explicitly asks to sell from admin warehouse stock. */
+const wantsAdminStockSource = (body: Record<string, unknown> | null | undefined): boolean => {
+  if (!body) return false;
+  if (parseSaleAdminIdFromBody(body)) return true;
+  const stockSource = String(body.stock_source ?? body.stockSource ?? '')
+    .trim()
+    .toLowerCase();
+  if (stockSource === 'admin') return true;
+  const flag = body.use_admin_stock ?? body.useAdminStock;
+  if (flag === true || flag === 1 || flag === '1') return true;
+  if (typeof flag === 'string' && ['true', 'yes', 'admin'].includes(flag.trim().toLowerCase())) {
+    return true;
+  }
+  return false;
+};
+
+class InsufficientAdminStockError extends Error {
+  code = 'INSUFFICIENT_ADMIN_STOCK';
+  details: Array<Record<string, unknown>>;
+  constructor(message: string, details: Array<Record<string, unknown>> = []) {
+    super(message);
+    this.name = 'InsufficientAdminStockError';
+    this.details = details;
+  }
+}
 
 const reduceCentralInventory = async (productId: string, quantity: number, transaction: Transaction): Promise<void> => {
   const product = await Product.findByPk(productId, { transaction, lock: transaction.LOCK.UPDATE });
@@ -654,6 +696,102 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
     }
     const imagePath = normalizeSaleImageForStorage(uploadedS3Image);
 
+    // §20 — resolve inventory users.id before sales.created_by INSERT (Quotation Admin JWT ≠ users row).
+    let createdByUserId: string;
+    try {
+      createdByUserId = await resolveInventorySaleCreatedBy(
+        req.user as any,
+        (req.body || {}) as Record<string, unknown>
+      );
+    } catch (resolveErr: any) {
+      await transaction.rollback();
+      const message =
+        resolveErr?.message ||
+        'Cannot create sale: no inventory user for created_by. Upsert JWT user into inventory users or send a valid created_by.';
+      res.status(400).json({
+        success: false,
+        error: message,
+        code: resolveErr?.code || 'INV_USER_MISSING'
+      });
+      return;
+    }
+
+    // §21 — Agent / Quotation Admin sell-from-admin: use admin_inventory, never central_stock.
+    const bodyRec = (req.body || {}) as Record<string, unknown>;
+    const bodyAdminId = parseSaleAdminIdFromBody(bodyRec);
+    const forceAdminStock = wantsAdminStockSource(bodyRec);
+    let adminInventoryOwnerId: string | null = null;
+
+    if (bodyAdminId) {
+      const adminUser = await User.findByPk(bodyAdminId, { attributes: ['id', 'role', 'name', 'is_active'] });
+      if (!adminUser || adminUser.role !== 'admin') {
+        await transaction.rollback();
+        res.status(400).json({
+          success: false,
+          error: 'admin_id must be a valid admin user',
+          code: 'VAL_001'
+        });
+        return;
+      }
+      adminInventoryOwnerId = adminUser.id;
+    } else if (req.user.role === 'agent') {
+      const agentRecord = await User.findByPk(req.user.id, {
+        attributes: ['id', 'created_by_id']
+      });
+      adminInventoryOwnerId = agentRecord?.created_by_id || null;
+      if (!adminInventoryOwnerId) {
+        await transaction.rollback();
+        res.status(400).json({ error: 'Admin mapping not found for agent' });
+        return;
+      }
+    } else if (req.user.role === 'admin') {
+      adminInventoryOwnerId = req.user.id;
+    } else if (forceAdminStock) {
+      await transaction.rollback();
+      res.status(400).json({
+        success: false,
+        error:
+          'admin_id is required when selling from admin stock (send admin_id / adminId / sell_from_admin_id / stock_admin_id)',
+        code: 'VAL_001'
+      });
+      return;
+    }
+
+    // Pre-validate admin stock before INSERT so we never touch central on this path.
+    if (adminInventoryOwnerId) {
+      const shortDetails: Array<Record<string, unknown>> = [];
+      for (const item of normalizedItems) {
+        if (!item.product_id) continue;
+        const inventory = await AdminInventory.findOne({
+          where: { admin_id: adminInventoryOwnerId, product_id: item.product_id },
+          transaction,
+          lock: transaction.LOCK.UPDATE
+        });
+        const available = inventory ? Number(inventory.quantity) : 0;
+        if (!hasSufficientStock(available, item.quantity)) {
+          shortDetails.push({
+            product_id: item.product_id,
+            product_name: item.product_name,
+            admin_id: adminInventoryOwnerId,
+            requested: item.quantity,
+            available,
+            short_by: Math.max(0, Number(item.quantity) - available),
+            message: `Insufficient admin inventory for ${item.product_name}`
+          });
+        }
+      }
+      if (shortDetails.length > 0) {
+        await transaction.rollback();
+        res.status(400).json({
+          success: false,
+          error: 'Insufficient admin inventory for sale',
+          code: 'INSUFFICIENT_ADMIN_STOCK',
+          details: shortDetails
+        });
+        return;
+      }
+    }
+
     const saleRecord = await Sale.create({
       id: uuidv4(),
       type,
@@ -668,7 +806,8 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
       approval_status: 'pending',
       sale_date: sale_date ? new Date(sale_date) : new Date(),
       image: imagePath,
-      created_by: req.user.id,
+      created_by: createdByUserId,
+      admin_id: adminInventoryOwnerId,
       company_name: company_name || null,
       gst_number: gst_number || null,
       contact_person: contact_person || null,
@@ -696,32 +835,6 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
         serial_numbers: item.serial_numbers && item.serial_numbers.length > 0 ? item.serial_numbers : null
       }, { transaction });
       createdSaleItems.push(createdItem);
-    }
-
-    let adminInventoryOwnerId: string | null = null;
-    if (req.user.role === 'agent') {
-      const agentRecord = await User.findByPk(req.user.id, {
-        attributes: ['id', 'created_by_id']
-      });
-      adminInventoryOwnerId = agentRecord?.created_by_id || null;
-      if (!adminInventoryOwnerId) {
-        await transaction.rollback();
-        res.status(400).json({ error: 'Admin mapping not found for agent' });
-        return;
-      }
-    } else if (req.user.role === 'admin') {
-      adminInventoryOwnerId = req.user.id;
-    } else if (req.user.role === 'super-admin' || req.user.role === 'super-admin-manager') {
-      const bodyAdminId = String((req.body as any).admin_id || '').trim();
-      if (bodyAdminId) {
-        const adminUser = await User.findByPk(bodyAdminId, { attributes: ['id', 'role'] });
-        if (!adminUser || adminUser.role !== 'admin') {
-          await transaction.rollback();
-          res.status(400).json({ error: 'admin_id must be a valid admin user' });
-          return;
-        }
-        adminInventoryOwnerId = adminUser.id;
-      }
     }
 
     const serialNumbersRaw = (req.body as any).serial_numbers;
@@ -795,9 +908,26 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
       }
 
       if (adminInventoryOwnerId) {
-        const reduced = await tryReduceAdminInventory(adminInventoryOwnerId, item.product_id, item.quantity, transaction);
+        // Never touch products.quantity / central_stock on admin-stock sales.
+        const reduced = await tryReduceAdminInventory(
+          adminInventoryOwnerId,
+          item.product_id,
+          item.quantity,
+          transaction
+        );
         if (!reduced) {
-          throw new Error(`Insufficient admin inventory for product ${item.product_id}`);
+          throw new InsufficientAdminStockError(
+            `Insufficient admin inventory for ${item.product_name}`,
+            [
+              {
+                product_id: item.product_id,
+                product_name: item.product_name,
+                admin_id: adminInventoryOwnerId,
+                requested: item.quantity,
+                message: `Insufficient admin inventory for ${item.product_name}`
+              }
+            ]
+          );
         }
       } else if (
         req.user.role === 'super-admin' ||
@@ -814,7 +944,7 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
         saleId: saleRecord.id,
         quantity: item.quantity,
         customerName: customer_name,
-        createdBy: req.user.id,
+        createdBy: createdByUserId,
         transaction
       });
     }
@@ -825,7 +955,13 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
       include: buildSaleIncludes()
     });
 
-    logInfo('Sale created', { saleId: saleRecord.id, type, customerName: customer_name, totalAmount: totalAmountValue, createdBy: req.user.id });
+    logInfo('Sale created', {
+      saleId: saleRecord.id,
+      type,
+      customerName: customer_name,
+      totalAmount: totalAmountValue,
+      createdBy: createdByUserId
+    });
     res.status(201).json(serializeSale(created));
   } catch (error: any) {
     await transaction.rollback();
@@ -837,9 +973,49 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
       itemsType: typeof req.body.items,
       itemsLength: Array.isArray(req.body.items) ? req.body.items.length : 'N/A'
     });
-    
-    // Provide detailed error message
+
+    if (
+      error instanceof InventoryUserMissingError ||
+      error instanceof InventoryCreatedByError ||
+      error?.code === 'INV_USER_MISSING'
+    ) {
+      res.status(400).json({
+        success: false,
+        error:
+          error.message ||
+          'Cannot create sale: no inventory user for created_by. Upsert JWT user into inventory users or send a valid created_by.',
+        code: 'INV_USER_MISSING'
+      });
+      return;
+    }
+
+    if (
+      error instanceof InsufficientAdminStockError ||
+      error?.code === 'INSUFFICIENT_ADMIN_STOCK'
+    ) {
+      res.status(400).json({
+        success: false,
+        error: error.message || 'Insufficient admin inventory for sale',
+        code: 'INSUFFICIENT_ADMIN_STOCK',
+        details: error.details || []
+      });
+      return;
+    }
+
     const errorMessage = extractDbErrorMessage(error);
+    const isCreatedByFk =
+      error?.name === 'SequelizeForeignKeyConstraintError' ||
+      /sales_created_by_fkey/i.test(errorMessage);
+    if (isCreatedByFk) {
+      res.status(400).json({
+        success: false,
+        error:
+          'sales.created_by is not a valid inventory users.id. Upsert JWT into users or honor body created_by.',
+        code: 'INV_USER_MISSING'
+      });
+      return;
+    }
+
     const errorResponse: any = { error: errorMessage };
 
     if (/character varying\(\d+\)|value too long/i.test(errorMessage)) {

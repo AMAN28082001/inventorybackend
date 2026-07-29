@@ -16,6 +16,8 @@ interface SaleAttributes {
   sale_date?: Date;
   image?: string | null;
   created_by?: string | null;
+  /** Admin warehouse this sale deducted from (Agent / sell-from-admin path). */
+  admin_id?: string | null;
   company_name?: string | null;
   gst_number?: string | null;
   contact_person?: string | null;
@@ -32,7 +34,7 @@ interface SaleAttributes {
   notes?: string | null;
 }
 
-interface SaleCreationAttributes extends Optional<SaleAttributes, 'id' | 'payment_status' | 'approval_status' | 'sale_date' | 'tax_amount' | 'discount_amount' | 'image' | 'created_by' | 'company_name' | 'gst_number' | 'contact_person' | 'billing_address_id' | 'delivery_address_id' | 'delivery_matches_billing' | 'customer_email' | 'customer_phone' | 'delivery_instructions' | 'bill_image' | 'bill_confirmed_date' | 'bill_confirmed_by_id' | 'bill_confirmed_by_name' | 'notes'> {}
+interface SaleCreationAttributes extends Optional<SaleAttributes, 'id' | 'payment_status' | 'approval_status' | 'sale_date' | 'tax_amount' | 'discount_amount' | 'image' | 'created_by' | 'admin_id' | 'company_name' | 'gst_number' | 'contact_person' | 'billing_address_id' | 'delivery_address_id' | 'delivery_matches_billing' | 'customer_email' | 'customer_phone' | 'delivery_instructions' | 'bill_image' | 'bill_confirmed_date' | 'bill_confirmed_by_id' | 'bill_confirmed_by_name' | 'notes'> {}
 
 class Sale extends Model<SaleAttributes, SaleCreationAttributes> implements SaleAttributes {
   public id!: string;
@@ -49,6 +51,7 @@ class Sale extends Model<SaleAttributes, SaleCreationAttributes> implements Sale
   public sale_date!: Date;
   public image!: string | null;
   public created_by!: string | null;
+  public admin_id!: string | null;
   public company_name!: string | null;
   public gst_number!: string | null;
   public contact_person!: string | null;
@@ -140,6 +143,10 @@ Sale.init(
       type: DataTypes.STRING(50),
       allowNull: true
     },
+    admin_id: {
+      type: DataTypes.STRING(50),
+      allowNull: true
+    },
     company_name: {
       type: DataTypes.STRING(255),
       allowNull: true
@@ -211,7 +218,8 @@ Sale.init(
       { fields: ['payment_status'], name: 'idx_sales_payment_status' },
       { fields: ['sale_date'], name: 'idx_sales_sale_date' },
       { fields: ['customer_name'], name: 'idx_sales_customer_name' },
-      { fields: ['bill_confirmed_date'], name: 'idx_sales_bill_confirmed_date' }
+      { fields: ['bill_confirmed_date'], name: 'idx_sales_bill_confirmed_date' },
+      { fields: ['admin_id'], name: 'idx_sales_admin_id' }
     ]
   }
 );

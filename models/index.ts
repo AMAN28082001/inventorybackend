@@ -62,6 +62,7 @@ StockRequestItem.belongsTo(Product, { foreignKey: 'product_id', as: 'product' })
 
 // Sale associations
 Sale.belongsTo(User, { foreignKey: 'created_by', as: 'creator' });
+Sale.belongsTo(User, { foreignKey: 'admin_id', as: 'stockAdmin' });
 Sale.belongsTo(User, { foreignKey: 'bill_confirmed_by_id', as: 'billConfirmer' });
 Sale.belongsTo(Address, { foreignKey: 'billing_address_id', as: 'billingAddress' });
 Sale.belongsTo(Address, { foreignKey: 'delivery_address_id', as: 'deliveryAddress' });

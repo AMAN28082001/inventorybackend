@@ -259,7 +259,7 @@ const getWorkflowQueue = async (
           : includeMedia;
 
     const includes: any[] = [
-      { model: Dealer, as: 'dealer', attributes: ['id', 'firstName', 'lastName', 'email', 'mobile'] },
+      { model: Dealer, as: 'dealer', attributes: ['id', 'firstName', 'lastName', 'username', 'email', 'mobile'] },
       {
         model: Customer,
         as: 'customer',
@@ -464,6 +464,8 @@ const getWorkflowQueue = async (
                 id: q.dealer.id,
                 firstName: q.dealer.firstName || null,
                 lastName: q.dealer.lastName || null,
+                name: `${q.dealer.firstName || ''} ${q.dealer.lastName || ''}`.trim() || null,
+                username: (q.dealer as any).username || null,
                 mobile: q.dealer.mobile || null,
                 email: q.dealer.email || null
               }
@@ -1606,6 +1608,17 @@ export const saveMeteringDetails = async (req: Request, res: Response): Promise<
       });
     }
 
+    const currentStatus = String(quotation.installationStatus || '').trim();
+    const statusPatch: Record<string, unknown> = {};
+    if (currentStatus !== 'mco') {
+      // WCC save in metering path should land in Meter Installation Pending.
+      statusPatch.installationStatus = METER_INSTALLATION_PENDING_STATUS;
+      statusPatch.meterInstallationPendingAt =
+        (quotation as any).meterInstallationPendingAt || new Date();
+      statusPatch.meteringWccAfterDiscom = false;
+      statusPatch.meteringWccAfterDiscomAt = null;
+    }
+
     await quotation.update({
       discomName: parseTrimmedString(body.discomName) ?? quotation.discomName,
       meterType: meterType ?? quotation.meterType,
@@ -1621,7 +1634,8 @@ export const saveMeteringDetails = async (req: Request, res: Response): Promise<
       ...(meteringRemarks !== undefined ? { meteringRemarks } : {}),
       ...(authorizedRepresentative !== undefined
         ? { meteringAuthorizedRepresentative: authorizedRepresentative }
-        : {})
+        : {}),
+      ...statusPatch
     } as any);
 
     await quotation.reload();
