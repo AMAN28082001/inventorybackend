@@ -31,6 +31,7 @@ import {
   meteringWorkflowApiFields,
   normalizeMeteringWorkflowStatus
 } from '../utils/meteringWorkflowApi';
+import { paymentExcelJourneyApiFields } from '../utils/paymentExcelJourneyStatus';
 import { resolveImageContentTypeForUpload } from '../utils/uploadMimeTypes';
 import {
   INSTALLATION_PARTIAL_STATUS,
@@ -439,6 +440,11 @@ const getWorkflowQueue = async (
               meterInstallationPendingAt: (q as any).meterInstallationPendingAt,
               meteringWccAfterDiscom: (q as any).meteringWccAfterDiscom,
               meteringWccAfterDiscomAt: (q as any).meteringWccAfterDiscomAt
+            }),
+            ...paymentExcelJourneyApiFields({
+              ...(typeof q.toJSON === 'function' ? q.toJSON() : (q as any)),
+              installationStatus: q.installationStatus,
+              meteringWccAfterDiscom: (q as any).meteringWccAfterDiscom
             }),
             ...quotationPaymentApiFields(
               typeof q.toJSON === 'function' ? q.toJSON() : (q as any)

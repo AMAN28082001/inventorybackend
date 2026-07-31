@@ -45,9 +45,10 @@
 | 33 | High | Inventory Agent sale — admin stock (not central) | **Done** | §21 / `BACKEND_SALES_ADMIN_STOCK.ts` |
 | 34 | High | Inventory sale lines — persist/return qty + unit_price | **Done** | §22 / `BACKEND_SALES_LINE_ITEMS.ts` |
 | 35 | High | Quotations — additional create + is_current / restore | **Done** | §23 / `BACKEND_QUOTATION_SYSTEM_HISTORY.ts` |
-| 36 | High | Metering dual track — Bank process + installer auth | **Done** | §17 / `BACKEND_METERING_DUAL_TRACK.md` |
-| 37 | High | Document Submission — Property Documents PDF optional | **Done** | §18 / `BACKEND_PROPERTY_DOCUMENT_OPTIONAL.md` |
-| 38 | High | Non-DCR 80kW set — Renew Energy / Waaree / Adani | **Done** | §19 / `BACKEND_NON_DCR_80KW.md` |
+| 36 | High | Metering FILE STATUS — Pending / In Progress / Completed | **Done** | §24 / `BACKEND_PAYMENT_EXCEL_JOURNEY_STATUS.ts` |
+| 37 | High | Metering dual track — Bank process + installer auth | **Done** | §17 / `BACKEND_METERING_DUAL_TRACK.md` |
+| 38 | High | Document Submission — Property Documents PDF optional | **Done** | §18 / `BACKEND_PROPERTY_DOCUMENT_OPTIONAL.md` |
+| 39 | High | Non-DCR 80kW set — Renew Energy / Waaree / Adani | **Done** | §19 / `BACKEND_NON_DCR_80KW.md` |
 
 **Deploy before QA:**
 
@@ -1121,7 +1122,11 @@ On multipart routes (quotation documents, visitor/dealer visit complete, meterin
 
 If **`installationStatus` is missing** from GET, Excel shows **Workflow Pending** for every row — verify list payload includes `installationStatus` (defaults to `pending_installer` when null in DB).
 
-**Reference:** `BACKEND_PAYMENT_EXCEL_JOURNEY_STATUS.ts`, `BACKEND_CHANGES_REQUIRED.md` §AC.
+### Metering FILE STATUS (§24)
+
+`journeyStageProgress.metering` / `meteringStatusLabel` follow Admin Metering tabs: Meter Pending→**Pending**; Discom / WCC / Meter Install→**In Progress**; Final Step (`mco`)→**Completed**. Lists must echo `meteringWccAfterDiscom` for WCC.
+
+**Reference:** `BACKEND_PAYMENT_EXCEL_JOURNEY_STATUS.ts`, `BACKEND_CHANGES_REQUIRED.md` §AC, HANDOFF §24.
 
 **Code:** `utils/meteringWorkflowApi.ts`, `controllers/quotationController.ts` → `getQuotations`.
 
@@ -2050,6 +2055,39 @@ POST/GET either ignored `items[].quantity` / `unit_price` aliases (`subtotal` as
 4. No rows deleted; products unchanged per id  
 
 **Deploy:** `yarn migrate`
+
+---
+
+## 24. Metering FILE STATUS (Payment Management + dashboards) (Jul 2026)
+
+**Frontend:** Account → Payment Management **FILE STATUS → Metering**; dealer journey panel uses the same rules (`resolveMeteringJourneyStatus`).
+
+### Mapping
+
+| Admin Metering tab | Persist / return | UI label |
+|--------------------|------------------|----------|
+| Meter Pending | `pending_metering` | **Pending** |
+| Meter in Discom | `metering_approved` | **In Progress** |
+| WCC Pending | `meteringWccAfterDiscom: true` | **In Progress** |
+| Meter Installation Pending | `meter_installation_pending` | **In Progress** |
+| Final Step | `mco` | **Completed** |
+
+### Shipped
+
+| Piece | Implementation |
+|-------|----------------|
+| Persist stages + WCC | Existing metering PATCH / admin WCC routes |
+| List GET fields | `meteringStatus` / `meteringWccAfterDiscom` on `/quotations`, `/admin/quotations`, `/metering/quotations` |
+| Pre-computed journey | `journeyStageProgress.metering` + `meteringStatusLabel` / `meteringFileStatus` via `deriveMeteringStage` (§24 rules) |
+
+**Ref:** `BACKEND_PAYMENT_EXCEL_JOURNEY_STATUS.ts`, `utils/paymentExcelJourneyStatus.ts`
+
+### QA
+
+1. Meter Pending → Metering **Pending**  
+2. Discom / WCC / Meter Installation → **In Progress**  
+3. Final Step → **Completed**  
+4. Refresh on another device — labels from API  
 
 ---
 

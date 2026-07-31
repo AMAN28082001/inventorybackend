@@ -1797,11 +1797,15 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
           installationStatus: (q as any).installationStatus || 'pending_installer',
           meteringApprovedAt: (q as any).meteringApprovedAt,
           mcoAt: (q as any).mcoAt,
-          completionAt: (q as any).completionAt
+          completionAt: (q as any).completionAt,
+          meterInstallationPendingAt: (q as any).meterInstallationPendingAt,
+          meteringWccAfterDiscom: (q as any).meteringWccAfterDiscom,
+          meteringWccAfterDiscomAt: (q as any).meteringWccAfterDiscomAt
         }),
         ...paymentExcelJourneyApiFields({
           ...row,
-          installationStatus: (q as any).installationStatus || 'pending_installer'
+          installationStatus: (q as any).installationStatus || 'pending_installer',
+          meteringWccAfterDiscom: (q as any).meteringWccAfterDiscom
         }),
         discomName: (q as any).discomName || null,
         meterType: (q as any).meterType || null,
@@ -2273,11 +2277,15 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
           installationStatus: quotationAny.installationStatus || 'pending_installer',
           meteringApprovedAt: quotationAny.meteringApprovedAt,
           mcoAt: quotationAny.mcoAt,
-          completionAt: quotationAny.completionAt
+          completionAt: quotationAny.completionAt,
+          meterInstallationPendingAt: quotationAny.meterInstallationPendingAt,
+          meteringWccAfterDiscom: quotationAny.meteringWccAfterDiscom,
+          meteringWccAfterDiscomAt: quotationAny.meteringWccAfterDiscomAt
         }),
         ...paymentExcelJourneyApiFields({
           ...rowById,
-          installationStatus: quotationAny.installationStatus || 'pending_installer'
+          installationStatus: quotationAny.installationStatus || 'pending_installer',
+          meteringWccAfterDiscom: quotationAny.meteringWccAfterDiscom
         }),
         discomName: quotationAny.discomName || null,
         meterType: quotationAny.meterType || null,

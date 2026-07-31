@@ -20,17 +20,19 @@ const INSTALLATION_STATUS_LABELS: Record<string, string> = {
   baldev_rejected: 'Final Confirmation Rejected',
   pending_metering: 'Pending Metering',
   metering_in_progress: 'Metering In Progress',
-  metering_approved: 'Metering Approved',
+  metering_approved: 'Meter in Discom',
   meter_installation_pending: 'Meter Installation Pending',
-  mco: 'MCO',
+  mco: 'Final Step',
   completed: 'Completed'
 };
 
-const METERING_STATUS_LABELS: Record<string, string> = {
-  pending_metering: 'Pending',
-  metering_in_progress: 'In Progress',
-  metering_approved: 'Approved',
-  mco: 'MCO'
+/** FILE STATUS → Metering labels (Pending | In Progress | Completed). */
+const METERING_FILE_STATUS_LABELS: Record<JourneyStageState, string> = {
+  pending: 'Pending',
+  in_progress: 'In Progress',
+  completed: 'Completed',
+  rejected: 'Rejected',
+  not_started: 'Pending'
 };
 
 const ADMIN_APPROVAL_LABELS: Record<string, string> = {
@@ -48,6 +50,9 @@ const FINAL_CONFIRMATION_LABELS: Record<string, string> = {
 
 const toStageState = (value: JourneyStageState): JourneyStageState => value;
 
+const readTruthyFlag = (v: unknown): boolean =>
+  v === true || v === 1 || v === 'true' || v === '1';
+
 export const deriveAdminApprovalStage = (status: string | null | undefined): JourneyStageState => {
   const s = String(status || 'pending').trim().toLowerCase();
   if (s === 'approved') return 'completed';
@@ -62,7 +67,17 @@ export const deriveInstallationStage = (
   if (deriveAdminApprovalStage(quotationStatus) !== 'completed') return 'not_started';
   const inst = String(installationStatus || 'pending_installer').trim();
   if (inst === 'installer_rejected') return 'rejected';
-  if (['metering_approved', 'mco', 'completed', 'pending_metering', 'metering_in_progress', 'meter_installation_pending', 'baldev_approved'].includes(inst)) {
+  if (
+    [
+      'metering_approved',
+      'mco',
+      'completed',
+      'pending_metering',
+      'metering_in_progress',
+      'meter_installation_pending',
+      'baldev_approved'
+    ].includes(inst)
+  ) {
     return 'completed';
   }
   if (['installer_approved', 'pending_baldev', 'baldev_rejected'].includes(inst)) return 'completed';
@@ -70,15 +85,57 @@ export const deriveInstallationStage = (
   return 'pending';
 };
 
+/**
+ * Metering FILE STATUS (§24) — align Admin → Metering tabs.
+ * Matches frontend `resolveMeteringJourneyStatus` / BACKEND_PAYMENT_EXCEL_JOURNEY_STATUS.ts
+ *
+ * | Tab                         | Persist                        | Label        |
+ * |-----------------------------|--------------------------------|--------------|
+ * | Meter Pending               | pending_metering               | Pending      |
+ * | Meter in Discom             | metering_approved              | In Progress  |
+ * | WCC Pending                 | meteringWccAfterDiscom: true   | In Progress  |
+ * | Meter Installation Pending  | meter_installation_pending     | In Progress  |
+ * | Final Step                  | mco                            | Completed    |
+ */
 export const deriveMeteringStage = (
   quotationStatus: string | null | undefined,
-  installationStatus: string | null | undefined
+  installationStatus: string | null | undefined,
+  meteringWccAfterDiscom?: unknown
 ): JourneyStageState => {
   if (deriveAdminApprovalStage(quotationStatus) !== 'completed') return 'not_started';
-  const metering = deriveMeteringStatus(installationStatus);
-  if (!metering) return 'not_started';
-  if (metering === 'metering_approved' || metering === 'mco') return 'completed';
-  if (metering === 'metering_in_progress') return 'in_progress';
+
+  const inst = String(installationStatus || '')
+    .trim()
+    .toLowerCase();
+  const metering = String(deriveMeteringStatus(installationStatus) || inst || '')
+    .trim()
+    .toLowerCase();
+
+  // After Final Step (Baldev+) or Final Step (mco) → Completed
+  if (
+    ['pending_baldev', 'baldev_approved', 'completed'].includes(inst) ||
+    ['pending_baldev', 'baldev_approved', 'completed', 'mco'].includes(metering) ||
+    metering.includes('mco')
+  ) {
+    return 'completed';
+  }
+
+  // WCC / Discom / Meter Installation → In Progress
+  if (readTruthyFlag(meteringWccAfterDiscom)) return 'in_progress';
+  if (
+    [
+      'metering_approved',
+      'metering_in_progress',
+      'meter_installation_pending',
+      'meter_install_pending'
+    ].includes(metering) ||
+    metering.includes('meter_install')
+  ) {
+    return 'in_progress';
+  }
+
+  // Meter Pending (or not yet in metering pipeline) → Pending
+  if (metering === 'pending_metering') return 'pending';
   return 'pending';
 };
 
@@ -89,7 +146,12 @@ export const deriveFinalConfirmationStage = (
   if (deriveAdminApprovalStage(quotationStatus) !== 'completed') return 'not_started';
   const inst = String(installationStatus || '').trim();
   if (inst === 'baldev_rejected') return 'rejected';
-  if (inst === 'baldev_approved' || ['pending_metering', 'metering_in_progress', 'metering_approved', 'mco', 'completed'].includes(inst)) {
+  if (
+    inst === 'baldev_approved' ||
+    ['pending_metering', 'metering_in_progress', 'metering_approved', 'meter_installation_pending', 'mco', 'completed'].includes(
+      inst
+    )
+  ) {
     return 'completed';
   }
   if (inst === 'pending_baldev') return 'in_progress';
@@ -99,11 +161,16 @@ export const deriveFinalConfirmationStage = (
 export const buildJourneyStageProgress = (input: {
   status?: string | null;
   installationStatus?: string | null;
+  meteringWccAfterDiscom?: unknown;
 }): JourneyStageProgress => ({
   adminApproval: toStageState(deriveAdminApprovalStage(input.status)),
   installation: toStageState(deriveInstallationStage(input.status, input.installationStatus)),
-  metering: toStageState(deriveMeteringStage(input.status, input.installationStatus)),
-  finalConfirmation: toStageState(deriveFinalConfirmationStage(input.status, input.installationStatus))
+  metering: toStageState(
+    deriveMeteringStage(input.status, input.installationStatus, input.meteringWccAfterDiscom)
+  ),
+  finalConfirmation: toStageState(
+    deriveFinalConfirmationStage(input.status, input.installationStatus)
+  )
 });
 
 /** Last Excel column — mirrors frontend `lib/customer-journey.ts` file status label. */
@@ -112,6 +179,7 @@ export const deriveFileStatusLabel = (input: {
   installationStatus?: string | null;
   installationReadyForInstaller?: boolean;
   fileLoginStatus?: string | null;
+  meteringWccAfterDiscom?: unknown;
 }): string => {
   const quotationStatus = String(input.status || 'pending').trim().toLowerCase();
   if (quotationStatus !== 'approved') return 'Workflow Pending';
@@ -127,9 +195,13 @@ export const deriveFileStatusLabel = (input: {
   if (inst === 'baldev_approved' || inst === 'pending_metering') return 'Pending Metering';
   if (inst === 'metering_in_progress') return 'Metering In Progress';
   if (inst === 'metering_approved') {
-    return input.fileLoginStatus === 'already_login' ? 'File Logged In' : 'Pending File Login';
+    if (readTruthyFlag(input.meteringWccAfterDiscom)) return 'WCC Pending';
+    return input.fileLoginStatus === 'already_login' ? 'File Logged In' : 'Meter in Discom';
   }
-  if (inst === 'mco') return 'MCO';
+  if (inst === 'meter_installation_pending' || inst === 'meter_install_pending') {
+    return 'Meter Installation Pending';
+  }
+  if (inst === 'mco') return 'Final Step';
   if (inst === 'completed') return 'Completed';
   return 'Workflow Pending';
 };
@@ -141,24 +213,37 @@ export const paymentExcelJourneyApiFields = (q: Record<string, unknown>) => {
     q.installationReadyForInstaller ?? q.installation_ready_for_installer ?? false
   );
   const fileLoginStatus = (q.fileLoginStatus ?? q.file_login_status ?? null) as string | null;
-  const meteringStatus = deriveMeteringStatus(installationStatus);
-  const journeyStageProgress = buildJourneyStageProgress({ status, installationStatus });
+  const meteringWccAfterDiscom =
+    q.meteringWccAfterDiscom ?? q.metering_wcc_after_discom ?? false;
+  const journeyStageProgress = buildJourneyStageProgress({
+    status,
+    installationStatus,
+    meteringWccAfterDiscom
+  });
   const fileStatus = deriveFileStatusLabel({
     status,
     installationStatus,
     installationReadyForInstaller,
-    fileLoginStatus
+    fileLoginStatus,
+    meteringWccAfterDiscom
   });
 
   const instKey = String(installationStatus || 'pending_installer');
-  const adminApprovalStatus = ADMIN_APPROVAL_LABELS[String(status || 'pending').toLowerCase()] || String(status || 'Pending');
+  const adminApprovalStatus =
+    ADMIN_APPROVAL_LABELS[String(status || 'pending').toLowerCase()] || String(status || 'Pending');
   const installationStatusLabel = INSTALLATION_STATUS_LABELS[instKey] || instKey.replace(/_/g, ' ');
-  const meteringStatusLabel = meteringStatus
-    ? METERING_STATUS_LABELS[meteringStatus] || meteringStatus.replace(/_/g, ' ')
-    : 'Not Started';
+  const meteringStatusLabel = METERING_FILE_STATUS_LABELS[journeyStageProgress.metering] || 'Pending';
   const finalConfirmationStatusLabel =
     FINAL_CONFIRMATION_LABELS[instKey] ||
-    (['baldev_approved', 'pending_metering', 'metering_in_progress', 'metering_approved', 'mco', 'completed'].includes(instKey)
+    ([
+      'baldev_approved',
+      'pending_metering',
+      'metering_in_progress',
+      'metering_approved',
+      'meter_installation_pending',
+      'mco',
+      'completed'
+    ].includes(instKey)
       ? 'Approved'
       : 'Not Started');
 
@@ -173,6 +258,9 @@ export const paymentExcelJourneyApiFields = (q: Record<string, unknown>) => {
     installation_status_label: installationStatusLabel,
     meteringStatusLabel,
     metering_status_label: meteringStatusLabel,
+    /** Explicit FILE STATUS → Metering (same as meteringStatusLabel). */
+    meteringFileStatus: meteringStatusLabel,
+    metering_file_status: meteringStatusLabel,
     finalConfirmationStatusLabel,
     final_confirmation_status_label: finalConfirmationStatusLabel
   };

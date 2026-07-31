@@ -35,6 +35,7 @@ import {
   parseMeteringWccAfterDiscomFlag,
   parseBankProcessDoneFlag
 } from '../utils/meteringWorkflowApi';
+import { paymentExcelJourneyApiFields } from '../utils/paymentExcelJourneyStatus';
 import { isInstallationTeamJwtRole } from '../utils/installationTeamRole';
 import {
   INSTALLATION_PARTIAL_STATUS,
@@ -602,6 +603,13 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
               meterInstallationPendingAt: (q as any).meterInstallationPendingAt,
               meteringWccAfterDiscom: (q as any).meteringWccAfterDiscom,
               meteringWccAfterDiscomAt: (q as any).meteringWccAfterDiscomAt
+            }),
+            ...paymentExcelJourneyApiFields({
+              ...(typeof (q as any).get === 'function'
+                ? ((q as any).get({ plain: true }) as Record<string, unknown>)
+                : ((q as unknown) as Record<string, unknown>)),
+              installationStatus: (q as any).installationStatus || 'pending_installer',
+              meteringWccAfterDiscom: (q as any).meteringWccAfterDiscom
             }),
             dealerName: qAny.dealer
               ? `${qAny.dealer.firstName || ''} ${qAny.dealer.lastName || ''}`.trim() || null
