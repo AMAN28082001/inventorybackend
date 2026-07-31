@@ -21,6 +21,20 @@ import {
   quotationProposalDateApiFields,
   touchQuotationProposalValidity
 } from '../utils/quotationApiJson';
+import {
+  pushSystemHistory,
+  swapSystemHistory,
+  shouldPushSystemHistoryOnProductsPatch,
+  quotationSystemHistoryApiFields,
+  type QuotationSystemHistoryEntry
+} from '../utils/quotationSystemHistory';
+import {
+  isAdditionalQuotationRequest,
+  resolveSourceQuotationId,
+  resolveQuotationCreateNotes,
+  markQuotationAsCurrentForCustomer,
+  quotationCurrentApiFields
+} from '../utils/quotationAdditionalCreate';
 import { persistQuotationSystemKw } from '../utils/persistQuotationSystemKw';
 import {
   mapInstallationDocumentsForApi,
@@ -894,28 +908,67 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
     }
 
     // Source-of-truth duplicate guard: prevent creating another active quotation
-    // for the same customer mobile/customer record.
-    const duplicateWhere: any = {
-      customerId: customerRecord.id,
-      status: { [Op.notIn]: ['rejected', 'completed'] }
-    };
-    if (req.dealer.role !== 'admin') {
-      duplicateWhere.dealerId = req.dealer.id;
-    }
-    const duplicateQuotation = await Quotation.findOne({
-      where: duplicateWhere,
-      attributes: ['id', 'status']
-    });
-    if (duplicateQuotation) {
-      res.status(409).json({
-        success: false,
-        error: {
-          code: 'CONFLICT_001',
-          message: 'An active quotation already exists for this customer mobile',
-          details: [{ field: 'customer.mobile', message: `Existing quotation: ${duplicateQuotation.id}` }]
-        }
+    // for the same customer mobile/customer record — unless §23 additional/revise flags.
+    const allowAdditional = isAdditionalQuotationRequest(req.body as Record<string, unknown>);
+    const sourceQuotationId = resolveSourceQuotationId(req.body as Record<string, unknown>);
+
+    if (allowAdditional && sourceQuotationId) {
+      const sourceWhere: any = { id: sourceQuotationId };
+      if (req.dealer.role !== 'admin') {
+        sourceWhere.dealerId = req.dealer.id;
+      }
+      const sourceQuotation = await Quotation.findOne({
+        where: sourceWhere,
+        attributes: ['id', 'dealerId', 'customerId']
       });
-      return;
+      if (!sourceQuotation) {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'SOURCE_QUOTATION_MISSING',
+            message: `sourceQuotationId ${sourceQuotationId} not found`
+          }
+        });
+        return;
+      }
+      if (
+        req.dealer.role !== 'admin' &&
+        String(sourceQuotation.dealerId) !== String(req.dealer.id)
+      ) {
+        res.status(403).json({
+          success: false,
+          error: {
+            code: 'SOURCE_QUOTATION_FORBIDDEN',
+            message: 'sourceQuotationId is not owned by this dealer'
+          }
+        });
+        return;
+      }
+    }
+
+    if (!allowAdditional) {
+      const duplicateWhere: any = {
+        customerId: customerRecord.id,
+        status: { [Op.notIn]: ['rejected', 'completed'] }
+      };
+      if (req.dealer.role !== 'admin') {
+        duplicateWhere.dealerId = req.dealer.id;
+      }
+      const duplicateQuotation = await Quotation.findOne({
+        where: duplicateWhere,
+        attributes: ['id', 'status']
+      });
+      if (duplicateQuotation) {
+        res.status(409).json({
+          success: false,
+          error: {
+            code: 'CONFLICT_001',
+            message: 'An active quotation already exists for this customer mobile',
+            details: [{ field: 'customer.mobile', message: `Existing quotation: ${duplicateQuotation.id}` }]
+          }
+        });
+        return;
+      }
     }
 
     // Validate product selection against catalog
@@ -1179,6 +1232,11 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
       ? calculatePaymentStatus(normalizedPaidAmount, validatedTotalAmount)
       : (paymentStatus ?? null);
 
+    const quotationCreateNotes = resolveQuotationCreateNotes(
+      req.body as Record<string, unknown>,
+      sourceQuotationId
+    );
+
     // Create quotation - MUST save all pricing fields from frontend
     const quotation = await Quotation.create({
       id: quotationId,
@@ -1199,8 +1257,21 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
       paidAmount: normalizedPaidAmount,
       paymentDate: paymentDate ?? null,
       paymentStatus: normalizedPaymentStatus,
+      sourceQuotationId: sourceQuotationId || null,
+      notes: quotationCreateNotes,
+      isCurrent: true,
       validUntil
     });
+
+    // §23: new row is Current; demote other quotations for same customer (keep old rows)
+    try {
+      await markQuotationAsCurrentForCustomer(finalCustomerId, quotation.id);
+    } catch (currentErr) {
+      logError('Mark quotation current on create failed (non-fatal)', currentErr, {
+        quotationId: quotation.id,
+        customerId: finalCustomerId
+      });
+    }
 
     const normalizedPhase = products.phase || '1-Phase';
 
@@ -1316,6 +1387,11 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
           cablePrice: finalPricing.cablePrice,
           acdbDcdbPrice: finalPricing.acdbDcdbPrice
         },
+        sourceQuotationId: (quotation as any).sourceQuotationId || null,
+        source_quotation_id: (quotation as any).sourceQuotationId || null,
+        notes: (quotation as any).notes || null,
+        isCurrent: true,
+        is_current: true,
         ...quotationProposalDateApiFields(quotation)
       }
     });
@@ -1772,7 +1848,8 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         discount: q.discount,
         discountAmount: Number((q as any).discountAmount || 0),
         discount_amount: Number((q as any).discountAmount || 0),
-        ...quotationProposalDateApiFields(q)
+        ...quotationProposalDateApiFields(q),
+        ...quotationCurrentApiFields(row)
       };
     }));
 
@@ -2242,7 +2319,10 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
         installments: phaseRows,
         paymentPhases: phaseRows,
         payment_phases: phaseRows,
-        ...quotationProposalDateApiFields(quotation)
+        ...quotationProposalDateApiFields(quotation),
+        ...quotationSystemHistoryApiFields(rowById),
+        ...quotationCurrentApiFields(rowById),
+        notes: (rowById as any).notes ?? null
       }
     });
   } catch (error) {
@@ -2557,6 +2637,21 @@ export const updateQuotationProducts = async (req: Request, res: Response): Prom
       ...buildQuotationProductInaPersistFieldsForUpdate(normalizedProducts)
     };
 
+    // §23: snapshot current products+pricing before overwrite (pricing-only PATCH does not push)
+    if (
+      shouldPushSystemHistoryOnProductsPatch(
+        req.body as Record<string, unknown>,
+        req.query as Record<string, unknown>
+      )
+    ) {
+      const nextHistory = pushSystemHistory(
+        quotation.get({ plain: true }) as unknown as Record<string, unknown>,
+        quotationAny.products,
+        quotationAny.customPanels
+      );
+      await quotation.update({ systemHistory: nextHistory });
+    }
+
     // Update quotation system type if provided
     if (products.systemType) {
       await quotation.update({ systemType: products.systemType });
@@ -2664,6 +2759,10 @@ export const updateQuotationProducts = async (req: Request, res: Response): Prom
         }
       : null;
 
+    const updatedPlain = updatedQuotation
+      ? (updatedQuotation.get({ plain: true }) as unknown as Record<string, unknown>)
+      : (quotation.get({ plain: true }) as unknown as Record<string, unknown>);
+
     res.json({
       success: true,
       data: {
@@ -2672,11 +2771,358 @@ export const updateQuotationProducts = async (req: Request, res: Response): Prom
         ...productEnrichment,
         products: mergedProducts,
         quotationProduct: mergedProducts,
-        ...quotationProposalDateApiFields(updatedQuotation || quotation)
+        ...quotationProposalDateApiFields(updatedQuotation || quotation),
+        ...quotationSystemHistoryApiFields(updatedPlain)
       }
     });
   } catch (error) {
     logError('Update quotation products error', error, { quotationId: req.params.quotationId });
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
+};
+
+/**
+ * POST /quotations/:id/revert-system — restore last system_history entry (HANDOFF §23).
+ * Same quotation id; customer unchanged; swaps current ↔ previous.
+ */
+export const revertQuotationSystem = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const isAccountManager = req.user && (req.user.role === 'account-management' || req.user.role === 'hr');
+    const isInventoryAdmin =
+      req.user &&
+      (req.user.role === 'admin' ||
+        req.user.role === 'super-admin' ||
+        req.user.role === 'super-admin-manager');
+    if (!req.dealer && !isAccountManager && !isInventoryAdmin) {
+      res.status(401).json({
+        success: false,
+        error: { code: 'AUTH_003', message: 'User not authenticated' }
+      });
+      return;
+    }
+
+    const { quotationId } = req.params;
+    const where: any = { id: quotationId };
+    if (isAccountManager) {
+      where.status = 'approved';
+    } else if (req.dealer && req.dealer.role !== 'admin') {
+      where.dealerId = req.dealer.id;
+    }
+
+    const quotation = await Quotation.findOne({
+      where,
+      include: [
+        { model: QuotationProduct, as: 'products' },
+        { model: CustomPanel, as: 'customPanels' },
+        { model: Customer, as: 'customer' }
+      ]
+    });
+
+    if (!quotation) {
+      res.status(404).json({
+        success: false,
+        error: { code: 'RES_001', message: 'Quotation not found' }
+      });
+      return;
+    }
+
+    const quotationAny = quotation as any;
+    const { previous, nextHistory } = swapSystemHistory(
+      quotation.get({ plain: true }) as unknown as Record<string, unknown>,
+      quotationAny.products,
+      quotationAny.customPanels
+    );
+
+    if (!previous) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'NO_SYSTEM_HISTORY',
+          message: 'No previous system configuration to revert to'
+        }
+      });
+      return;
+    }
+
+    const restored = previous as QuotationSystemHistoryEntry;
+    const prevProducts = { ...(restored.products || {}) } as Record<string, unknown>;
+    const customPanelsSrc =
+      restored.customPanels ||
+      (Array.isArray(prevProducts.customPanels) ? (prevProducts.customPanels as Array<Record<string, unknown>>) : []);
+    delete prevProducts.customPanels;
+
+    const p = restored.pricing || {};
+    const newSubtotal = Number(p.subtotal ?? quotation.subtotal ?? 0);
+    const newStateSubsidy = Number(p.stateSubsidy ?? 0);
+    const newCentralSubsidy = Number(p.centralSubsidy ?? 0);
+    const newDiscountAmount = Number(p.discountAmount ?? quotation.discountAmount ?? 0);
+    const newTotalAmount = Number(p.totalAmount ?? quotation.totalAmount ?? 0);
+    const newFinalAmount = Number(p.finalAmount ?? quotation.finalAmount ?? newTotalAmount);
+    const newTotalSubsidy = newStateSubsidy + newCentralSubsidy;
+    const newAmountAfterSubsidy = Math.max(0, newSubtotal - newTotalSubsidy);
+    const systemType = String(
+      prevProducts.systemType || prevProducts.system_type || quotation.systemType
+    ) as typeof quotation.systemType;
+
+    const paidForRemaining = Number(quotation.paidAmount || 0);
+    const computedRemaining = remainingPaymentAgainstSubtotal(
+      newAmountAfterSubsidy,
+      paidForRemaining,
+      newDiscountAmount
+    );
+
+    await quotation.update({
+      systemType,
+      systemHistory: nextHistory,
+      subtotal: newSubtotal,
+      stateSubsidy: newStateSubsidy,
+      centralSubsidy: newCentralSubsidy,
+      totalSubsidy: newTotalSubsidy,
+      amountAfterSubsidy: newAmountAfterSubsidy,
+      discountAmount: newDiscountAmount,
+      discount: newDiscountAmount,
+      totalAmount: newTotalAmount,
+      finalAmount: newFinalAmount,
+      remainingAmount: computedRemaining,
+      validUntil: computeQuotationValidUntil(new Date())
+    });
+
+    const normalizedProducts = normalizeInaPackageProductFields(prevProducts);
+    const productPayload = pickQuotationProductPersistPayload(normalizedProducts);
+    const pdfPersistFields = {
+      ...buildQuotationProductPdfPersistFields(normalizedProducts),
+      ...buildQuotationProductPdfPersistFieldsForUpdate(normalizedProducts)
+    };
+    const inaPersistFields = {
+      ...buildQuotationProductInaPersistFields(normalizedProducts),
+      ...buildQuotationProductInaPersistFieldsForUpdate(normalizedProducts)
+    };
+    if (p.pdfCommercialSet !== undefined) {
+      (productPayload as any).pdfCommercialSet = Boolean(p.pdfCommercialSet);
+    }
+
+    let quotationProduct =
+      quotationAny.products ||
+      (await QuotationProduct.findOne({ where: { quotationId: quotation.id } }));
+
+    if (!quotationProduct) {
+      quotationProduct = await QuotationProduct.create({
+        id: uuidv4(),
+        quotationId: quotation.id,
+        systemType,
+        subtotal: newSubtotal,
+        totalAmount: newTotalAmount,
+        finalAmount: newFinalAmount,
+        stateSubsidy: newStateSubsidy,
+        centralSubsidy: newCentralSubsidy,
+        ...productPayload,
+        ...pdfPersistFields,
+        ...inaPersistFields,
+        phase: (prevProducts.phase as string) || '1-Phase'
+      });
+    } else {
+      await quotationProduct.update({
+        systemType,
+        subtotal: newSubtotal,
+        totalAmount: newTotalAmount,
+        finalAmount: newFinalAmount,
+        stateSubsidy: newStateSubsidy,
+        centralSubsidy: newCentralSubsidy,
+        ...productPayload,
+        ...pdfPersistFields,
+        ...inaPersistFields,
+        phase: (prevProducts.phase as string) || quotationProduct.phase || '1-Phase'
+      });
+    }
+
+    await CustomPanel.destroy({ where: { quotationId: quotation.id } });
+    if (systemType === 'customize' && Array.isArray(customPanelsSrc) && customPanelsSrc.length > 0) {
+      await CustomPanel.bulkCreate(
+        customPanelsSrc.map((panel: any) => ({
+          id: uuidv4(),
+          quotationId: quotation.id,
+          brand: panel.brand,
+          size: panel.size,
+          quantity: panel.quantity,
+          type: panel.type,
+          price: panel.price
+        }))
+      );
+    }
+
+    try {
+      await persistQuotationSystemKw(quotation.id, systemType);
+    } catch (persistErr) {
+      logError('Persist system_kw on system revert failed (non-fatal)', persistErr, {
+        quotationId: quotation.id
+      });
+    }
+
+    await touchQuotationProposalValidity(quotation);
+
+    const updatedQuotation = await Quotation.findByPk(quotation.id, {
+      include: [
+        { model: QuotationProduct, as: 'products' },
+        { model: CustomPanel, as: 'customPanels' },
+        { model: Customer, as: 'customer' }
+      ]
+    });
+    const updatedAny = updatedQuotation as any;
+    const productsRow = updatedAny?.products;
+    const customPanelsData = updatedAny?.customPanels?.map((cp: any) => cp.toJSON()) || [];
+    const productEnrichment = quotationProductEnrichmentFields(
+      productsRow,
+      customPanelsData,
+      updatedQuotation?.systemType,
+      updatedAny?.systemKw
+    );
+    const mergedProducts = productEnrichment.products
+      ? {
+          ...productEnrichment.products,
+          customPanels: customPanelsData.length > 0 ? customPanelsData : undefined
+        }
+      : null;
+    const pricing = calculatePricing(
+      productsRow || {},
+      updatedQuotation!.discount,
+      (updatedQuotation as any).discountAmount
+    );
+    const finalPricing = {
+      ...pricing,
+      subtotal: Number(updatedQuotation!.subtotal || pricing.subtotal),
+      totalAmount: Number(updatedQuotation!.totalAmount || pricing.totalAmount),
+      finalAmount: Number(updatedQuotation!.finalAmount || pricing.finalAmount)
+    };
+    const plain = updatedQuotation!.get({ plain: true }) as unknown as Record<string, unknown>;
+
+    res.json({
+      success: true,
+      message: `Reverted to ${restored.label || 'previous system'}`,
+      data: {
+        id: updatedQuotation!.id,
+        systemType: updatedQuotation!.systemType,
+        ...productEnrichment,
+        products: mergedProducts,
+        quotationProduct: mergedProducts,
+        pricing: finalPricing,
+        ...quotationAmountApiFields(plain, finalPricing),
+        customer: updatedAny.customer
+          ? {
+              id: updatedAny.customer.id,
+              firstName: updatedAny.customer.firstName,
+              lastName: updatedAny.customer.lastName ?? '',
+              mobile: updatedAny.customer.mobile,
+              email: updatedAny.customer.email ?? ''
+            }
+          : null,
+        ...quotationProposalDateApiFields(updatedQuotation!),
+        ...quotationSystemHistoryApiFields(plain)
+      }
+    });
+  } catch (error) {
+    logError('Revert quotation system error', error, { quotationId: req.params.quotationId });
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
+};
+
+/**
+ * POST /quotations/:id/restore-current — make this quotation Current (HANDOFF §23).
+ * Other same-customer quotations become Previous. No rows deleted.
+ */
+export const restoreQuotationCurrent = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const isAccountManager = req.user && (req.user.role === 'account-management' || req.user.role === 'hr');
+    const isInventoryAdmin =
+      req.user &&
+      (req.user.role === 'admin' ||
+        req.user.role === 'super-admin' ||
+        req.user.role === 'super-admin-manager');
+    if (!req.dealer && !isAccountManager && !isInventoryAdmin) {
+      res.status(401).json({
+        success: false,
+        error: { code: 'AUTH_003', message: 'User not authenticated' }
+      });
+      return;
+    }
+
+    const { quotationId } = req.params;
+
+    // PATCH fallback from FE restoreAsCurrent: require { isCurrent: true }.
+    if (String(req.method || '').toUpperCase() === 'PATCH') {
+      const body = (req.body || {}) as Record<string, unknown>;
+      const wantsCurrent =
+        body.isCurrent === true ||
+        body.is_current === true ||
+        body.setAsCurrent === true ||
+        body.set_as_current === true;
+      if (!wantsCurrent) {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'VAL_001',
+            message: 'PATCH /quotations/:id supports restoring current via { isCurrent: true }'
+          }
+        });
+        return;
+      }
+    }
+
+    const where: any = { id: quotationId };
+    if (isAccountManager) {
+      where.status = 'approved';
+    } else if (req.dealer && req.dealer.role !== 'admin') {
+      where.dealerId = req.dealer.id;
+    }
+
+    const quotation = await Quotation.findOne({
+      where,
+      include: [
+        { model: QuotationProduct, as: 'products' },
+        { model: Customer, as: 'customer' }
+      ]
+    });
+
+    if (!quotation) {
+      res.status(404).json({
+        success: false,
+        error: { code: 'RES_001', message: 'Quotation not found' }
+      });
+      return;
+    }
+
+    await markQuotationAsCurrentForCustomer(quotation.customerId, quotation.id);
+    await quotation.reload();
+
+    const plain = quotation.get({ plain: true }) as unknown as Record<string, unknown>;
+    const quotationAny = quotation as any;
+    const productEnrichment = quotationProductEnrichmentFields(
+      quotationAny.products,
+      quotationAny.customPanels,
+      quotation.systemType,
+      quotationAny.systemKw
+    );
+
+    res.json({
+      success: true,
+      message: `${quotation.id} restored as current quotation`,
+      data: {
+        id: quotation.id,
+        customerId: quotation.customerId,
+        systemType: quotation.systemType,
+        status: quotation.status,
+        ...productEnrichment,
+        ...quotationCurrentApiFields(plain),
+        ...quotationProposalDateApiFields(quotation)
+      }
+    });
+  } catch (error) {
+    logError('Restore quotation current error', error, { quotationId: req.params.quotationId });
     res.status(500).json({
       success: false,
       error: { code: 'SYS_001', message: 'Internal server error' }

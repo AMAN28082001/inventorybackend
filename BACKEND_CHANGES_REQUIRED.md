@@ -583,6 +583,20 @@ When body has `admin_id` / `adminId` / `sell_from_admin_id` / `stock_admin_id` (
 
 `POST /sales` persists each line's `quantity`, `unit_price`, `gst_rate`, and line amount (`line_total` / `subtotal`). `GET /sales` and `GET /sales/:id` return those as numbers plus aliases and nested `product: { id, name }`.
 
+### Quotations — revise system + revert (Jul 2026) — IMPLEMENTED
+
+**Handoff:** `BACKEND_CHANGES_HANDOFF.md` §23 · **Ref:** `BACKEND_QUOTATION_SYSTEM_HISTORY.ts`
+
+`quotations.systemHistory` JSONB. `PATCH /quotations/:id/products` pushes `{ products, pricing, label, savedAt }` before overwrite (cap 10). Pricing-only PATCH does not push. `GET /quotations/:id` returns `systemHistory` / `canRevertSystem` / `previousSystemLabel`. `POST /quotations/:id/revert-system` swaps current ↔ last history (same id; customer unchanged).
+
+### Quotations — additional quotation same customer (Jul 2026) — IMPLEMENTED
+
+**Handoff:** `BACKEND_CHANGES_HANDOFF.md` §23 · **Ref:** `BACKEND_QUOTATION_SYSTEM_HISTORY.ts`
+
+`POST /quotations` with `allowAdditionalQuotation` / `allowDuplicateMobile` / `sourceQuotationId` (aliases) **skips** duplicate-mobile 409 and creates a **new** row (same `customer_id`; old quotation unchanged). Optional `sourceQuotationId` + `notes` persisted. Without flags, duplicate protection remains.
+
+`quotations.isCurrent`: new additional create → new row current, siblings previous. Restore via `POST /quotations/:id/restore-current` (also `POST …/set-current` and `PATCH /quotations/:id` with `{ isCurrent: true }`). `GET /quotations` returns `isCurrent` / `is_current` (+ `sourceQuotationId`). List UI: one current row + History/Restore.
+
 ---
 
 ### Admin Overview kW — verify list payload (no new endpoint)

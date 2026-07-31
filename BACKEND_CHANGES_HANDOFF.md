@@ -44,9 +44,10 @@
 | 32 | High | Inventory Agent sale — `sales_created_by_fkey` | **Done** | §20 / `BACKEND_SALES_CREATED_BY.ts` |
 | 33 | High | Inventory Agent sale — admin stock (not central) | **Done** | §21 / `BACKEND_SALES_ADMIN_STOCK.ts` |
 | 34 | High | Inventory sale lines — persist/return qty + unit_price | **Done** | §22 / `BACKEND_SALES_LINE_ITEMS.ts` |
-| 35 | High | Metering dual track — Bank process + installer auth | **Done** | §17 / `BACKEND_METERING_DUAL_TRACK.md` |
-| 36 | High | Document Submission — Property Documents PDF optional | **Done** | §18 / `BACKEND_PROPERTY_DOCUMENT_OPTIONAL.md` |
-| 37 | High | Non-DCR 80kW set — Renew Energy / Waaree / Adani | **Done** | §19 / `BACKEND_NON_DCR_80KW.md` |
+| 35 | High | Quotations — additional create + is_current / restore | **Done** | §23 / `BACKEND_QUOTATION_SYSTEM_HISTORY.ts` |
+| 36 | High | Metering dual track — Bank process + installer auth | **Done** | §17 / `BACKEND_METERING_DUAL_TRACK.md` |
+| 37 | High | Document Submission — Property Documents PDF optional | **Done** | §18 / `BACKEND_PROPERTY_DOCUMENT_OPTIONAL.md` |
+| 38 | High | Non-DCR 80kW set — Renew Energy / Waaree / Adani | **Done** | §19 / `BACKEND_NON_DCR_80KW.md` |
 
 **Deploy before QA:**
 
@@ -2017,6 +2018,38 @@ POST/GET either ignored `items[].quantity` / `unit_price` aliases (`subtotal` as
 2. `GET /sales/:id` → `items[0].quantity === 2`, `unit_price === 100`, `subtotal === 200`
 3. Sales History → View items → **not** `0.00 × ₹0`
 4. Stock deduct (§21) uses the same persisted quantity
+
+---
+
+## 23. Quotations — Additional quotation + restore current (Jul 2026)
+
+**Frontend:** Quotations → Actions → **Create another quotation** opens New Quotation with customer locked; save creates a **new** row; old stays.  
+**List UI:** One visible row per customer (current); **History** dialog lists older versions and **Restore as current**.
+
+### Root cause
+
+`POST /quotations` rejected a second quotation for the same mobile. Without `is_current` / restore API, Create another hit **409** and Restore only worked via `localStorage` on that device.
+
+### Shipped
+
+| Piece | Implementation |
+|-------|----------------|
+| Migration | `isCurrent` BOOLEAN NOT NULL DEFAULT true + backfill newest-per-customer; `sourceQuotationId` / `notes` |
+| Allow second create | `allowAdditionalQuotation` / `allowDuplicateMobile` / `sourceQuotationId` → skip 409; insert new row; do not overwrite old |
+| Current flag | New row `isCurrent=true`; siblings for same customer `false`; store `sourceQuotationId` when sent |
+| Restore | `POST …/restore-current` (+ `POST …/set-current`, `PATCH …/:id` `{ isCurrent: true }` fallbacks) |
+| GET list/detail | `isCurrent` / `is_current` + optional `sourceQuotationId` on every row |
+
+**Ref:** `BACKEND_QUOTATION_SYSTEM_HISTORY.ts`, `utils/quotationAdditionalCreate.ts`
+
+### QA
+
+1. Create another quotation (new system) → **201** new id; old kept; new `isCurrent=true`  
+2. List returns both; History can Restore old → old current, new previous  
+3. Same mobile **without** flags → still **409**  
+4. No rows deleted; products unchanged per id  
+
+**Deploy:** `yarn migrate`
 
 ---
 

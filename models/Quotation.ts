@@ -11,6 +11,12 @@ interface QuotationAttributes {
   subtotal: number;        // Set price (complete package price)
   /** Persisted system size (kW) from panel config — used by admin overview */
   systemKw?: number | null;
+  /** §23 — prior quotation when creating an additional row for the same customer */
+  sourceQuotationId?: string | null;
+  /** §23 — only one current quotation per customer (Current / Previous badges) */
+  isCurrent?: boolean;
+  /** Optional create/revise notes (e.g. "Additional quotation revised from QT-…") */
+  notes?: string | null;
   totalAmount: number;     // Amount after discount (Subtotal - Subsidy - Discount)
   finalAmount: number;     // Final amount (Subtotal - Subsidy, discount NOT applied)
   centralSubsidy: number;  // Central government subsidy
@@ -31,6 +37,14 @@ interface QuotationAttributes {
   fileLoginAt?: Date | null;
   statusApprovedAt?: Date | null;
   statusHistory?: Array<{ status: string; at: string }> | null;
+  /** Revise/revert stack: previous products+pricing snapshots (HANDOFF §23) */
+  systemHistory?: Array<{
+    products: Record<string, unknown>;
+    pricing: Record<string, unknown>;
+    label: string;
+    savedAt: string;
+    customPanels?: Array<Record<string, unknown>>;
+  }> | null;
   subsidyCheques?: Array<{
     id: string;
     details: string;
@@ -120,7 +134,7 @@ interface QuotationAttributes {
 
 interface QuotationCreationAttributes extends Optional<
   QuotationAttributes,
-  'id' | 'status' | 'discount' | 'createdAt' | 'updatedAt' | 'centralSubsidy' | 'stateSubsidy' | 'totalSubsidy' | 'amountAfterSubsidy' | 'discountAmount' | 'systemKw' |   'paymentMode' | 'paymentType' | 'bankName' | 'bankIfsc' | 'subsidyChequeDetails' | 'fileLoginStatus' | 'filePaymentType' | 'fileBankName' | 'fileBankIfsc' | 'fileSubsidyChequeDetails' | 'fileLoginAt' | 'statusApprovedAt'   | 'statusHistory' | 'subsidyCheques' | 'remainingAmount' | 'paidAmount' | 'paymentDate' | 'paymentStatus' | 'finalSettlementAmount' | 'finalSettlementApplied' | 'finalSettlementAt' | 'finalSettlementBy' | 'paymentPhases' | 'paymentPlanUpdatedBy' | 'paymentPlanUpdatedAt' | 'approvedAt' | 'installationStatus' | 'installerId' | 'installerActionAt' | 'installerInProgressAt' |   'installerApprovedAt' | 'installerRemarks' | 'installationPartialApproved' | 'installationPartialApprovedAt' | 'installationReadyForInstaller' | 'installationReleasedAt' | 'installationScheduledAt' | 'installationTeamId' |   'baldevId' | 'baldevActionAt' | 'baldevRemarks' | 'meteringId' | 'meteringActionAt' | 'meteringApprovedAt' | 'meteringRemarks' | 'meteringAuthorizedRepresentative' | 'discomName' | 'meterType' | 'meterNo' | 'solarMeterNo' | 'netMeterNo' | 'meterDocumentImageUrl' | 'mcoAt' | 'completionAt' | 'meteringWccAfterDiscom' | 'meteringWccAfterDiscomAt' | 'bankProcessDone' | 'bankProcessDoneAt' | 'siteLengthCm' | 'siteWidthCm' | 'siteHeightCm' | 'backLegFt' | 'midLegFt' | 'frontLegFt' | 'extraExpensesTotal' | 'extraExpensesJson'
+  'id' | 'status' | 'discount' | 'createdAt' | 'updatedAt' | 'centralSubsidy' | 'stateSubsidy' | 'totalSubsidy' | 'amountAfterSubsidy' | 'discountAmount' | 'systemKw' | 'sourceQuotationId' | 'isCurrent' | 'notes' |   'paymentMode' | 'paymentType' | 'bankName' | 'bankIfsc' | 'subsidyChequeDetails' | 'fileLoginStatus' | 'filePaymentType' | 'fileBankName' | 'fileBankIfsc' | 'fileSubsidyChequeDetails' | 'fileLoginAt' | 'statusApprovedAt'   | 'statusHistory' | 'systemHistory' | 'subsidyCheques' | 'remainingAmount' | 'paidAmount' | 'paymentDate' | 'paymentStatus' | 'finalSettlementAmount' | 'finalSettlementApplied' | 'finalSettlementAt' | 'finalSettlementBy' | 'paymentPhases' | 'paymentPlanUpdatedBy' | 'paymentPlanUpdatedAt' | 'approvedAt' | 'installationStatus' | 'installerId' | 'installerActionAt' | 'installerInProgressAt' |   'installerApprovedAt' | 'installerRemarks' | 'installationPartialApproved' | 'installationPartialApprovedAt' | 'installationReadyForInstaller' | 'installationReleasedAt' | 'installationScheduledAt' | 'installationTeamId' |   'baldevId' | 'baldevActionAt' | 'baldevRemarks' | 'meteringId' | 'meteringActionAt' | 'meteringApprovedAt' | 'meteringRemarks' | 'meteringAuthorizedRepresentative' | 'discomName' | 'meterType' | 'meterNo' | 'solarMeterNo' | 'netMeterNo' | 'meterDocumentImageUrl' | 'mcoAt' | 'completionAt' | 'meteringWccAfterDiscom' | 'meteringWccAfterDiscomAt' | 'bankProcessDone' | 'bankProcessDoneAt' | 'siteLengthCm' | 'siteWidthCm' | 'siteHeightCm' | 'backLegFt' | 'midLegFt' | 'frontLegFt' | 'extraExpensesTotal' | 'extraExpensesJson'
 > {}
 
 class Quotation extends Model<QuotationAttributes, QuotationCreationAttributes> implements QuotationAttributes {
@@ -132,6 +146,9 @@ class Quotation extends Model<QuotationAttributes, QuotationCreationAttributes> 
   public discount!: number;
   public subtotal!: number;        // Set price (complete package price)
   public systemKw!: number | null;
+  public sourceQuotationId!: string | null;
+  public isCurrent!: boolean;
+  public notes!: string | null;
   public totalAmount!: number;     // Amount after discount (Subtotal - Subsidy - Discount)
   public finalAmount!: number;     // Final amount (Subtotal - Subsidy, discount NOT applied)
   public centralSubsidy!: number;  // Central government subsidy
@@ -152,6 +169,13 @@ class Quotation extends Model<QuotationAttributes, QuotationCreationAttributes> 
   public fileLoginAt!: Date | null;
   public statusApprovedAt!: Date | null;
   public statusHistory!: Array<{ status: string; at: string }> | null;
+  public systemHistory!: Array<{
+    products: Record<string, unknown>;
+    pricing: Record<string, unknown>;
+    label: string;
+    savedAt: string;
+    customPanels?: Array<Record<string, unknown>>;
+  }> | null;
   public subsidyCheques!: Array<{
     id: string;
     details: string;
@@ -270,6 +294,19 @@ Quotation.init(
       allowNull: true,
       field: 'system_kw'
     },
+    sourceQuotationId: {
+      type: DataTypes.STRING(50),
+      allowNull: true
+    },
+    isCurrent: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: true
+    },
+    notes: {
+      type: DataTypes.TEXT,
+      allowNull: true
+    },
     totalAmount: {
       type: DataTypes.DECIMAL(12, 2),
       allowNull: false,
@@ -355,6 +392,11 @@ Quotation.init(
     statusHistory: {
       type: DataTypes.JSONB,
       allowNull: true,
+      defaultValue: []
+    },
+    systemHistory: {
+      type: DataTypes.JSONB,
+      allowNull: false,
       defaultValue: []
     },
     subsidyCheques: {

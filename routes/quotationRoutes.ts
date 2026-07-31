@@ -19,6 +19,8 @@ import {
   updateQuotationPaymentDetails,
   submitQuotationFinalSettlement,
   revertQuotationFinalSettlement,
+  revertQuotationSystem,
+  restoreQuotationCurrent,
   updateQuotationInstallationRelease,
   updateQuotationInstallationScheduledAt,
   downloadQuotationsExcel,
@@ -763,6 +765,10 @@ router.patch('/:quotationId/discount', authorizeDealerOrAccountManager, validate
  *         description: Unauthorized
  */
 router.patch('/:quotationId/products', authorizeDealerOrAccountManager, validate(updateProductsSchema), updateQuotationProducts);
+router.post('/:quotationId/revert-system', authorizeDealerOrAccountManager, revertQuotationSystem);
+router.post('/:quotationId/restore-current', authorizeDealerOrAccountManager, restoreQuotationCurrent);
+router.post('/:quotationId/set-current', authorizeDealerOrAccountManager, restoreQuotationCurrent);
+router.patch('/:quotationId', authorizeDealerOrAccountManager, restoreQuotationCurrent);
 
 /**
  * @swagger
