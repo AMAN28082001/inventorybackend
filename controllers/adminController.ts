@@ -609,7 +609,9 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
                 ? ((q as any).get({ plain: true }) as Record<string, unknown>)
                 : ((q as unknown) as Record<string, unknown>)),
               installationStatus: (q as any).installationStatus || 'pending_installer',
-              meteringWccAfterDiscom: (q as any).meteringWccAfterDiscom
+              meteringWccAfterDiscom: (q as any).meteringWccAfterDiscom,
+              installationPartialApproved: (q as any).installationPartialApproved,
+              installerApprovedAt: (q as any).installerApprovedAt
             }),
             dealerName: qAny.dealer
               ? `${qAny.dealer.firstName || ''} ${qAny.dealer.lastName || ''}`.trim() || null

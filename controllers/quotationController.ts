@@ -48,6 +48,7 @@ import {
 } from '../utils/meteringMediaApi';
 import { meteringWorkflowApiFields } from '../utils/meteringWorkflowApi';
 import { paymentExcelJourneyApiFields } from '../utils/paymentExcelJourneyStatus';
+import { installationPartialApiFields } from '../utils/installationPartialApi';
 import { lookupQuotationCustomerByPhone } from '../utils/customerPhoneLookup';
 import {
   loadQuotationPaymentPhases,
@@ -1783,6 +1784,11 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         ...quotationPaymentApiFields(row),
         ...quotationAdminMetadataFields(row),
         ...serializeInstallationReleaseFields(row),
+        ...installationPartialApiFields({
+          installationStatus: (q as any).installationStatus || 'pending_installer',
+          installationPartialApproved: (q as any).installationPartialApproved,
+          installationPartialApprovedAt: (q as any).installationPartialApprovedAt
+        }),
         ...quotationAmountApiFields(row, pricing),
         paidAmount: q.paidAmount !== undefined && q.paidAmount !== null ? Number(q.paidAmount) : null,
         remaining: remainingAmount,
@@ -1793,6 +1799,7 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         paymentPhases: phaseRows,
         payment_phases: phaseRows,
         installerApprovedAt: (q as any).installerApprovedAt || null,
+        installer_approved_at: (q as any).installerApprovedAt || null,
         ...meteringWorkflowApiFields({
           installationStatus: (q as any).installationStatus || 'pending_installer',
           meteringApprovedAt: (q as any).meteringApprovedAt,
@@ -1805,7 +1812,9 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         ...paymentExcelJourneyApiFields({
           ...row,
           installationStatus: (q as any).installationStatus || 'pending_installer',
-          meteringWccAfterDiscom: (q as any).meteringWccAfterDiscom
+          meteringWccAfterDiscom: (q as any).meteringWccAfterDiscom,
+          installationPartialApproved: (q as any).installationPartialApproved,
+          installerApprovedAt: (q as any).installerApprovedAt
         }),
         discomName: (q as any).discomName || null,
         meterType: (q as any).meterType || null,
@@ -2272,7 +2281,14 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
         pricing: finalPricing,
         ...quotationAmountApiFields(rowById, finalPricing),
         status: quotation.status,
+        ...serializeInstallationReleaseFields(rowById),
         installerApprovedAt: quotationAny.installerApprovedAt || null,
+        installer_approved_at: quotationAny.installerApprovedAt || null,
+        ...installationPartialApiFields({
+          installationStatus: quotationAny.installationStatus || 'pending_installer',
+          installationPartialApproved: quotationAny.installationPartialApproved,
+          installationPartialApprovedAt: quotationAny.installationPartialApprovedAt
+        }),
         ...meteringWorkflowApiFields({
           installationStatus: quotationAny.installationStatus || 'pending_installer',
           meteringApprovedAt: quotationAny.meteringApprovedAt,
@@ -2285,7 +2301,9 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
         ...paymentExcelJourneyApiFields({
           ...rowById,
           installationStatus: quotationAny.installationStatus || 'pending_installer',
-          meteringWccAfterDiscom: quotationAny.meteringWccAfterDiscom
+          meteringWccAfterDiscom: quotationAny.meteringWccAfterDiscom,
+          installationPartialApproved: quotationAny.installationPartialApproved,
+          installerApprovedAt: quotationAny.installerApprovedAt
         }),
         discomName: quotationAny.discomName || null,
         meterType: quotationAny.meterType || null,

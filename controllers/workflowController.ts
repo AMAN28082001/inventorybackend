@@ -444,7 +444,9 @@ const getWorkflowQueue = async (
             ...paymentExcelJourneyApiFields({
               ...(typeof q.toJSON === 'function' ? q.toJSON() : (q as any)),
               installationStatus: q.installationStatus,
-              meteringWccAfterDiscom: (q as any).meteringWccAfterDiscom
+              meteringWccAfterDiscom: (q as any).meteringWccAfterDiscom,
+              installationPartialApproved: (q as any).installationPartialApproved,
+              installerApprovedAt: q.installerApprovedAt
             }),
             ...quotationPaymentApiFields(
               typeof q.toJSON === 'function' ? q.toJSON() : (q as any)

@@ -46,9 +46,10 @@
 | 34 | High | Inventory sale lines — persist/return qty + unit_price | **Done** | §22 / `BACKEND_SALES_LINE_ITEMS.ts` |
 | 35 | High | Quotations — additional create + is_current / restore | **Done** | §23 / `BACKEND_QUOTATION_SYSTEM_HISTORY.ts` |
 | 36 | High | Metering FILE STATUS — Pending / In Progress / Completed | **Done** | §24 / `BACKEND_PAYMENT_EXCEL_JOURNEY_STATUS.ts` |
-| 37 | High | Metering dual track — Bank process + installer auth | **Done** | §17 / `BACKEND_METERING_DUAL_TRACK.md` |
-| 38 | High | Document Submission — Property Documents PDF optional | **Done** | §18 / `BACKEND_PROPERTY_DOCUMENT_OPTIONAL.md` |
-| 39 | High | Non-DCR 80kW set — Renew Energy / Waaree / Adani | **Done** | §19 / `BACKEND_NON_DCR_80KW.md` |
+| 37 | High | Installation FILE STATUS — Pending / In Progress / Approved | **Done** | §25 / `BACKEND_PAYMENT_EXCEL_JOURNEY_STATUS.ts` |
+| 38 | High | Metering dual track — Bank process + installer auth | **Done** | §17 / `BACKEND_METERING_DUAL_TRACK.md` |
+| 39 | High | Document Submission — Property Documents PDF optional | **Done** | §18 / `BACKEND_PROPERTY_DOCUMENT_OPTIONAL.md` |
+| 40 | High | Non-DCR 80kW set — Renew Energy / Waaree / Adani | **Done** | §19 / `BACKEND_NON_DCR_80KW.md` |
 
 **Deploy before QA:**
 
@@ -1126,7 +1127,11 @@ If **`installationStatus` is missing** from GET, Excel shows **Workflow Pending*
 
 `journeyStageProgress.metering` / `meteringStatusLabel` follow Admin Metering tabs: Meter Pending→**Pending**; Discom / WCC / Meter Install→**In Progress**; Final Step (`mco`)→**Completed**. Lists must echo `meteringWccAfterDiscom` for WCC.
 
-**Reference:** `BACKEND_PAYMENT_EXCEL_JOURNEY_STATUS.ts`, `BACKEND_CHANGES_REQUIRED.md` §AC, HANDOFF §24.
+### Installation FILE STATUS (§25)
+
+`journeyStageProgress.installation` / `installationFileStatus`: Pending Install→**Pending**; Partial→**In Progress**; Approved Install→**Approved**. Do **not** map `installer_in_progress` → In Progress. Lists must echo release flags + `installationPartialApproved` + `installerApprovedAt`.
+
+**Reference:** `BACKEND_PAYMENT_EXCEL_JOURNEY_STATUS.ts`, `BACKEND_CHANGES_REQUIRED.md` §AC, HANDOFF §24–§25.
 
 **Code:** `utils/meteringWorkflowApi.ts`, `controllers/quotationController.ts` → `getQuotations`.
 
@@ -2088,6 +2093,45 @@ POST/GET either ignored `items[].quantity` / `unit_price` aliases (`subtotal` as
 2. Discom / WCC / Meter Installation → **In Progress**  
 3. Final Step → **Completed**  
 4. Refresh on another device — labels from API  
+
+---
+
+## 25. Installation FILE STATUS + Account filter = Admin Installation tabs (Aug 2026)
+
+**Frontend:** Account → Payment Management **FILE STATUS → Installation** + filter  
+(`installation:pending` / `installation:in_progress` / `installation:completed`)
+
+### Problem
+
+Admin **Pending Installation** (~27) vs Account **Installation · Pending** (~2) — list omitted release/partial flags, or mapped `installer_in_progress` → In Progress instead of Pending.
+
+### Mapping
+
+| Admin tab | Persist / return | UI label |
+|-----------|------------------|----------|
+| Pending Installation | `pending_installer` / `installer_in_progress` + release flags | **Pending** |
+| Partial Approved | `installer_partial_approved` / `installationPartialApproved` | **In Progress** |
+| Approved Installation | `installer_approved` + `installerApprovedAt` | **Approved** |
+
+`installer_in_progress` stays **Pending** (not In Progress).
+
+### Shipped
+
+| Piece | Implementation |
+|-------|----------------|
+| Send to Installer | `PATCH …/installation-release` → release flags + prefer `pending_installer` |
+| Partial / Approve | Existing workflow uploads persist partial + `installer_approved` / `installerApprovedAt` |
+| GET approved list | `installationStatus`, release flags, `installationPartialApproved`, `installerApprovedAt` |
+| Pre-computed | `journeyStageProgress.installation` + `installationFileStatus` via `deriveInstallationStage` (§25) |
+
+**Ref:** `BACKEND_PAYMENT_EXCEL_JOURNEY_STATUS.ts`, `utils/paymentExcelJourneyStatus.ts`
+
+### QA
+
+1. Send N files to installer → Admin Pending = N  
+2. Account → Installation · Pending → **same N**  
+3. Partial Approved → leaves Pending; under In Progress  
+4. Complete & Approve → **Approved**; Pending count −1  
 
 ---
 

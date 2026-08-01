@@ -597,6 +597,14 @@ When body has `admin_id` / `adminId` / `sell_from_admin_id` / `stock_admin_id` (
 
 `quotations.isCurrent`: new additional create → new row current, siblings previous. Restore via `POST /quotations/:id/restore-current` (also `POST …/set-current` and `PATCH /quotations/:id` with `{ isCurrent: true }`). `GET /quotations` returns `isCurrent` / `is_current` (+ `sourceQuotationId`). List UI: one current row + History/Restore.
 
+### Payment Excel / FILE STATUS (§24–§25) — IMPLEMENTED
+
+**Handoff:** `BACKEND_CHANGES_HANDOFF.md` §24–§25 · **Ref:** `BACKEND_PAYMENT_EXCEL_JOURNEY_STATUS.ts`
+
+- **Metering:** Pending / In Progress / Completed (WCC via `meteringWccAfterDiscom`)
+- **Installation:** Pending / In Progress / Approved — `installer_in_progress` stays Pending; Partial → In Progress; `installer_approved` → Approved  
+- `GET /quotations?status=approved` returns release flags, `installationPartialApproved`, `installerApprovedAt`, plus `journeyStageProgress` / `installationFileStatus` / `meteringFileStatus`
+
 ---
 
 ### Admin Overview kW — verify list payload (no new endpoint)

@@ -6,12 +6,11 @@
  *
  * Frontend (Jul 2026):
  *   - `app/dashboard/account-management/page.tsx` → Payment Management → **Download Excel**
- *   - `lib/customer-journey.ts` → `getJourneyStageProgress`, `resolveMeteringJourneyStatus`, `formatJourneyStageStatusLabel`
+ *   - `lib/customer-journey.ts` → `getJourneyStageProgress`, `getJourneyHoldInfo`, `formatJourneyStageStatusLabel`
  *
- * Implemented in this repo (HANDOFF §24):
- *   - utils/paymentExcelJourneyStatus.ts — deriveMeteringStage + journeyStageProgress.metering
- *   - utils/meteringWorkflowApi.ts — meteringStatus / meteringWccAfterDiscom echo
- *   - GET /quotations, /admin/quotations, /metering/quotations include fields + journey labels
+ * Implemented in this repo (HANDOFF §24–§25):
+ *   - utils/paymentExcelJourneyStatus.ts — Installation + Metering FILE STATUS labels
+ *   - GET /quotations?status=approved echoes release / partial / approved fields
  *
  * Export is **client-side CSV** (no new download endpoint required). Backend must return
  * workflow fields on the approved quotation list so journey columns are accurate after
@@ -142,8 +141,14 @@ function isInstallationCompleteForMetering(q: Record<string, unknown>): boolean 
   )
 }
 
-export function formatJourneyStageStatusLabel(status: JourneyStageStatus): string {
-  if (status === "completed") return "Completed"
+export function formatJourneyStageStatusLabel(
+  status: JourneyStageStatus,
+  stage?: "adminApproval" | "installation" | "metering" | "finalConfirmation",
+): string {
+  if (status === "completed") {
+    if (stage === "installation") return "Approved"
+    return "Completed"
+  }
   if (status === "in_progress") return "In Progress"
   return "Pending"
 }
@@ -165,12 +170,28 @@ export function getJourneyStageProgress(q: Record<string, unknown>) {
   let metering: JourneyStageStatus = "pending"
   let finalConfirmation: JourneyStageStatus = "pending"
 
-  if (installStatus === "installer_in_progress" || installStatus === "pending_installer") {
+  // Installation FILE STATUS — same buckets as Admin → Installation tabs:
+  // | Pending Installation | Pending      | pending_installer, installer_in_progress, unset |
+  // | Partial Approved     | In Progress  | installer_partial_approved / partial flag       |
+  // | Approved Installation | Approved      | installer_approved (+ photos / installerApprovedAt) |
+  const isPartial =
+    installStatus === "installer_partial_approved" ||
+    installStatus === "partial_approved" ||
+    q.installationPartialApproved === true ||
+    q.installation_partial_approved === true ||
+    q.installationPartialApproved === 1 ||
+    q.installation_partial_approved === "true"
+  const isApprovedInstall =
+    !isPartial &&
+    (isInstallationCompleteForMetering(q) ||
+      Boolean(q.installerApprovedAt || q.installer_approved_at))
+
+  if (isPartial) {
     installation = "in_progress"
+  } else if (isApprovedInstall) {
+    installation = "completed" // UI label for installation stage = "Approved"
   }
-  if (isInstallationCompleteForMetering(q)) {
-    installation = "completed"
-  }
+  // else Pending (includes installer_in_progress — still Pending Installation tab)
 
   // Metering FILE STATUS (align Admin Metering tabs):
   // Final Step (mco) → Completed
@@ -258,9 +279,9 @@ export function buildPaymentExcelJourneyCells(q: Record<string, unknown>) {
   return {
     installmentCount: count,
     adminApprovalStatus: formatJourneyStageStatusLabel(progress.adminApproval),
-    installationStatus: formatJourneyStageStatusLabel(progress.installation),
-    meteringStatus: formatJourneyStageStatusLabel(progress.metering),
-    finalConfirmationStatus: formatJourneyStageStatusLabel(progress.finalConfirmation),
+    installationStatus: formatJourneyStageStatusLabel(progress.installation, "installation"),
+    meteringStatus: formatJourneyStageStatusLabel(progress.metering, "metering"),
+    finalConfirmationStatus: formatJourneyStageStatusLabel(progress.finalConfirmation, "finalConfirmation"),
     fileStatus: hold.stageLabel,
   }
 }
@@ -272,6 +293,7 @@ export function buildPaymentExcelJourneyCells(q: Record<string, unknown>) {
  *
  *   pending_installer
  *   installer_in_progress
+ *   installer_partial_approved   // Partial Approved tab → FILE STATUS In Progress
  *   installer_approved
  *   pending_metering
  *   metering_in_progress
@@ -293,6 +315,7 @@ export function buildPaymentExcelJourneyCells(q: Record<string, unknown>) {
  *     'id', 'status', 'installation_status', 'metering_stage', 'metering_status',
  *     'mco_status', 'metering_wcc_after_discom',
  *     'installation_ready_for_installer', 'installation_released_at',
+ *     'installation_partial_approved', 'installer_approved_at',
  *     'status_approved_at', 'file_login_at', 'file_login_status',
  *     // ... payment + dealer + customer fields from §6.5
  *   ],
@@ -307,6 +330,11 @@ export function buildPaymentExcelJourneyCells(q: Record<string, unknown>) {
  * -----------------------------------------------------------------------------
  *
  * - [ ] GET /api/quotations?status=approved returns installationStatus on every row
+ * - [ ] installation_ready_for_installer + installation_released_at on every released row
+ * - [ ] installer_partial_approved / installation_partial_approved persisted for Partial Approved
+ * - [ ] installer_approved_at set when Complete & Mark as Approved
+ * - [ ] Installation FILE STATUS: Pending Install tab→Pending; Partial→In Progress; Approved Install→Approved
+ * - [ ] Account filter Installation·Pending count ≈ Admin Pending Installation (same Send-to-Installer set)
  * - [ ] meteringStage / meteringStatus returned when quotation is in metering pipeline
  * - [ ] meteringWccAfterDiscom returned for WCC Pending rows
  * - [ ] Metering FILE STATUS: Final Step=mco→Completed; Meter Pending→Pending; Discom/WCC/Install→In Progress
@@ -320,15 +348,17 @@ export function buildPaymentExcelJourneyCells(q: Record<string, unknown>) {
  *
  * 1. Approve quotation → Excel: Admin Approval = Completed, File Status = Pending Installer
  *    (after Send to Installer) or Workflow Pending (before release — depends on installation_status).
- * 2. Installer in progress → Installation = In Progress, File Status = Installer In Progress.
- * 3. installer_approved → Installation = Completed, File Status = Pending Metering.
- * 4. pending_metering → Metering Status = Pending (FILE STATUS column).
- * 5. metering_approved / WCC / meter_installation_pending → Metering Status = In Progress.
- * 6. mco (Final Step) → Metering Status = Completed.
- * 7. pending_baldev → Final Confirmation = In Progress, File Status = Pending Final Confirmation.
- * 8. baldev_approved → all four stages Completed, File Status = Final Approved.
- * 9. Refresh browser → Excel columns unchanged (no localStorage-only workflow).
+ * 2. Send to Installer (pending_installer / installer_in_progress) → Installation = **Pending**
+ *    (Admin Pending Installation). Account filter Installation·Pending includes this row.
+ * 3. Partial Approved → Installation = **In Progress**.
+ * 4. installer_approved → Installation = **Approved** (not "Completed" for this column).
+ * 5. pending_metering → Metering Status = Pending (FILE STATUS column).
+ * 6. metering_approved / WCC / meter_installation_pending → Metering Status = In Progress.
+ * 7. mco (Final Step) → Metering Status = Completed.
+ * 8. pending_baldev → Final Confirmation = In Progress, File Status = Pending Final Confirmation.
+ * 9. baldev_approved → Final Confirmation Completed, File Status = Final Approved.
+ * 10. Refresh browser / other device → Excel + Account filters unchanged (API fields, not localStorage).
  *
- * Related: BACKEND_CHANGES_REQUIRED.md §AC, BACKEND_CHANGES_HANDOFF.md §6 + **§24**,
+ * Related: BACKEND_CHANGES_REQUIRED.md §AC, BACKEND_CHANGES_HANDOFF.md §6 + **§24** + **§25**,
  * BACKEND_INSTALLATION_RELEASE.md, BACKEND_METERING_DISCOM_WCC_METER_INSTALL.md.
  */
