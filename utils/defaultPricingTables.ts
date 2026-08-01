@@ -127,6 +127,21 @@ export const JUNE_2026_DCR_PRICING_DEFAULTS = [
     inverterSize: '10kW',
     panelType: 'Tata DCR',
     price: 485000
+  },
+  /** Crompton DCR set — Premier Energy 600–610W + Crompton 3.6kW (§27) */
+  {
+    systemSize: '3kW',
+    phase: '1-Phase' as const,
+    inverterSize: '3.6kW',
+    panelType: 'Crompton set',
+    price: 210000
+  },
+  {
+    systemSize: '5kW',
+    phase: '1-Phase' as const,
+    inverterSize: '3.6kW',
+    panelType: 'Crompton set',
+    price: 295000
   }
 ];
 
@@ -481,6 +496,45 @@ export const JUNE_2026_SYSTEM_CONFIG_DEFAULTS = [
     dcCableSize: 'As per Set',
     acdb: 'Havells (1-Phase)',
     dcdb: 'Havells (1-Phase)'
+  },
+  /** Crompton DCR set (§27) */
+  {
+    systemType: 'dcr' as const,
+    systemSize: '3kW',
+    phase: '1-Phase' as const,
+    panelBrand: 'Crompton set',
+    panelSize: '610W',
+    inverterBrand: 'Crompton',
+    inverterSize: '3.6kW',
+    inverterType: 'String Inverter',
+    structureType: 'GI Structure',
+    structureSize: '3kW',
+    meterBrand: 'L&T',
+    acCableBrand: 'Polycab',
+    acCableSize: 'As per Set',
+    dcCableBrand: 'Polycab',
+    dcCableSize: 'As per Set',
+    acdb: 'Crompton (1-Phase)',
+    dcdb: 'Crompton (1-Phase)'
+  },
+  {
+    systemType: 'dcr' as const,
+    systemSize: '5kW',
+    phase: '1-Phase' as const,
+    panelBrand: 'Crompton set',
+    panelSize: '610W',
+    inverterBrand: 'Crompton',
+    inverterSize: '3.6kW',
+    inverterType: 'String Inverter',
+    structureType: 'GI Structure',
+    structureSize: '5kW',
+    meterBrand: 'L&T',
+    acCableBrand: 'Polycab',
+    acCableSize: 'As per Set',
+    dcCableBrand: 'Polycab',
+    dcCableSize: 'As per Set',
+    acdb: 'Crompton (1-Phase)',
+    dcdb: 'Crompton (1-Phase)'
   }
 ];
 

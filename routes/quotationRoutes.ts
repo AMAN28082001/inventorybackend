@@ -75,6 +75,46 @@ import { handleInstallerMultipart, handleSingleInstallerUploadMultipart } from '
 import { rescheduleVisitSchema } from '../validations/visitValidations';
 import { updateQuotationBankProcess } from '../controllers/adminController';
 
+const INSTALLER_COMPLETION_FILE_FIELDS = new Set([
+  'installerCompletionImages',
+  'piUpload',
+  'homeFrontPhoto',
+  'homeWithPersonPhoto',
+  'inverterWithCustomerPhoto',
+  'plantWithCustomerPhoto',
+  'inverterSerialNumberPhoto',
+  'panelSerialNumberPhoto',
+  'geoTagPlantPhoto',
+  'otherImages',
+  'installerPo'
+]);
+
+/** §26 — FE may fall through to POST /quotations/:id/documents; detect completion vs KYC. */
+const looksLikeInstallerCompletionUpload = (req: express.Request): boolean => {
+  const body = (req.body || {}) as Record<string, unknown>;
+  const status = String(body.installationStatus || body.installation_status || '')
+    .trim()
+    .toLowerCase();
+  if (
+    status === 'installer_approved' ||
+    status === 'installer_partial_approved' ||
+    body.installerCompletionImageFieldOrderJson != null ||
+    body.installer_completion_image_field_order_json != null ||
+    body.existingInstallationImageUrlsJson != null ||
+    body.existing_installation_image_urls_json != null ||
+    body.existingPiUploadUrl != null ||
+    body.existingPiUploadUrlsJson != null ||
+    body.installationPartialApproved != null ||
+    body.installation_partial_approved != null
+  ) {
+    return true;
+  }
+  const raw = (req as any).files as Express.Multer.File[] | Record<string, Express.Multer.File[]> | undefined;
+  if (!raw) return false;
+  const files = Array.isArray(raw) ? raw : Object.values(raw).flat();
+  return files.some((f) => INSTALLER_COMPLETION_FILE_FIELDS.has(f.fieldname));
+};
+
 const router: Router = express.Router();
 const MAX_PDF_UPLOAD_BYTES = 30 * 1024 * 1024; // 30 MB
 
@@ -917,11 +957,44 @@ router.post(
   saveMeteringMcoDocuments
 );
 
+/**
+ * §26 — Prefer dedicated installer-completion routes, but if the client POSTs completion
+ * multipart to `/quotations/:id/documents` (KYC route), route it to the installer handler
+ * instead of KYC Multer (which rejects `installerCompletionImages` with unexpected fields).
+ * KYC uploads should use PATCH /quotations/:id/documents.
+ */
 router.post(
   '/:quotationId/documents',
   authorizeQuotationDocumentsEditor,
-  handleQuotationDocumentsMultipart,
-  saveQuotationDocuments
+  (req, res, next) => {
+    handleInstallerMultipart(req, res, (err?: unknown) => {
+      if (err) {
+        next(err);
+        return;
+      }
+      if (looksLikeInstallerCompletionUpload(req)) {
+        validate(installerUploadMetaSchema)(req, res, (vErr?: unknown) => {
+          if (vErr) {
+            next(vErr);
+            return;
+          }
+          void installerUploadDocuments(req, res);
+        });
+        return;
+      }
+      // Parsed with installer `.any()` — remap into KYC field Record for saveQuotationDocuments.
+      const raw = (req as any).files as Express.Multer.File[] | undefined;
+      if (Array.isArray(raw)) {
+        const byField: Record<string, Express.Multer.File[]> = {};
+        for (const f of raw) {
+          if (!byField[f.fieldname]) byField[f.fieldname] = [];
+          byField[f.fieldname].push(f);
+        }
+        (req as any).files = byField;
+      }
+      void saveQuotationDocuments(req, res);
+    });
+  }
 );
 
 router.post(

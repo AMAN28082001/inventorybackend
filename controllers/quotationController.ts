@@ -90,6 +90,12 @@ import {
   isTataDcrPackageSet,
   validateTataDcrProductSelection
 } from '../utils/quotationTataDcrValidation';
+import {
+  isCromptonDcrSet,
+  preserveCromptonSetIdentity,
+  resolveDcrSetPriceForProducts,
+  validateCromptonDcrProductSelection
+} from '../utils/quotationCromptonDcr';
 import { validateSubsidyForSystemType } from '../validations/quotationValidations';
 import {
   isAllowedStandardImageOrPdfUpload,
@@ -201,6 +207,11 @@ const validateProductSelection = (products: any, catalog: any): { isValid: boole
   if (isTataDcrPackageSet(products)) {
     const tataErrors = validateTataDcrProductSelection(products, catalog);
     return { isValid: tataErrors.length === 0, errors: tataErrors };
+  }
+
+  if (isCromptonDcrSet(products)) {
+    const cromptonErrors = validateCromptonDcrProductSelection(products, catalog);
+    return { isValid: cromptonErrors.length === 0, errors: cromptonErrors };
   }
 
   const pdfRangeActive = hasPdfPanelRangeKey(products);
@@ -688,6 +699,10 @@ const applySellingPricesForAgent = async (products: any): Promise<any> => {
   if (!products || typeof products !== 'object') {
     return products;
   }
+  // Crompton DCR set uses package set-price from FE — do not overwrite with SKU matrix.
+  if (isCromptonDcrSet(products)) {
+    return products;
+  }
   const updated = { ...products };
 
   const panelPrice = await resolveSellingPriceByName(products.panelBrand);
@@ -1038,6 +1053,7 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
       'extracted subtotal (from destructuring)': subtotal
     });
     
+    const cromptonSetPrice = resolveDcrSetPriceForProducts(products as Record<string, unknown>);
     const subtotalValue = isValidValue(subtotal)
       ? Number(subtotal)
       : (isValidValue(req.body.pricing?.subtotal)
@@ -1048,7 +1064,9 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
                   ? Number(products.subtotal)
                   : (isValidValue(products?.totalAmount)
                       ? Number(products.totalAmount)
-                      : pricing.subtotal))));
+                      : (cromptonSetPrice !== null
+                          ? cromptonSetPrice
+                          : pricing.subtotal)))));
     
     logInfo('Subtotal extraction result', {
       subtotalValue,
@@ -1281,12 +1299,11 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
       quotationId: quotation.id,
       phase: normalizedPhase
     });
-    const pdfPersistFields = buildQuotationProductPdfPersistFields(
+    const packageProducts = preserveCromptonSetIdentity(
       normalizeInaPackageProductFields(products as Record<string, unknown>)
     );
-    const inaPersistFields = buildQuotationProductInaPersistFields(
-      normalizeInaPackageProductFields(products as Record<string, unknown>)
-    );
+    const pdfPersistFields = buildQuotationProductPdfPersistFields(packageProducts);
+    const inaPersistFields = buildQuotationProductInaPersistFields(packageProducts);
 
     await QuotationProduct.create({
       id: uuidv4(),
@@ -1295,19 +1312,19 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
       phase: normalizedPhase,
       ...pdfPersistFields,
       ...inaPersistFields,
-      panelBrand: products.panelBrand,
+      panelBrand: packageProducts.panelBrand ?? products.panelBrand,
       panelSize: products.panelSize,
       panelQuantity: products.panelQuantity,
       panelPrice: products.panelPrice,
-      dcrPanelBrand: products.dcrPanelBrand,
+      dcrPanelBrand: packageProducts.dcrPanelBrand ?? products.dcrPanelBrand,
       dcrPanelSize: products.dcrPanelSize,
       dcrPanelQuantity: products.dcrPanelQuantity,
       nonDcrPanelBrand: products.nonDcrPanelBrand,
       nonDcrPanelSize: products.nonDcrPanelSize,
       nonDcrPanelQuantity: products.nonDcrPanelQuantity,
       inverterType: products.inverterType,
-      inverterBrand: products.inverterBrand,
-      inverterSize: products.inverterSize,
+      inverterBrand: packageProducts.inverterBrand ?? products.inverterBrand,
+      inverterSize: packageProducts.inverterSize ?? products.inverterSize,
       inverterPrice: products.inverterPrice,
       structureType: products.structureType,
       structureSize: products.structureSize,
@@ -1320,9 +1337,9 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
       dcCableBrand: products.dcCableBrand,
       dcCableSize: products.dcCableSize,
       dcCablePrice: products.dcCablePrice,
-      acdb: products.acdb,
+      acdb: packageProducts.acdb ?? products.acdb,
       acdbPrice: products.acdbPrice,
-      dcdb: products.dcdb,
+      dcdb: packageProducts.dcdb ?? products.dcdb,
       dcdbPrice: products.dcdbPrice,
       hybridInverter: products.hybridInverter,
       batteryCapacity: products.batteryCapacity,
@@ -2655,7 +2672,9 @@ export const updateQuotationProducts = async (req: Request, res: Response): Prom
       }
     }
 
-    const normalizedProducts = normalizeInaPackageProductFields(products as Record<string, unknown>);
+    const normalizedProducts = preserveCromptonSetIdentity(
+      normalizeInaPackageProductFields(products as Record<string, unknown>)
+    );
     const productPayload = pickQuotationProductPersistPayload(normalizedProducts);
     const pdfPersistFields = buildQuotationProductPdfPersistFieldsForUpdate(normalizedProducts);
     const inaPersistFields = {
@@ -2916,7 +2935,9 @@ export const revertQuotationSystem = async (req: Request, res: Response): Promis
       validUntil: computeQuotationValidUntil(new Date())
     });
 
-    const normalizedProducts = normalizeInaPackageProductFields(prevProducts);
+    const normalizedProducts = preserveCromptonSetIdentity(
+      normalizeInaPackageProductFields(prevProducts)
+    );
     const productPayload = pickQuotationProductPersistPayload(normalizedProducts);
     const pdfPersistFields = {
       ...buildQuotationProductPdfPersistFields(normalizedProducts),

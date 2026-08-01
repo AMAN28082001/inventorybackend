@@ -8,6 +8,7 @@ import {
   isCommercialRequestBody
 } from '../utils/quotationProductPdfDisplay';
 import { isTataDcrPackageSet } from '../utils/quotationTataDcrValidation';
+import { isCromptonDcrSet } from '../utils/quotationCromptonDcr';
 
 const addressSchema = z.object({
   street: z.string().min(1),
@@ -159,6 +160,7 @@ const refineProductsPanelQuantity = (
 ): void => {
   if (hasPdfPanelRangeKey(val)) return;
   if (isTataDcrPackageSet(val)) return;
+  if (isCromptonDcrSet(val)) return;
   const missingQty = (size: unknown, qty: unknown) => {
     const hasSize = size !== undefined && size !== null && String(size).trim() !== '';
     if (!hasSize) return false;

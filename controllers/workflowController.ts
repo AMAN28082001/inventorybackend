@@ -1161,11 +1161,24 @@ const parseInstallerCompletionImageFieldOrderJson = (body: Record<string, unknow
 /**
  * Deterministic file order: known per-field parts first (stable UI order), then repeated
  * `installerCompletionImages` in multipart order (matches `installerCompletionImageFieldOrderJson`).
+ * Supports Multer `.fields()` (Record) and `.any()` (File[]).
  */
 const buildOrderedInstallerMultipartFiles = (req: Request): Express.Multer.File[] => {
-  const raw = (req as any).files as Record<string, Express.Multer.File[]> | undefined;
+  const raw = (req as any).files as Express.Multer.File[] | Record<string, Express.Multer.File[]> | undefined;
   if (!raw) return [];
-  const pick = (name: string): Express.Multer.File[] => (Array.isArray(raw[name]) ? raw[name] : []);
+
+  const asRecord = (files: Express.Multer.File[]): Record<string, Express.Multer.File[]> => {
+    const out: Record<string, Express.Multer.File[]> = {};
+    for (const f of files) {
+      if (!out[f.fieldname]) out[f.fieldname] = [];
+      out[f.fieldname].push(f);
+    }
+    return out;
+  };
+
+  const byField: Record<string, Express.Multer.File[]> = Array.isArray(raw) ? asRecord(raw) : raw;
+  const pick = (name: string): Express.Multer.File[] =>
+    Array.isArray(byField[name]) ? byField[name] : [];
   const nonAggregateOrder = [
     'homeFrontPhoto',
     'homeWithPersonPhoto',

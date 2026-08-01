@@ -31,8 +31,14 @@ const installerMulter = multer({
   limits: { fileSize: 15 * 1024 * 1024, files: 250 }
 });
 
+/**
+ * §26 — Prefer `.any()` so unknown/extra file field names never trigger
+ * LIMIT_UNEXPECTED_FILE ("Unexpected or too many file fields").
+ * Handler ignores unrecognized fieldnames via INSTALLER_FIELD_DOC_MAP.
+ * `.fields([...])` kept as documented allow-list for reference / strict mode.
+ */
 const handleInstallerMultipart = (req: Request, res: Response, next: NextFunction): void => {
-  installerMulter.fields(INSTALLER_UPLOAD_FIELDS)(req, res, (err: unknown) => {
+  installerMulter.any()(req, res, (err: unknown) => {
     if (!err) {
       next();
       return;
@@ -149,6 +155,6 @@ router.post(
 );
 
 /** Re-used by `quotationRoutes` for `/api/quotations/:id/installer-documents` fallbacks. */
-export { handleInstallerMultipart, handleSingleInstallerUploadMultipart };
+export { handleInstallerMultipart, handleSingleInstallerUploadMultipart, INSTALLER_UPLOAD_FIELDS };
 
 export default router;

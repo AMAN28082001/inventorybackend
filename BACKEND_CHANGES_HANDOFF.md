@@ -47,9 +47,11 @@
 | 35 | High | Quotations — additional create + is_current / restore | **Done** | §23 / `BACKEND_QUOTATION_SYSTEM_HISTORY.ts` |
 | 36 | High | Metering FILE STATUS — Pending / In Progress / Completed | **Done** | §24 / `BACKEND_PAYMENT_EXCEL_JOURNEY_STATUS.ts` |
 | 37 | High | Installation FILE STATUS — Pending / In Progress / Approved | **Done** | §25 / `BACKEND_PAYMENT_EXCEL_JOURNEY_STATUS.ts` |
-| 38 | High | Metering dual track — Bank process + installer auth | **Done** | §17 / `BACKEND_METERING_DUAL_TRACK.md` |
-| 39 | High | Document Submission — Property Documents PDF optional | **Done** | §18 / `BACKEND_PROPERTY_DOCUMENT_OPTIONAL.md` |
-| 40 | High | Non-DCR 80kW set — Renew Energy / Waaree / Adani | **Done** | §19 / `BACKEND_NON_DCR_80KW.md` |
+| 38 | High | Installation completion Multer — unexpected file fields | **Done** | §26 / `BACKEND_INSTALLATION_COMPLETION_MULTER.ts` |
+| 39 | High | Metering dual track — Bank process + installer auth | **Done** | §17 / `BACKEND_METERING_DUAL_TRACK.md` |
+| 40 | High | Document Submission — Property Documents PDF optional | **Done** | §18 / `BACKEND_PROPERTY_DOCUMENT_OPTIONAL.md` |
+| 41 | High | Non-DCR 80kW set — Renew Energy / Waaree / Adani | **Done** | §19 / `BACKEND_NON_DCR_80KW.md` |
+| 42 | High | Crompton DCR set — Premier Energy 600–610W + Crompton 3.6kW | **Done** | §27 / `BACKEND_CROMPTON_DCR_SET.md` |
 
 **Deploy before QA:**
 
@@ -142,7 +144,7 @@ Optional: `TZ=Asia/Kolkata` if weekly HR reports must match SPA Mon–Sun in IST
 | `pdfDcrPanelRangeKey` | BOTH — DCR line |
 | `pdfNonDcrPanelRangeKey` | BOTH — Non-DCR line |
 
-**Allowed values:** `waaree_540_560_bifacial`, `waaree_580_700_bifacial_topcon`, **`waaree_580_630`**, `adani_540_580_bifacial`, `adani_610_625_bifacial_topcon`, **`adani_600_630`**, `premier_600_625_bifacial_topcon`, **`tata_530_570`** (`530W - 570W`, Tata DCR packages only), **`ina_500_600_bifacial`** (`500W - 600W`, INA DCR), **`renew_energy_600_630`** (`600W - 630W`, Non-DCR 80kW Renew Energy). Unknown keys stored as `null`.
+**Allowed values:** `waaree_540_560_bifacial`, `waaree_580_700_bifacial_topcon`, **`waaree_580_630`**, `adani_540_580_bifacial`, `adani_610_625_bifacial_topcon`, **`adani_600_630`**, `premier_600_625_bifacial_topcon`, **`tata_530_570`** (`530W - 570W`, Tata DCR packages only), **`ina_500_600_bifacial`** (`500W - 600W`, INA DCR), **`renew_energy_600_630`** (`600W - 630W`, Non-DCR 80kW Renew Energy), **`premier_energy_600_610`** (`600W - 610W Topcon Bifacial`, Crompton DCR set — §27). Unknown keys stored as `null`.
 
 **PDF display (client-generated; keys must round-trip on GET):**
 
@@ -173,7 +175,7 @@ Optional: `TZ=Asia/Kolkata` if weekly HR reports must match SPA Mon–Sun in IST
 **Validation tweaks:**
 
 - `panelQuantity` / `dcrPanelQuantity` / `nonDcrPanelQuantity` may be **0** (nonnegative) when a range key is used for PDF-only rows.
-- `inverterBrand` catalog check allows **`Vsole/Xwatt/Saatvik`** and **`Vsole/Xwatt`** in addition to catalog brands.
+- `inverterBrand` catalog check allows **`Vsole/Xwatt/Saatvik`**, **`Vsole/Xwatt`**, and **`Crompton`** (Crompton DCR set — §27) in addition to catalog brands.
 - `meterBrand` catalog check allows **`L&T/HPL/Genus/Secure`** in addition to catalog brands.
 - Range keys are **not** passed into `validateProductSelection` or `calculatePricing`.
 - **`validUntil`** on create defaults to **`createdAt + 7 days`** (was 5). Recomputed on products/pricing PATCH — see **§2.7**.
@@ -182,7 +184,7 @@ Optional: `TZ=Asia/Kolkata` if weekly HR reports must match SPA Mon–Sun in IST
 
 **Frontend flow:** create may omit PDF keys on POST; follow-up `PATCH …/products` with range keys — backend must accept that PATCH (this implementation).
 
-**Pricing tables:** `GET /api/quotations/pricing-tables` (alias of `GET /api/config/pricing`). When DB `dcr` is empty, API returns June 2026 defaults: Adani 555W, Adani Topcon 620W, Waaree 540W, Premier Energies, **Tata DCR** (`utils/defaultPricingTables.ts`).
+**Pricing tables:** `GET /api/quotations/pricing-tables` (alias of `GET /api/config/pricing`). When DB `dcr` is empty, API returns June 2026 defaults: Adani 555W, Adani Topcon 620W, Waaree 540W, Premier Energies, **Tata DCR**, **Crompton set** (`utils/defaultPricingTables.ts`).
 
 **New quotes:** frontend is **DCR-only**; legacy rows may remain `non-dcr` / `both`. **GET is source of truth** for `pdf_panel_range_key` after save (not browser `localStorage`).
 
@@ -2135,6 +2137,36 @@ Admin **Pending Installation** (~27) vs Account **Installation · Pending** (~2)
 
 ---
 
+## 26. Installation completion upload — Multer “Unexpected or too many file fields” (Aug 2026)
+
+**Frontend:** Admin / Installer → **Complete & Mark as Approved** / **Partial Approved**  
+**Toast:** `Upload failed — Unexpected or too many file fields`
+
+### Cause
+
+Completion `POST …/documents` used a Multer allow-list that rejected client field names, or FE fell through to KYC `POST /quotations/:id/documents`.
+
+### Shipped
+
+| Piece | Implementation |
+|-------|----------------|
+| Multer | `handleInstallerMultipart` uses `.any()` + `limits.files: 250` (no LIMIT_UNEXPECTED_FILE by field name) |
+| Routes | `POST /api/installer/quotations/:id/documents` (admin OK); `POST /api/admin/quotations/:id/installer-documents` (+ aliases) |
+| Fallback | `POST /api/quotations/:id/documents` detects completion multipart → installer handler (KYC stays on **PATCH**) |
+| Field order | `installerCompletionImageFieldOrderJson` maps aggregate files → columns |
+| Persist | `installer_approved` / `installer_partial_approved` + media URLs on GET |
+
+**Ref:** `BACKEND_INSTALLATION_COMPLETION_MULTER.ts`, `routes/installerRoutes.ts`
+
+### QA
+
+1. Admin upload photos → Complete & Approve → **200**, no Multer toast  
+2. Partial Approved → **200**, status `installer_partial_approved`  
+3. Keep existing URLs + add one photo → **200**  
+4. Installer JWT on `/installer/…/documents` → **200**  
+
+---
+
 ## 14. Inventory — Tally Purchase import `POST /products` (Jul 2026)
 
 **Frontend:** Inventory → Add New Product → **Import stock from Tally Purchase JSON**  
@@ -2308,6 +2340,42 @@ On `PATCH /api/quotations/{quotationId}/documents` (KYC / customer documents):
 
 ---
 
+## 27. Crompton DCR set — Premier Energy 600–610W + Crompton 3.6kW (1-Phase)
+
+**Frontend:** DCR Browse → **Crompton set**  
+**Full handoff:** **`BACKEND_CROMPTON_DCR_SET.md`** · helpers **`BACKEND_CROMPTON_DCR_SET.ts`** · impl **`utils/quotationCromptonDcr.ts`**
+
+| System | Inverter | Set price |
+|--------|----------|-----------|
+| **3kW** | Crompton **3.6kW** | **₹2,10,000** |
+| **5kW** | Crompton **3.6kW** | **₹2,95,000** |
+
+### Package identity (persist + echo — do not coerce)
+
+| Field | Value |
+|-------|--------|
+| `panelBrand` / `dcrPanelBrand` | **`Premier Energy`** |
+| `panelType` (package marker) | **`Crompton set`** |
+| PDF key | **`premier_energy_600_610`** → `600W - 610W Topcon Bifacial` |
+| `inverterBrand` / `inverterSize` | **`Crompton`** / **`3.6kW`** |
+| `acdb` / `dcdb` | **`Crompton (1-Phase)`** |
+
+### Backend delivered
+
+- [x] Allowlist `Premier Energy`, `panelType: Crompton set`, `Crompton`, `3.6kW`, `premier_energy_600_610`
+- [x] `preserveCromptonSetIdentity` keeps Premier Energy brand + Crompton set marker (never Premier Energies Topcon)
+- [x] Set-price by `panelType === "Crompton set"`: 3kW→210000, 5kW→295000; FE `subtotal` / `systemPrice` preferred; agent SKU overwrite skipped
+- [x] `GET /quotations/pricing-tables` — Crompton DCR rows + system presets
+- [x] Premier Energies Topcon column unchanged (`premier_600_625_bifacial_topcon`)
+
+### QA (short)
+
+1. Save Crompton set 3kW → GET: `panelBrand: "Premier Energy"`, `panelType: "Crompton set"`, Crompton inverter/ACDB, `premier_energy_600_610`, subtotal **210000**.
+2. 5kW → **295000**.
+3. Brand is not rewritten to Premier Energies.
+
+---
+
 ## Related docs
 
 | Doc | Section |
@@ -2335,4 +2403,7 @@ On `PATCH /api/quotations/{quotationId}/documents` (KYC / customer documents):
 | **`BACKEND_PROPERTY_DOCUMENT_OPTIONAL.md`** | **§18** stop requiring `propertyDocumentPdf` on PATCH …/documents |
 | **§19** (this file) | Non-DCR 80kW set — Renew Energy / Waaree / Adani |
 | **`BACKEND_NON_DCR_80KW.md`** | **§19** PDF range keys + pricing-tables 80kW rows |
+| **§27** (this file) | Crompton DCR set — Premier Energy 600–610W + Crompton 3.6kW |
+| **`BACKEND_CROMPTON_DCR_SET.md`** | **§27** full Crompton set prices, range key, pricing-tables |
+| **`BACKEND_CROMPTON_DCR_SET.ts`** | **§27** allowlist helpers + pricing/preset merge |
 

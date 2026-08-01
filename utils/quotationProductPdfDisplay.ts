@@ -14,7 +14,9 @@ export const PDF_PANEL_RANGE_KEYS = [
   'tata_530_570',
   'ina_500_600_bifacial',
   /** Non-DCR 80kW Renew Energy package (Jul 2026) */
-  'renew_energy_600_630'
+  'renew_energy_600_630',
+  /** Crompton DCR set — Premier Energy 600W–610W (Aug 2026 §27) */
+  'premier_energy_600_610'
 ] as const;
 
 export type PdfPanelRangeKey = (typeof PDF_PANEL_RANGE_KEYS)[number];
@@ -30,7 +32,8 @@ export const PDF_PANEL_RANGE_LABELS: Record<PdfPanelRangeKey, string> = {
   premier_600_625_bifacial_topcon: '600-625W Bifacial Topcon',
   tata_530_570: '530W - 570W',
   ina_500_600_bifacial: '500W - 600W',
-  renew_energy_600_630: '600W - 630W'
+  renew_energy_600_630: '600W - 630W',
+  premier_energy_600_610: '600W - 610W Topcon Bifacial'
 };
 
 /** PDF range label sent as panelSize (e.g. INA) — not a catalog wattage. */
@@ -137,7 +140,9 @@ export const quotationProductInaApiFields = (
 /** Combined inverter labels shown in the UI / PDF (not a separate PDF flag). */
 export const EXTRA_INVERTER_BRAND_LABELS = [
   'Vsole/Xwatt/Saatvik',
-  'Vsole/Xwatt'
+  'Vsole/Xwatt',
+  /** Crompton DCR set inverter (§27) */
+  'Crompton'
 ] as const;
 
 /** Combined meter labels on proposal PDF (not a separate field). */

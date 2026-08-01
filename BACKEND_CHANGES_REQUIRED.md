@@ -143,6 +143,7 @@ or same fields on `installation-status` / `workflow-status` while stage is `mete
 | `adani_610_625_bifacial_topcon` | 610-625W Bifacial Topcon |
 | `premier_600_625_bifacial_topcon` | 600-625W Bifacial Topcon |
 | **`tata_530_570`** | **530W - 570W** (Tata DCR only) |
+| **`premier_energy_600_610`** | **600W - 610W Topcon Bifacial** (Crompton DCR set — §27) |
 
 Snake_case: `pdf_panel_range_key`, `pdf_dcr_panel_range_key`, `pdf_non_dcr_panel_range_key`.
 
@@ -160,12 +161,12 @@ Snake_case: `pdf_panel_range_key`, `pdf_dcr_panel_range_key`, `pdf_non_dcr_panel
 
 ### X.3 — Combined brand strings
 
-- `inverterBrand`: `Vsole/Xwatt/Saatvik`, `Vsole/Xwatt` (+ catalog brands)
+- `inverterBrand`: `Vsole/Xwatt/Saatvik`, `Vsole/Xwatt`, **`Crompton`** (Crompton DCR set), catalog brands, **`As per the set`** (Tata DCR only)
 - `meterBrand`: `L&T/HPL/Genus/Secure` (+ catalog brands)
 
 ### X.4 — Panel quantity
 
-`panelQuantity` / `dcrPanelQuantity` / `nonDcrPanelQuantity` may be **0** when matching `pdf*PanelRangeKey` is set (`hasPdfPanelRangeKey` in Zod). Tata DCR package sets also bypass strict qty when `isTataDcrPackageSet`.
+`panelQuantity` / `dcrPanelQuantity` / `nonDcrPanelQuantity` may be **0** when matching `pdf*PanelRangeKey` is set (`hasPdfPanelRangeKey` in Zod). Tata DCR package sets also bypass strict qty when `isTataDcrPackageSet`. Crompton DCR set bypasses via `isCromptonDcrSet` (§27).
 
 ### X.5 — Not used in pricing
 
@@ -604,6 +605,12 @@ When body has `admin_id` / `adminId` / `sell_from_admin_id` / `stock_admin_id` (
 - **Metering:** Pending / In Progress / Completed (WCC via `meteringWccAfterDiscom`)
 - **Installation:** Pending / In Progress / Approved — `installer_in_progress` stays Pending; Partial → In Progress; `installer_approved` → Approved  
 - `GET /quotations?status=approved` returns release flags, `installationPartialApproved`, `installerApprovedAt`, plus `journeyStageProgress` / `installationFileStatus` / `meteringFileStatus`
+
+### Installation completion Multer (§26) — IMPLEMENTED
+
+**Handoff:** `BACKEND_CHANGES_HANDOFF.md` §26 · **Ref:** `BACKEND_INSTALLATION_COMPLETION_MULTER.ts`
+
+Installer-completion POST uses Multer `.any()` (aggregate `installerCompletionImages` + `piUpload` + per-field). Admin/installer routes share the handler. `POST /quotations/:id/documents` routes completion payloads to that handler (do not use KYC PATCH for this).
 
 ---
 

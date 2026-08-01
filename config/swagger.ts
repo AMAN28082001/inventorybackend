@@ -254,7 +254,7 @@ const swaggerDefinition = {
             type: 'string',
             nullable: true,
             description:
-              'PDF-only panel spec key (not used in pricing). Includes tata_530_570 (530W - 570W) for Tata DCR packages.',
+              'PDF-only panel spec key (not used in pricing). Includes tata_530_570 (Tata DCR) and premier_energy_600_610 (Crompton DCR set).',
             enum: [
               'waaree_540_560_bifacial',
               'waaree_580_700_bifacial_topcon',
@@ -265,7 +265,8 @@ const swaggerDefinition = {
               'premier_600_625_bifacial_topcon',
               'tata_530_570',
               'ina_500_600_bifacial',
-              'renew_energy_600_630'
+              'renew_energy_600_630',
+              'premier_energy_600_610'
             ]
           },
           pdfDcrPanelRangeKey: { type: 'string', nullable: true },
