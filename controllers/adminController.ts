@@ -57,6 +57,10 @@ import {
   isQuotationEligibleForProductNeeded,
   serializeProductNeededRow
 } from '../utils/adminProductNeeded';
+import {
+  resolveApproveLoanCashAmounts,
+  pickQuotationSubtotalForPayments
+} from '../utils/cashLoanAmounts';
 import { persistQuotationSystemKw } from '../utils/persistQuotationSystemKw';
 import { buildFinalConfirmationApiFields } from '../utils/finalConfirmationDocuments';
 
@@ -569,7 +573,12 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
             ...quotationAdminMetadataFields(row),
             ...amountFields,
             ...adminQuotationPricingNestedFields(amountFields),
-            ...deriveLoanCashAmountFields(filePaymentType, amountFields.subtotal, phases),
+            ...deriveLoanCashAmountFields(filePaymentType || (q as any).paymentType, amountFields.subtotal, phases, {
+              loanAmount: (q as any).loanAmount,
+              cashAmount: (q as any).cashAmount,
+              loan_amount: (q as any).loan_amount,
+              cash_amount: (q as any).cash_amount
+            }),
             ...adminQuotationStatusUpdatedAtFields({
               updatedAt: (q as any).updatedAt,
               meteringActionAt: (q as any).meteringActionAt,
@@ -704,6 +713,10 @@ export const updateQuotationStatus = async (req: Request, res: Response): Promis
       approved_at?: string;
       paymentType?: 'loan' | 'cash' | 'mix';
       paymentMode?: 'loan' | 'cash' | 'mix';
+      loanAmount?: number | string;
+      loan_amount?: number | string;
+      cashAmount?: number | string;
+      cash_amount?: number | string;
       bankName?: string;
       bankIfsc?: string;
       bank_ifsc?: string;
@@ -760,7 +773,26 @@ export const updateQuotationStatus = async (req: Request, res: Response): Promis
 
       updateData.paymentMode = paymentTypeResolved;
       updateData.paymentType = paymentTypeResolved;
+      updateData.filePaymentType = paymentTypeResolved;
       updateData.statusApprovedAt = manualApprovedAt || new Date();
+
+      const amountResult = resolveApproveLoanCashAmounts({
+        paymentType: paymentTypeResolved,
+        loanAmountRaw: body.loanAmount ?? body.loan_amount,
+        cashAmountRaw: body.cashAmount ?? body.cash_amount,
+        quotationSubtotal: pickQuotationSubtotalForPayments(
+          quotation.get({ plain: true }) as unknown as Record<string, unknown>
+        )
+      });
+      if (!amountResult.ok) {
+        res.status(400).json({
+          success: false,
+          error: { code: amountResult.code, message: amountResult.message }
+        });
+        return;
+      }
+      updateData.loanAmount = amountResult.loanAmount;
+      updateData.cashAmount = amountResult.cashAmount;
 
       if (paymentTypeResolved === 'loan' || paymentTypeResolved === 'mix') {
         const bankName = typeof body.bankName === 'string' ? body.bankName.trim() : '';
@@ -805,6 +837,8 @@ export const updateQuotationStatus = async (req: Request, res: Response): Promis
       updateData.bankIfsc = null;
       updateData.paymentMode = null;
       updateData.paymentType = null;
+      updateData.loanAmount = null;
+      updateData.cashAmount = null;
       updateData.subsidyChequeDetails = null;
       updateData.subsidyCheques = [];
       updateData.remainingAmount = null;

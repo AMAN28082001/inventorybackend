@@ -52,6 +52,7 @@
 | 40 | High | Document Submission — Property Documents PDF optional | **Done** | §18 / `BACKEND_PROPERTY_DOCUMENT_OPTIONAL.md` |
 | 41 | High | Non-DCR 80kW set — Renew Energy / Waaree / Adani | **Done** | §19 / `BACKEND_NON_DCR_80KW.md` |
 | 42 | High | Crompton DCR set — Premier Energy 600–610W + Crompton 3.6kW | **Done** | §27 / `BACKEND_CROMPTON_DCR_SET.md` |
+| 43 | High | Cash + loan amounts on approve + GET echo | **Done** | §28 / `BACKEND_CASH_LOAN_AMOUNTS.md` |
 
 **Deploy before QA:**
 
@@ -69,6 +70,7 @@ yarn migrate
 | `20260605120000-add-unit-column-to-products.js` | `products.unit` for stock display (Meters, Quantity, Pieces; bootstrap also ensures) |
 | `20260606120000-ensure-calling-remark-text-columns.js` | `callRemark` TEXT on assignments + action history (§E.2) |
 | `20260725120000-bank-process-done.js` | `bankProcessDone` / `bankProcessDoneAt` for Metering dual track (§17) |
+| `20260803120000-add-loan-cash-amount-to-quotations.js` | `loan_amount` / `cash_amount` for Cash + loan approve (§28) |
 
 After migrate, optional backfill: `npx ts-node scripts/backfill-system-kw.ts`
 
@@ -2376,6 +2378,48 @@ On `PATCH /api/quotations/{quotationId}/documents` (KYC / customer documents):
 
 ---
 
+## 28. Cash + loan amounts & installment payment modes (Account / Approve)
+
+**Frontend:** Admin Approve + Approved list; Account Payment Management + Excel  
+**Full handoff:** **`BACKEND_CASH_LOAN_AMOUNTS.md`** · helpers **`BACKEND_CASH_LOAN_AMOUNTS.ts`** · impl **`utils/cashLoanAmounts.ts`**  
+**Also touch:** approve in `controllers/adminController.ts`, GET via `quotationPaymentApiFields`, installments in `updateQuotationPaymentDetails`
+
+**Bug fixed:** Approve mix loan ₹2,00,000 + cash ₹70,000 (total ₹2,70,000) was showing as Loan ₹2,70,000 — amounts were not persisted.
+
+### Rules
+
+| `paymentType` | Persist | Phase `paymentMode` |
+|---------------|---------|---------------------|
+| **loan** | `loanAmount`; clear `cashAmount` | `loan` only |
+| **cash** | clear both | cash / upi / cheque (no loan) |
+| **mix** | both; sum === subtotal | loan **and** cash/upi/cheque |
+
+### DB
+
+```sql
+ALTER TABLE quotations ADD COLUMN IF NOT EXISTS loan_amount NUMERIC(14,2);
+ALTER TABLE quotations ADD COLUMN IF NOT EXISTS cash_amount NUMERIC(14,2);
+```
+
+Migration: `20260803120000-add-loan-cash-amount-to-quotations.js`
+
+### Backend delivered
+
+- [x] Approve persists `loanAmount` / `cashAmount`; mix validates sum === subtotal (**400** otherwise)
+- [x] `paymentType` = `paymentMode` = body type; sync `filePaymentType`
+- [x] Never store full subtotal as loan when mix was sent
+- [x] GET list/detail echo `paymentType`, `loanAmount`, `cashAmount` (camel + snake)
+- [x] Installment replace keeps loan/cash amounts; persists per-phase `paymentMode`; optional allowlist by type
+
+### QA
+
+1. Approve mix 200000 + 70000 on 270000 → GET both amounts + `paymentType: "mix"`.
+2. Approve loan → `loanAmount` set, `cashAmount` null.
+3. Approve cash → both null.
+4. Reject mix when loan+cash ≠ subtotal.
+
+---
+
 ## Related docs
 
 | Doc | Section |
@@ -2405,5 +2449,8 @@ On `PATCH /api/quotations/{quotationId}/documents` (KYC / customer documents):
 | **`BACKEND_NON_DCR_80KW.md`** | **§19** PDF range keys + pricing-tables 80kW rows |
 | **§27** (this file) | Crompton DCR set — Premier Energy 600–610W + Crompton 3.6kW |
 | **`BACKEND_CROMPTON_DCR_SET.md`** | **§27** full Crompton set prices, range key, pricing-tables |
-| **`BACKEND_CROMPTON_DCR_SET.ts`** | **§27** allowlist helpers + pricing/preset merge |
+| **`BACKEND_CROMPTON_DCR_SET.ts`** | **§27** allowlist helpers + pricing/preset migrate |
+| **§28** (this file) | Cash + loan amounts + installment payment modes |
+| **`BACKEND_CASH_LOAN_AMOUNTS.md`** | **§28** approve/GET/installment + Excel fields |
+| **`BACKEND_CASH_LOAN_AMOUNTS.ts`** | **§28** amount validation + remaining-by-side helpers |
 

@@ -26,6 +26,8 @@ interface QuotationAttributes {
   discountAmount: number;  // Discount amount
   paymentMode?: 'cash' | 'upi' | 'loan' | 'netbanking' | 'bank_transfer' | 'cheque' | 'card' | 'mix' | null;
   paymentType?: 'loan' | 'cash' | 'mix' | null;
+  loanAmount?: number | null;
+  cashAmount?: number | null;
   bankName?: string | null;
   bankIfsc?: string | null;
   subsidyChequeDetails?: string | null;
@@ -134,7 +136,7 @@ interface QuotationAttributes {
 
 interface QuotationCreationAttributes extends Optional<
   QuotationAttributes,
-  'id' | 'status' | 'discount' | 'createdAt' | 'updatedAt' | 'centralSubsidy' | 'stateSubsidy' | 'totalSubsidy' | 'amountAfterSubsidy' | 'discountAmount' | 'systemKw' | 'sourceQuotationId' | 'isCurrent' | 'notes' |   'paymentMode' | 'paymentType' | 'bankName' | 'bankIfsc' | 'subsidyChequeDetails' | 'fileLoginStatus' | 'filePaymentType' | 'fileBankName' | 'fileBankIfsc' | 'fileSubsidyChequeDetails' | 'fileLoginAt' | 'statusApprovedAt'   | 'statusHistory' | 'systemHistory' | 'subsidyCheques' | 'remainingAmount' | 'paidAmount' | 'paymentDate' | 'paymentStatus' | 'finalSettlementAmount' | 'finalSettlementApplied' | 'finalSettlementAt' | 'finalSettlementBy' | 'paymentPhases' | 'paymentPlanUpdatedBy' | 'paymentPlanUpdatedAt' | 'approvedAt' | 'installationStatus' | 'installerId' | 'installerActionAt' | 'installerInProgressAt' |   'installerApprovedAt' | 'installerRemarks' | 'installationPartialApproved' | 'installationPartialApprovedAt' | 'installationReadyForInstaller' | 'installationReleasedAt' | 'installationScheduledAt' | 'installationTeamId' |   'baldevId' | 'baldevActionAt' | 'baldevRemarks' | 'meteringId' | 'meteringActionAt' | 'meteringApprovedAt' | 'meteringRemarks' | 'meteringAuthorizedRepresentative' | 'discomName' | 'meterType' | 'meterNo' | 'solarMeterNo' | 'netMeterNo' | 'meterDocumentImageUrl' | 'mcoAt' | 'completionAt' | 'meteringWccAfterDiscom' | 'meteringWccAfterDiscomAt' | 'bankProcessDone' | 'bankProcessDoneAt' | 'siteLengthCm' | 'siteWidthCm' | 'siteHeightCm' | 'backLegFt' | 'midLegFt' | 'frontLegFt' | 'extraExpensesTotal' | 'extraExpensesJson'
+  'id' | 'status' | 'discount' | 'createdAt' | 'updatedAt' | 'centralSubsidy' | 'stateSubsidy' | 'totalSubsidy' | 'amountAfterSubsidy' | 'discountAmount' | 'systemKw' | 'sourceQuotationId' | 'isCurrent' | 'notes' |   'paymentMode' | 'paymentType' | 'loanAmount' | 'cashAmount' | 'bankName' | 'bankIfsc' | 'subsidyChequeDetails' | 'fileLoginStatus' | 'filePaymentType' | 'fileBankName' | 'fileBankIfsc' | 'fileSubsidyChequeDetails' | 'fileLoginAt' | 'statusApprovedAt'   | 'statusHistory' | 'systemHistory' | 'subsidyCheques' | 'remainingAmount' | 'paidAmount' | 'paymentDate' | 'paymentStatus' | 'finalSettlementAmount' | 'finalSettlementApplied' | 'finalSettlementAt' | 'finalSettlementBy' | 'paymentPhases' | 'paymentPlanUpdatedBy' | 'paymentPlanUpdatedAt' | 'approvedAt' | 'installationStatus' | 'installerId' | 'installerActionAt' | 'installerInProgressAt' |   'installerApprovedAt' | 'installerRemarks' | 'installationPartialApproved' | 'installationPartialApprovedAt' | 'installationReadyForInstaller' | 'installationReleasedAt' | 'installationScheduledAt' | 'installationTeamId' |   'baldevId' | 'baldevActionAt' | 'baldevRemarks' | 'meteringId' | 'meteringActionAt' | 'meteringApprovedAt' | 'meteringRemarks' | 'meteringAuthorizedRepresentative' | 'discomName' | 'meterType' | 'meterNo' | 'solarMeterNo' | 'netMeterNo' | 'meterDocumentImageUrl' | 'mcoAt' | 'completionAt' | 'meteringWccAfterDiscom' | 'meteringWccAfterDiscomAt' | 'bankProcessDone' | 'bankProcessDoneAt' | 'siteLengthCm' | 'siteWidthCm' | 'siteHeightCm' | 'backLegFt' | 'midLegFt' | 'frontLegFt' | 'extraExpensesTotal' | 'extraExpensesJson'
 > {}
 
 class Quotation extends Model<QuotationAttributes, QuotationCreationAttributes> implements QuotationAttributes {
@@ -158,6 +160,8 @@ class Quotation extends Model<QuotationAttributes, QuotationCreationAttributes> 
   public discountAmount!: number;  // Discount amount
   public paymentMode!: 'cash' | 'upi' | 'loan' | 'netbanking' | 'bank_transfer' | 'cheque' | 'card' | 'mix' | null;
   public paymentType!: 'loan' | 'cash' | 'mix' | null;
+  public loanAmount!: number | null;
+  public cashAmount!: number | null;
   public bankName!: string | null;
   public bankIfsc!: string | null;
   public subsidyChequeDetails!: string | null;
@@ -348,6 +352,16 @@ Quotation.init(
     paymentType: {
       type: DataTypes.STRING(10),
       allowNull: true
+    },
+    loanAmount: {
+      type: DataTypes.DECIMAL(14, 2),
+      allowNull: true,
+      field: 'loan_amount'
+    },
+    cashAmount: {
+      type: DataTypes.DECIMAL(14, 2),
+      allowNull: true,
+      field: 'cash_amount'
     },
     bankName: {
       type: DataTypes.STRING(255),

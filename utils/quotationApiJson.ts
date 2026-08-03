@@ -358,11 +358,12 @@ export function quotationProductListApiFields(
 
 export function quotationPaymentApiFields(q: Record<string, unknown>) {
   const paymentMode = (q.paymentMode ?? q.payment_mode ?? null) as string | null;
+  // Prefer approve-time paymentType over file-login type (§28 syncs both).
   const paymentTypeRaw = (
-    q.filePaymentType ??
-    q.file_payment_type ??
     q.paymentType ??
     q.payment_type ??
+    q.filePaymentType ??
+    q.file_payment_type ??
     paymentMode ??
     null
   ) as string | null;
@@ -378,6 +379,16 @@ export function quotationPaymentApiFields(q: Record<string, unknown>) {
       : paymentTypeRaw;
   const bankName = (q.bankName ?? q.bank_name ?? null) as string | null;
   const bankIfsc = (q.bankIfsc ?? q.bank_ifsc ?? null) as string | null;
+  const loanRaw = q.loanAmount ?? q.loan_amount;
+  const cashRaw = q.cashAmount ?? q.cash_amount;
+  const loanAmount =
+    loanRaw !== undefined && loanRaw !== null && String(loanRaw).trim() !== ''
+      ? Math.round(Number(loanRaw))
+      : null;
+  const cashAmount =
+    cashRaw !== undefined && cashRaw !== null && String(cashRaw).trim() !== ''
+      ? Math.round(Number(cashRaw))
+      : null;
   const bankProcessDoneRaw = q.bankProcessDone ?? q.bank_process_done ?? false;
   const bankProcessDone = bankProcessDoneRaw === true || bankProcessDoneRaw === 'true' || bankProcessDoneRaw === 1;
   const bankProcessDoneAt = (q.bankProcessDoneAt ?? q.bank_process_done_at ?? null) as string | Date | null;
@@ -396,6 +407,10 @@ export function quotationPaymentApiFields(q: Record<string, unknown>) {
     payment_mode: paymentMode,
     paymentType,
     payment_type: paymentType,
+    loanAmount: Number.isFinite(loanAmount as number) ? loanAmount : null,
+    loan_amount: Number.isFinite(loanAmount as number) ? loanAmount : null,
+    cashAmount: Number.isFinite(cashAmount as number) ? cashAmount : null,
+    cash_amount: Number.isFinite(cashAmount as number) ? cashAmount : null,
     bankName,
     bank_name: bankName,
     bankIfsc,

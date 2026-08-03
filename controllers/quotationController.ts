@@ -12,6 +12,10 @@ import { deleteFileFromS3IfExists } from '../middleware/upload';
 import { decodeS3UrlPathToKey, generatePublicUrl, isPresignedS3GetUrl } from '../utils/s3Service';
 import { normalizePaymentModeInput, isLoanOnlyPaymentType, FINAL_SETTLEMENT_LOAN_ONLY_MESSAGE } from '../utils/paymentMode';
 import {
+  normalizePaymentType,
+  isPhaseModeAllowedForPaymentType
+} from '../utils/cashLoanAmounts';
+import {
   quotationAmountApiFields,
   quotationPaymentApiFields,
   quotationAdminMetadataFields,
@@ -3601,6 +3605,26 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
 
     if (hasPhasePayload) {
       const normalizedPhases = normalizePaymentPhases(phasePayload, actorId);
+      // Optional §28: reject phase paymentMode not allowed for quotation paymentType
+      const qPaymentType =
+        paymentType ||
+        normalizePaymentType((quotation as any).paymentType) ||
+        normalizePaymentType((quotation as any).paymentMode);
+      if (qPaymentType) {
+        for (const ph of normalizedPhases) {
+          if (!ph.paymentMode) continue;
+          if (!isPhaseModeAllowedForPaymentType(qPaymentType, ph.paymentMode)) {
+            res.status(400).json({
+              success: false,
+              error: {
+                code: 'VAL_PHASE_MODE',
+                message: `paymentMode "${ph.paymentMode}" not allowed for paymentType "${qPaymentType}" (phase ${ph.phaseNumber})`
+              }
+            });
+            return;
+          }
+        }
+      }
       const replacePhases = shouldReplacePaymentPhases(req, true);
       if (replacePhases) {
         await replaceQuotationPaymentPhases(quotation.id, normalizedPhases, actorId);

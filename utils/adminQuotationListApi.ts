@@ -100,12 +100,30 @@ export const adminQuotationPricingNestedFields = (amounts: {
   }
 });
 
+import {
+  parseInrAmount,
+  serializeLoanCashFields
+} from './cashLoanAmounts';
+
 /** Best-effort loan/cash split for Amount column when not stored on quotation row. */
 export const deriveLoanCashAmountFields = (
   filePaymentType: string | null | undefined,
   subtotal: number,
-  phases: Array<{ phaseNumber?: number; amount?: number }>
-): { loanAmount?: number; cashAmount?: number; loan_amount?: number; cash_amount?: number } => {
+  phases: Array<{ phaseNumber?: number; amount?: number }>,
+  stored?: { loanAmount?: unknown; cashAmount?: unknown; loan_amount?: unknown; cash_amount?: unknown }
+): { loanAmount?: number | null; cashAmount?: number | null; loan_amount?: number | null; cash_amount?: number | null } => {
+  const storedLoan = parseInrAmount(stored?.loanAmount ?? stored?.loan_amount);
+  const storedCash = parseInrAmount(stored?.cashAmount ?? stored?.cash_amount);
+  // Prefer persisted approve split (§28) over phase/subtotal heuristics.
+  if (storedLoan != null || storedCash != null) {
+    return {
+      loanAmount: storedLoan,
+      loan_amount: storedLoan,
+      cashAmount: storedCash,
+      cash_amount: storedCash
+    };
+  }
+
   const type = String(filePaymentType || '').trim().toLowerCase();
   if (!type || subtotal <= 0) return {};
 
@@ -146,6 +164,8 @@ export const deriveLoanCashAmountFields = (
   }
   return {};
 };
+
+export { serializeLoanCashFields };
 
 /** First visit location per quotation (batch map). */
 export const buildPrimaryVisitLocationByQuotationId = (
