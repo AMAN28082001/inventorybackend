@@ -53,6 +53,7 @@
 | 41 | High | Non-DCR 80kW set — Renew Energy / Waaree / Adani | **Done** | §19 / `BACKEND_NON_DCR_80KW.md` |
 | 42 | High | Crompton DCR set — Premier Energy 600–610W + Crompton 3.6kW | **Done** | §27 / `BACKEND_CROMPTON_DCR_SET.md` |
 | 43 | High | Cash + loan amounts on approve + GET echo | **Done** | §28 / `BACKEND_CASH_LOAN_AMOUNTS.md` |
+| 44 | High | Installation completion upload from pending_installer | **Done** | §29 / `BACKEND_INSTALLATION_UPLOAD_STATE.ts` |
 
 **Deploy before QA:**
 
@@ -2420,6 +2421,32 @@ Migration: `20260803120000-add-loan-cash-amount-to-quotations.js`
 
 ---
 
+## 29. Installation completion upload — “not allowed for this quotation state”
+
+**Frontend:** Admin / Installer → **Complete & Mark as Approved** / **Partial Approved** (from **Pending**)  
+**Toast:** `Upload failed — Installation upload not allowed for this quotation state`  
+**File:** **`BACKEND_INSTALLATION_UPLOAD_STATE.ts`** · impl **`utils/installationUploadState.ts`** (also §26 Multer)
+
+### Cause
+
+`POST …/documents` rejected when `installation_status` was still **`pending_installer`** (or empty / `installer_partial_approved`) without force bypass.
+
+### Backend delivered
+
+- [x] Allow upload from `pending_installer` / empty / `installer_in_progress` / `installer_partial_approved` / `installer_approved` (re-edit)
+- [x] Honor `force` / `adminOverride` / `allowFromPendingInstaller` **or** admin JWT
+- [x] Persist body `installationStatus` = `installer_approved` | `installer_partial_approved` without requiring prior Start
+- [x] If still pending and no target status → set `installer_in_progress`
+- [x] Keep Multer allow-list from §26
+
+### QA
+
+1. Pending row → Admin Complete → **200**, not state toast → GET `installer_approved`.
+2. Installer JWT from pending → **200**.
+3. Already in metering without force → may still **409**.
+
+---
+
 ## Related docs
 
 | Doc | Section |
@@ -2453,4 +2480,7 @@ Migration: `20260803120000-add-loan-cash-amount-to-quotations.js`
 | **§28** (this file) | Cash + loan amounts + installment payment modes |
 | **`BACKEND_CASH_LOAN_AMOUNTS.md`** | **§28** approve/GET/installment + Excel fields |
 | **`BACKEND_CASH_LOAN_AMOUNTS.ts`** | **§28** amount validation + remaining-by-side helpers |
+| **§29** (this file) | Installation upload — not allowed for this quotation state |
+| **`BACKEND_INSTALLATION_UPLOAD_STATE.ts`** | **§29** allow `pending_installer` completion upload + gate helper |
+| **`BACKEND_PAYMENT_EXCEL_JOURNEY_STATUS.ts`** | **§24–§25** journey helpers + required GET fields |
 

@@ -41,6 +41,7 @@ import {
   parseTruthyFlag
 } from '../utils/installationPartialApi';
 import { buildFinalConfirmationApiFields } from '../utils/finalConfirmationDocuments';
+import { assertInstallationUploadAllowed } from '../utils/installationUploadState';
 
 const assertInstallationTeamQuotationScope = (req: Request, quotation: Quotation, res: Response): boolean => {
   const tid = getInstallationTeamIdFromRequest(req);
@@ -1046,11 +1047,30 @@ const INSTALLER_FIELD_DOC_MAP: Record<
   installerPo: { docType: 'installer_po' }
 };
 
-const INSTALLER_UPLOAD_ALLOWED_STATUSES = new Set([
-  'pending_installer',
-  'installer_in_progress',
-  'installer_approved'
-]);
+/** Role string for §29 upload gate (admin JWT / dealer admin / installer). */
+const installationUploadGateRole = (req: Request): string => {
+  if (isInstallerCompletionAdmin(req)) return 'admin';
+  return String(req.user?.role || req.dealer?.role || '').toLowerCase();
+};
+
+/** §29 — reject completion upload only when state is blocked (not for pending_installer). */
+const rejectIfInstallationUploadNotAllowed = (
+  req: Request,
+  quotation: Quotation,
+  res: Response
+): boolean => {
+  const gate = assertInstallationUploadAllowed({
+    quotation,
+    role: installationUploadGateRole(req),
+    body: (req.body || {}) as Record<string, unknown>
+  });
+  if (gate.ok) return false;
+  res.status(gate.status).json({
+    success: false,
+    error: { code: gate.code, message: gate.message }
+  });
+  return true;
+};
 
 const parseTrimmedString = (v: unknown): string | undefined => {
   if (v === undefined || v === null) return undefined;
@@ -1397,11 +1417,7 @@ export const uploadInstallerDocument = async (req: Request, res: Response): Prom
       return;
     }
 
-    if (!INSTALLER_UPLOAD_ALLOWED_STATUSES.has(quotation.installationStatus || '')) {
-      res.status(403).json({
-        success: false,
-        error: { code: 'AUTH_004', message: 'Installation upload not allowed for this quotation state' }
-      });
+    if (rejectIfInstallationUploadNotAllowed(req, quotation, res)) {
       return;
     }
 
@@ -1801,11 +1817,7 @@ export const installerUploadDocuments = async (req: Request, res: Response): Pro
       return;
     }
 
-    if (!INSTALLER_UPLOAD_ALLOWED_STATUSES.has(quotation.installationStatus || '')) {
-      res.status(403).json({
-        success: false,
-        error: { code: 'AUTH_004', message: 'Installation upload not allowed for this quotation state' }
-      });
+    if (rejectIfInstallationUploadNotAllowed(req, quotation, res)) {
       return;
     }
 
@@ -2192,6 +2204,21 @@ export const installerUploadDocuments = async (req: Request, res: Response): Pro
         installationPartialApproved: true,
         installationPartialApprovedAt: new Date()
       } as any);
+    } else {
+      // §29: upload from pending without target status → at least move to in_progress
+      const currentAfter =
+        String(quotation.installationStatus || '')
+          .trim()
+          .toLowerCase() || 'pending_installer';
+      if (currentAfter === 'pending_installer' || currentAfter === '') {
+        await quotation.update({
+          installationStatus: 'installer_in_progress',
+          installerId: isAdmin ? quotation.installerId : req.user?.id || quotation.installerId,
+          installerActionAt: new Date(),
+          installerInProgressAt: (quotation as any).installerInProgressAt || new Date(),
+          installerRemarks: rem || quotation.installerRemarks || null
+        } as any);
+      }
     }
 
     await quotation.reload();
