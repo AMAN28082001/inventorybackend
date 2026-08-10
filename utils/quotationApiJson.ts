@@ -1,6 +1,7 @@
 import { readSubsidyChequesFromRow } from './subsidyChequesNormalize';
 import { quotationProductPdfDisplayApiFields, quotationProductInaApiFields } from './quotationProductPdfDisplay';
 import { computeSystemKwFromProducts, formatSystemSizeKw } from './quotationSystemKw';
+import { serializeSiteCostFields } from './cashLoanAmounts';
 
 export type QuotationStatusHistoryEntry = { status: string; at: string };
 
@@ -411,6 +412,7 @@ export function quotationPaymentApiFields(q: Record<string, unknown>) {
     loan_amount: Number.isFinite(loanAmount as number) ? loanAmount : null,
     cashAmount: Number.isFinite(cashAmount as number) ? cashAmount : null,
     cash_amount: Number.isFinite(cashAmount as number) ? cashAmount : null,
+    ...serializeSiteCostFields(q),
     bankName,
     bank_name: bankName,
     bankIfsc,

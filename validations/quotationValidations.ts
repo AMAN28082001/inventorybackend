@@ -442,7 +442,12 @@ export const updatePaymentDetailsSchema = z
     installments: z.array(rawPaymentPhaseSchema).optional(),
     paymentPhases: z.array(rawPaymentPhaseSchema).optional(),
     subsidyCheques: z.array(subsidyChequeRowSchema).optional(),
-    subsidy_cheques: z.array(subsidyChequeRowSchema).optional()
+    subsidy_cheques: z.array(subsidyChequeRowSchema).optional(),
+    /** §30 Account Management Cost of site */
+    siteCost: z.union([z.number(), z.string()]).optional(),
+    site_cost: z.union([z.number(), z.string()]).optional(),
+    costOfSite: z.union([z.number(), z.string()]).optional(),
+    cost_of_site: z.union([z.number(), z.string()]).optional()
   })
   .refine(
     (data) => {
@@ -458,16 +463,22 @@ export const updatePaymentDetailsSchema = z
         data.final_settlement_amount !== undefined ||
         data.finalSettlementApplied !== undefined ||
         data.final_settlement_applied !== undefined;
+      const hasSiteCost =
+        data.siteCost !== undefined ||
+        data.site_cost !== undefined ||
+        data.costOfSite !== undefined ||
+        data.cost_of_site !== undefined;
       const hasOther =
         data.paymentType !== undefined ||
         data.paymentMode !== undefined ||
         data.subsidyCheques !== undefined ||
-        data.subsidy_cheques !== undefined;
+        data.subsidy_cheques !== undefined ||
+        hasSiteCost;
       return hasPhases || isStatusOnly || hasOther;
     },
     {
       message:
-        'Provide phases/installments, or a status-only payload (paymentStatus / remaining / finalSettlement*)',
+        'Provide phases/installments, siteCost, or a status-only payload (paymentStatus / remaining / finalSettlement*)',
       path: ['phases']
     }
   )
@@ -555,7 +566,11 @@ export const updatePaymentDetailsSchema = z
       replace: data.replace,
       // Critical: omit phases when absent so status-only Final Settlement skips phase rewrite / VAL_012
       ...(hadPhaseInput ? { phases } : {}),
-      subsidyCheques
+      subsidyCheques,
+      siteCost: data.siteCost,
+      site_cost: data.site_cost,
+      costOfSite: data.costOfSite,
+      cost_of_site: data.cost_of_site
     };
   })
   .superRefine((data, ctx) => {

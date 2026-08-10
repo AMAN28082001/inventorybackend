@@ -17,6 +17,7 @@ import {
 import {
   updateQuotationInstallationRelease,
   updateQuotationInstallationScheduledAt,
+  updateQuotationPaymentDetails,
   saveFinalConfirmationDocuments,
   uploadQuotationDocument
 } from '../controllers/quotationController';
@@ -42,7 +43,12 @@ import {
   deleteInstallationTeam,
   patchQuotationInstallationTeam
 } from '../controllers/installationTeamController';
-import { authenticate, authorizeAdmin, authorizeMeteringOrAdmin } from '../middleware/authQuotation';
+import {
+  authenticate,
+  authorizeAdmin,
+  authorizeDealerOrAccountManager,
+  authorizeMeteringOrAdmin
+} from '../middleware/authQuotation';
 import { validate } from '../middleware/validate';
 import { handleInstallerMultipart, handleSingleInstallerUploadMultipart } from './installerRoutes';
 import { installerUploadDocuments, meteringStatusUpdate, uploadInstallerDocument } from '../controllers/workflowController';
@@ -65,12 +71,34 @@ import {
 } from '../validations/adminValidations';
 import {
   updateInstallationReleaseSchema,
-  updateInstallationScheduledAtSchema
+  updateInstallationScheduledAtSchema,
+  updatePaymentDetailsSchema
 } from '../validations/quotationValidations';
 import { adminUpdateDealerSchema } from '../validations/dealerValidations';
 import { getAdminVisits } from '../controllers/visitController';
 
 const router: Router = express.Router();
+
+/** §30 — body is Cost-of-site only (no bank-process fields). */
+function isSiteCostOnlyPaymentDetailsBody(body: Record<string, unknown> | null | undefined): boolean {
+  if (!body || typeof body !== 'object') return false;
+  const hasSite =
+    body.siteCost !== undefined ||
+    body.site_cost !== undefined ||
+    body.costOfSite !== undefined ||
+    body.cost_of_site !== undefined;
+  if (!hasSite) return false;
+  const hasBank =
+    body.bankProcessDone !== undefined ||
+    body.bank_process_done !== undefined ||
+    body.bankName !== undefined ||
+    body.bank_name !== undefined ||
+    body.bankIfsc !== undefined ||
+    body.bank_ifsc !== undefined ||
+    body.moveToPendingPayment !== undefined ||
+    body.move_to_pending_payment !== undefined;
+  return !hasBank;
+}
 
 // All routes require authentication
 router.use(authenticate);
@@ -104,11 +132,32 @@ router.patch(
   validate(bankProcessSchema),
   updateQuotationBankProcess
 );
+/**
+ * §17 Bank process OR §30 siteCost-only (FE tries this path as Cost-of-site fallback).
+ * Site-cost-only → payment-details handler (does not wipe installments).
+ * Otherwise → bank process (metering / admin / installer).
+ */
+router.patch('/quotations/:quotationId/payment-details', (req, res) => {
+  if (isSiteCostOnlyPaymentDetailsBody(req.body as Record<string, unknown>)) {
+    return authorizeDealerOrAccountManager(req, res, () => {
+      validate(updatePaymentDetailsSchema)(req, res, () => {
+        void updateQuotationPaymentDetails(req, res);
+      });
+    });
+  }
+  return authorizeMeteringOrAdmin(req, res, () => {
+    validate(bankProcessSchema)(req, res, () => {
+      void updateQuotationBankProcess(req, res);
+    });
+  });
+});
+
+/** §30 optional alias — Account Management Cost of site (hard refresh / multi-device). */
 router.patch(
-  '/quotations/:quotationId/payment-details',
-  authorizeMeteringOrAdmin,
-  validate(bankProcessSchema),
-  updateQuotationBankProcess
+  '/quotations/:quotationId/site-cost',
+  authorizeDealerOrAccountManager,
+  validate(updatePaymentDetailsSchema),
+  updateQuotationPaymentDetails
 );
 
 /**

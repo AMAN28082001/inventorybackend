@@ -11,6 +11,11 @@ import {
   buildDcrPricingMatrix
 } from '../utils/defaultPricingTables';
 import { normalizeProductCatalog } from '../utils/productCatalogNormalize';
+import {
+  loadPricingTablesSeed,
+  mergePricingTablesPayload,
+  normalizePricingTablesPayload
+} from '../utils/pricingTablesSeed';
 
 const CONFIG_CACHE_TTL_MS = 60 * 1000;
 let productCatalogCache: { value: any; expiresAt: number } | null = null;
@@ -254,27 +259,60 @@ export const getIndianStates = async (_req: Request, res: Response): Promise<voi
 
 // Helper function to normalize pricing tables data
 const normalizePricingTables = (pricing: any): any => {
-  const systemConfigs = mergeDefaultSystemConfigs(pricing?.systemConfigs);
+  const seed = (() => {
+    try {
+      return loadPricingTablesSeed();
+    } catch {
+      return null;
+    }
+  })();
+  const pickComponents = (key: keyof NonNullable<typeof seed>, fallback: unknown) => {
+    // Array present (including []) = Admin Save replaced it — do not refill from seed
+    if (Array.isArray(pricing?.[key])) return pricing[key];
+    if (seed && Array.isArray(seed[key]) && (seed[key] as unknown[]).length > 0) return seed[key];
+    return Array.isArray(fallback) ? fallback : [];
+  };
+  const systemConfigs = mergeDefaultSystemConfigs(
+    pricing?.systemConfigs ?? pricing?.systemConfigurations
+  );
   const dcr = mergeDefaultDcrPricing(pricing?.dcr);
   const dcrMatrix = buildDcrPricingMatrix(dcr);
+  const meta = pricing?.meta || seed?.meta || {};
+  const effectiveFrom =
+    pricing?.effectiveFrom ??
+    meta.effectiveFrom ??
+    seed?.meta?.effectiveFrom ??
+    JUNE_2026_PRICING_META.effectiveFrom;
+  const effectiveTo =
+    pricing?.effectiveTo ??
+    pricing?.validTill ??
+    meta.validTill ??
+    seed?.meta?.validTill ??
+    JUNE_2026_PRICING_META.effectiveTo;
   return {
-    panels: Array.isArray(pricing?.panels) ? pricing.panels : [],
-    inverters: Array.isArray(pricing?.inverters) ? pricing.inverters : [],
-    structures: Array.isArray(pricing?.structures) ? pricing.structures : [],
-    meters: Array.isArray(pricing?.meters) ? pricing.meters : [],
-    cables: Array.isArray(pricing?.cables) ? pricing.cables : [],
-    acdb: Array.isArray(pricing?.acdb) ? pricing.acdb : [],
-    dcdb: Array.isArray(pricing?.dcdb) ? pricing.dcdb : [],
+    panels: pickComponents('panels', pricing?.panels),
+    inverters: pickComponents('inverters', pricing?.inverters),
+    structures: pickComponents('structures', pricing?.structures),
+    meters: pickComponents('meters', pricing?.meters),
+    cables: pickComponents('cables', pricing?.cables),
+    acdb: pickComponents('acdb', pricing?.acdb),
+    dcdb: pickComponents('dcdb', pricing?.dcdb),
     dcr,
     dcrMatrix,
     nonDcr: mergeDefaultNonDcrPricing(pricing?.nonDcr),
     both: mergeDefaultBothPricing(pricing?.both),
     systemConfigs,
     systemConfigurations: systemConfigs,
-    effectiveFrom: pricing?.effectiveFrom ?? JUNE_2026_PRICING_META.effectiveFrom,
-    effectiveTo: pricing?.effectiveTo ?? JUNE_2026_PRICING_META.effectiveTo,
-    effective_from: pricing?.effective_from ?? JUNE_2026_PRICING_META.effectiveFrom,
-    effective_to: pricing?.effective_to ?? JUNE_2026_PRICING_META.effectiveTo
+    meta: {
+      effectiveFrom,
+      validTill: effectiveTo,
+      panelTypes: meta.panelTypes || seed?.meta?.panelTypes
+    },
+    effectiveFrom,
+    effectiveTo,
+    validTill: effectiveTo,
+    effective_from: effectiveFrom,
+    effective_to: effectiveTo
   };
 };
 
@@ -342,14 +380,14 @@ export const getPricingTables = async (_req: Request, res: Response): Promise<vo
   }
 };
 
-// Update pricing tables
+// Update pricing tables (Admin → Pricing → Save)
+// Add/Delete are FE draft-only; Save sends full dcr+nonDcr+both and we REPLACE those arrays.
 export const updatePricingTables = async (req: Request, res: Response): Promise<void> => {
   try {
-    const pricingTables = req.body;
+    const rawBody = req.body;
     const userId = req.dealer?.id || req.user?.id;
 
-    // Basic structure validation (detailed validation is done by middleware)
-    if (!pricingTables || typeof pricingTables !== 'object') {
+    if (!rawBody || typeof rawBody !== 'object') {
       res.status(400).json({
         success: false,
         error: {
@@ -361,7 +399,60 @@ export const updatePricingTables = async (req: Request, res: Response): Promise<
       return;
     }
 
-    // Validate using Zod schema (validation middleware should have caught this, but double-check)
+    const pricingTables =
+      (rawBody as any).data && typeof (rawBody as any).data === 'object'
+        ? (rawBody as any).data
+        : rawBody;
+
+    const hasDcr = Array.isArray(pricingTables.dcr);
+    const hasNonDcr = Array.isArray(pricingTables.nonDcr);
+    const hasBoth = Array.isArray(pricingTables.both);
+    if (!hasDcr && !hasNonDcr && !hasBoth) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VAL_001',
+          message: 'Body must include at least one of: dcr, nonDcr, both (arrays)',
+          details: [
+            { field: 'dcr', message: 'array of package rows' },
+            { field: 'nonDcr', message: 'array of package rows' },
+            { field: 'both', message: 'array of package rows' }
+          ]
+        }
+      });
+      return;
+    }
+
+    const validateSystemRows = (rows: unknown, field: string) => {
+      if (!Array.isArray(rows)) return null;
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i] as Record<string, unknown>;
+        if (!row || typeof row !== 'object') {
+          return { field: `${field}[${i}]`, message: 'row must be an object' };
+        }
+        if (!String(row.systemSize || '').trim()) {
+          return { field: `${field}[${i}].systemSize`, message: 'required' };
+        }
+        if (!String(row.panelType || '').trim()) {
+          return { field: `${field}[${i}].panelType`, message: 'required' };
+        }
+        if (!Number.isFinite(Number(row.price))) {
+          return { field: `${field}[${i}].price`, message: 'must be a number' };
+        }
+      }
+      return null;
+    };
+    for (const field of ['dcr', 'nonDcr', 'both'] as const) {
+      const err = validateSystemRows(pricingTables[field], field);
+      if (err) {
+        res.status(400).json({
+          success: false,
+          error: { code: 'VAL_001', message: err.message, details: [err] }
+        });
+        return;
+      }
+    }
+
     try {
       pricingTablesSchema.parse(pricingTables);
     } catch (validationError: any) {
@@ -381,28 +472,40 @@ export const updatePricingTables = async (req: Request, res: Response): Promise<
       }
     }
 
-    // Store in system_config table
     const configKey = 'pricing_tables';
-    const configValue = JSON.stringify(pricingTables);
-    const dataType = 'json';
-
-    // Check if config exists
     const existingConfig = await SystemConfig.findByPk(configKey);
+    let existingPayload: unknown = null;
+    if (existingConfig) {
+      try {
+        existingPayload =
+          typeof existingConfig.configValue === 'string'
+            ? JSON.parse(existingConfig.configValue)
+            : existingConfig.configValue;
+      } catch {
+        existingPayload = null;
+      }
+    }
+
+    const base =
+      existingPayload && typeof existingPayload === 'object'
+        ? normalizePricingTablesPayload(existingPayload)
+        : loadPricingTablesSeed();
+    // Replace each array key present in body (do not append). Unspecified keys kept from base.
+    const merged = mergePricingTablesPayload(base, pricingTables);
+    const configValue = JSON.stringify(merged);
 
     if (existingConfig) {
-      // Update existing config
       await existingConfig.update({
         configValue,
-        dataType,
+        dataType: 'json',
         updatedAt: new Date()
       });
     } else {
-      // Create new config
       await SystemConfig.create({
         configKey,
         configValue,
-        dataType,
-        description: 'Pricing tables for solar systems and components',
+        dataType: 'json',
+        description: 'Pricing tables for solar systems and components (Aug 2026 FE seed)',
         category: 'pricing',
         updatedAt: new Date()
       });
@@ -412,11 +515,18 @@ export const updatePricingTables = async (req: Request, res: Response): Promise<
 
     logInfo('Pricing tables updated', {
       updatedBy: userId,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      dcrCount: merged.dcr.length,
+      nonDcrCount: merged.nonDcr.length,
+      bothCount: merged.both.length
     });
 
-    // Return success with normalized data
-    const normalizedPricing = normalizePricingTables(pricingTables);
+    // Echo same shape as GET so Admin draft + next GET stay in sync
+    const normalizedPricing = normalizePricingTables(merged);
+    pricingTablesCache = {
+      value: normalizedPricing,
+      expiresAt: Date.now() + CONFIG_CACHE_TTL_MS
+    };
     res.json({
       success: true,
       message: 'Pricing tables updated successfully',
@@ -426,7 +536,7 @@ export const updatePricingTables = async (req: Request, res: Response): Promise<
     logError('Update pricing tables error', error);
     res.status(500).json({
       success: false,
-      error: { code: 'SYS_001', message: 'Internal server error' }
+      error: { code: 'PRICING_002', message: 'Failed to save pricing tables' }
     });
   }
 };

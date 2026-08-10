@@ -124,15 +124,62 @@ export function resolveApproveLoanCashAmounts(args: {
   return { ok: true, loanAmount: loan, cashAmount: cash };
 }
 
-/** Quotation set-price for approve amount checks. */
+/** Quotation set-price for approve amount checks (gross AM subtotal preferred). */
 export function pickQuotationSubtotalForPayments(q: Record<string, unknown> | null | undefined): number {
   if (!q) return 0;
-  const candidates = [q.subtotal, q.totalAmount, q.finalAmount, q.amountAfterSubsidy];
+  const pricing =
+    q.pricing && typeof q.pricing === 'object' ? (q.pricing as Record<string, unknown>) : null;
+  const candidates = [
+    q.subtotal,
+    pricing?.subtotal,
+    pricing?.totalAmount,
+    q.totalAmount,
+    q.finalAmount
+  ];
   for (const c of candidates) {
     const n = Number(c);
     if (Number.isFinite(n) && n > 0) return Math.round(n);
   }
   return 0;
+}
+
+/**
+ * §31 — Installment paid cap for Account Management.
+ * AM list shows quotation.subtotal; do NOT use amountAfterSubsidy − discount
+ * (that caused "Total paid (126000) cannot exceed payable after discount (117000)").
+ */
+export function pickAmInstallmentPaymentCap(q: Record<string, unknown> | null | undefined): number {
+  if (!q) return 0;
+  const amSubtotal = pickQuotationSubtotalForPayments(q);
+  const pricing =
+    q.pricing && typeof q.pricing === 'object' ? (q.pricing as Record<string, unknown>) : null;
+  const discount = Math.max(
+    0,
+    Math.round(Number(q.discountAmount ?? q.discount_amount ?? pricing?.discountAmount ?? 0) || 0)
+  );
+  return Math.max(0, amSubtotal - discount);
+}
+
+/** Parse siteCost / site_cost / costOfSite from PATCH body (§30). */
+export function parseSiteCostFromBody(body: Record<string, unknown> | null | undefined): number | undefined {
+  if (!body) return undefined;
+  const raw = body.siteCost ?? body.site_cost ?? body.costOfSite ?? body.cost_of_site;
+  if (raw === undefined || raw === null || raw === '') return undefined;
+  const n = Math.round(Number(String(raw).replace(/[₹,\s]/g, '')) || 0);
+  if (!Number.isFinite(n) || n < 0) return undefined;
+  return Math.max(0, n);
+}
+
+/** Echo siteCost on GET list/detail. */
+export function serializeSiteCostFields(q: Record<string, unknown> | null | undefined) {
+  if (!q) return { siteCost: null, site_cost: null };
+  const raw = q.siteCost ?? q.site_cost;
+  if (raw === undefined || raw === null || raw === '') {
+    return { siteCost: null, site_cost: null };
+  }
+  const n = Math.round(Number(raw));
+  if (!Number.isFinite(n)) return { siteCost: null, site_cost: null };
+  return { siteCost: n, site_cost: n };
 }
 
 /** Sum paid by side from installment phases. */

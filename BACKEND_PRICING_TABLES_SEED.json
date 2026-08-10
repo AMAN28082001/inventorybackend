@@ -1,0 +1,4976 @@
+{
+  "meta": {
+    "source": "lib/pricing-tables.ts",
+    "effectiveFrom": "2026-08-04",
+    "validTill": "2026-08-31",
+    "panelTypes": [
+      "Adani",
+      "Adani Topcon",
+      "Waaree",
+      "Waaree Topcon",
+      "Premier Energies",
+      "INA",
+      "Tata",
+      "Crompton set"
+    ],
+    "generatedAt": "2026-08-08T06:21:47.428Z"
+  },
+  "dcr": [
+    {
+      "systemSize": "3kW",
+      "phase": "1-Phase",
+      "inverterSize": "3kW",
+      "panelType": "Adani",
+      "price": 186000
+    },
+    {
+      "systemSize": "3kW",
+      "phase": "1-Phase",
+      "inverterSize": "3kW",
+      "panelType": "Adani Topcon",
+      "price": 190000
+    },
+    {
+      "systemSize": "3kW",
+      "phase": "1-Phase",
+      "inverterSize": "3kW",
+      "panelType": "Waaree",
+      "price": 185000
+    },
+    {
+      "systemSize": "3kW",
+      "phase": "1-Phase",
+      "inverterSize": "3kW",
+      "panelType": "Waaree Topcon",
+      "price": 190000
+    },
+    {
+      "systemSize": "3kW",
+      "phase": "1-Phase",
+      "inverterSize": "3kW",
+      "panelType": "Premier Energies",
+      "price": 189000
+    },
+    {
+      "systemSize": "3kW",
+      "phase": "1-Phase",
+      "inverterSize": "3kW",
+      "panelType": "INA",
+      "price": 189000
+    },
+    {
+      "systemSize": "3kW",
+      "phase": "3-Phase",
+      "inverterSize": "5kW",
+      "panelType": "Adani",
+      "price": 221000
+    },
+    {
+      "systemSize": "3kW",
+      "phase": "3-Phase",
+      "inverterSize": "5kW",
+      "panelType": "Adani Topcon",
+      "price": 221000
+    },
+    {
+      "systemSize": "3kW",
+      "phase": "3-Phase",
+      "inverterSize": "5kW",
+      "panelType": "Waaree",
+      "price": 215000
+    },
+    {
+      "systemSize": "3kW",
+      "phase": "3-Phase",
+      "inverterSize": "5kW",
+      "panelType": "Waaree Topcon",
+      "price": 221000
+    },
+    {
+      "systemSize": "3kW",
+      "phase": "3-Phase",
+      "inverterSize": "5kW",
+      "panelType": "Premier Energies",
+      "price": 221000
+    },
+    {
+      "systemSize": "3kW",
+      "phase": "3-Phase",
+      "inverterSize": "5kW",
+      "panelType": "INA",
+      "price": 221000
+    },
+    {
+      "systemSize": "4kW",
+      "phase": "1-Phase",
+      "inverterSize": "4kW",
+      "panelType": "Premier Energies",
+      "price": 250000
+    },
+    {
+      "systemSize": "4kW",
+      "phase": "1-Phase",
+      "inverterSize": "4kW",
+      "panelType": "INA",
+      "price": 250000
+    },
+    {
+      "systemSize": "4kW",
+      "phase": "3-Phase",
+      "inverterSize": "5kW",
+      "panelType": "Premier Energies",
+      "price": 270000
+    },
+    {
+      "systemSize": "4kW",
+      "phase": "3-Phase",
+      "inverterSize": "5kW",
+      "panelType": "INA",
+      "price": 270000
+    },
+    {
+      "systemSize": "5kW",
+      "phase": "1-Phase",
+      "inverterSize": "5kW",
+      "panelType": "Adani",
+      "price": 272000
+    },
+    {
+      "systemSize": "5kW",
+      "phase": "1-Phase",
+      "inverterSize": "5kW",
+      "panelType": "Adani Topcon",
+      "price": 280000
+    },
+    {
+      "systemSize": "5kW",
+      "phase": "1-Phase",
+      "inverterSize": "5kW",
+      "panelType": "Waaree",
+      "price": 270000
+    },
+    {
+      "systemSize": "5kW",
+      "phase": "1-Phase",
+      "inverterSize": "5kW",
+      "panelType": "Waaree Topcon",
+      "price": 280000
+    },
+    {
+      "systemSize": "5kW",
+      "phase": "1-Phase",
+      "inverterSize": "5kW",
+      "panelType": "Premier Energies",
+      "price": 272000
+    },
+    {
+      "systemSize": "5kW",
+      "phase": "1-Phase",
+      "inverterSize": "5kW",
+      "panelType": "INA",
+      "price": 272000
+    },
+    {
+      "systemSize": "5kW",
+      "phase": "3-Phase",
+      "inverterSize": "5kW",
+      "panelType": "Adani",
+      "price": 299000
+    },
+    {
+      "systemSize": "5kW",
+      "phase": "3-Phase",
+      "inverterSize": "5kW",
+      "panelType": "Adani Topcon",
+      "price": 305000
+    },
+    {
+      "systemSize": "5kW",
+      "phase": "3-Phase",
+      "inverterSize": "5kW",
+      "panelType": "Waaree",
+      "price": 299000
+    },
+    {
+      "systemSize": "5kW",
+      "phase": "3-Phase",
+      "inverterSize": "5kW",
+      "panelType": "Waaree Topcon",
+      "price": 305000
+    },
+    {
+      "systemSize": "5kW",
+      "phase": "3-Phase",
+      "inverterSize": "5kW",
+      "panelType": "Premier Energies",
+      "price": 289000
+    },
+    {
+      "systemSize": "5kW",
+      "phase": "3-Phase",
+      "inverterSize": "5kW",
+      "panelType": "INA",
+      "price": 289000
+    },
+    {
+      "systemSize": "6kW",
+      "phase": "1-Phase",
+      "inverterSize": "6kW",
+      "panelType": "Adani",
+      "price": 310000
+    },
+    {
+      "systemSize": "6kW",
+      "phase": "1-Phase",
+      "inverterSize": "6kW",
+      "panelType": "Adani Topcon",
+      "price": 320000
+    },
+    {
+      "systemSize": "6kW",
+      "phase": "1-Phase",
+      "inverterSize": "6kW",
+      "panelType": "Waaree",
+      "price": 305000
+    },
+    {
+      "systemSize": "6kW",
+      "phase": "1-Phase",
+      "inverterSize": "6kW",
+      "panelType": "Waaree Topcon",
+      "price": 320000
+    },
+    {
+      "systemSize": "6kW",
+      "phase": "1-Phase",
+      "inverterSize": "6kW",
+      "panelType": "Premier Energies",
+      "price": 299000
+    },
+    {
+      "systemSize": "6kW",
+      "phase": "1-Phase",
+      "inverterSize": "6kW",
+      "panelType": "INA",
+      "price": 299000
+    },
+    {
+      "systemSize": "6kW",
+      "phase": "3-Phase",
+      "inverterSize": "6kW",
+      "panelType": "Adani",
+      "price": 330000
+    },
+    {
+      "systemSize": "6kW",
+      "phase": "3-Phase",
+      "inverterSize": "6kW",
+      "panelType": "Adani Topcon",
+      "price": 340000
+    },
+    {
+      "systemSize": "6kW",
+      "phase": "3-Phase",
+      "inverterSize": "6kW",
+      "panelType": "Waaree",
+      "price": 320000
+    },
+    {
+      "systemSize": "6kW",
+      "phase": "3-Phase",
+      "inverterSize": "6kW",
+      "panelType": "Waaree Topcon",
+      "price": 340000
+    },
+    {
+      "systemSize": "6kW",
+      "phase": "3-Phase",
+      "inverterSize": "6kW",
+      "panelType": "Premier Energies",
+      "price": 330000
+    },
+    {
+      "systemSize": "6kW",
+      "phase": "3-Phase",
+      "inverterSize": "6kW",
+      "panelType": "INA",
+      "price": 330000
+    },
+    {
+      "systemSize": "7kW",
+      "phase": "3-Phase",
+      "inverterSize": "8kW",
+      "panelType": "Premier Energies",
+      "price": 370000
+    },
+    {
+      "systemSize": "7kW",
+      "phase": "3-Phase",
+      "inverterSize": "8kW",
+      "panelType": "INA",
+      "price": 370000
+    },
+    {
+      "systemSize": "8kW",
+      "phase": "3-Phase",
+      "inverterSize": "8kW",
+      "panelType": "Adani",
+      "price": 425000
+    },
+    {
+      "systemSize": "8kW",
+      "phase": "3-Phase",
+      "inverterSize": "8kW",
+      "panelType": "Adani Topcon",
+      "price": 435000
+    },
+    {
+      "systemSize": "8kW",
+      "phase": "3-Phase",
+      "inverterSize": "8kW",
+      "panelType": "Waaree",
+      "price": 405000
+    },
+    {
+      "systemSize": "8kW",
+      "phase": "3-Phase",
+      "inverterSize": "8kW",
+      "panelType": "Waaree Topcon",
+      "price": 435000
+    },
+    {
+      "systemSize": "8kW",
+      "phase": "3-Phase",
+      "inverterSize": "8kW",
+      "panelType": "Premier Energies",
+      "price": 412000
+    },
+    {
+      "systemSize": "8kW",
+      "phase": "3-Phase",
+      "inverterSize": "8kW",
+      "panelType": "INA",
+      "price": 412000
+    },
+    {
+      "systemSize": "10kW",
+      "phase": "3-Phase",
+      "inverterSize": "10kW",
+      "panelType": "Adani",
+      "price": 499000
+    },
+    {
+      "systemSize": "10kW",
+      "phase": "3-Phase",
+      "inverterSize": "10kW",
+      "panelType": "Adani Topcon",
+      "price": 515000
+    },
+    {
+      "systemSize": "10kW",
+      "phase": "3-Phase",
+      "inverterSize": "10kW",
+      "panelType": "Waaree",
+      "price": 480000
+    },
+    {
+      "systemSize": "10kW",
+      "phase": "3-Phase",
+      "inverterSize": "10kW",
+      "panelType": "Waaree Topcon",
+      "price": 515000
+    },
+    {
+      "systemSize": "10kW",
+      "phase": "3-Phase",
+      "inverterSize": "10kW",
+      "panelType": "Premier Energies",
+      "price": 474000
+    },
+    {
+      "systemSize": "10kW",
+      "phase": "3-Phase",
+      "inverterSize": "10kW",
+      "panelType": "INA",
+      "price": 474000
+    },
+    {
+      "systemSize": "12kW",
+      "phase": "3-Phase",
+      "inverterSize": "12kW",
+      "panelType": "Adani",
+      "price": 595000
+    },
+    {
+      "systemSize": "12kW",
+      "phase": "3-Phase",
+      "inverterSize": "12kW",
+      "panelType": "Adani Topcon",
+      "price": 625000
+    },
+    {
+      "systemSize": "12kW",
+      "phase": "3-Phase",
+      "inverterSize": "12kW",
+      "panelType": "Waaree",
+      "price": 570000
+    },
+    {
+      "systemSize": "12kW",
+      "phase": "3-Phase",
+      "inverterSize": "12kW",
+      "panelType": "Waaree Topcon",
+      "price": 625000
+    },
+    {
+      "systemSize": "15kW",
+      "phase": "3-Phase",
+      "inverterSize": "15kW",
+      "panelType": "Adani",
+      "price": 710000
+    },
+    {
+      "systemSize": "15kW",
+      "phase": "3-Phase",
+      "inverterSize": "15kW",
+      "panelType": "Adani Topcon",
+      "price": 740000
+    },
+    {
+      "systemSize": "15kW",
+      "phase": "3-Phase",
+      "inverterSize": "15kW",
+      "panelType": "Waaree",
+      "price": 680000
+    },
+    {
+      "systemSize": "15kW",
+      "phase": "3-Phase",
+      "inverterSize": "15kW",
+      "panelType": "Waaree Topcon",
+      "price": 740000
+    },
+    {
+      "systemSize": "20kW",
+      "phase": "3-Phase",
+      "inverterSize": "20kW",
+      "panelType": "Adani",
+      "price": 940000
+    },
+    {
+      "systemSize": "20kW",
+      "phase": "3-Phase",
+      "inverterSize": "20kW",
+      "panelType": "Adani Topcon",
+      "price": 995000
+    },
+    {
+      "systemSize": "20kW",
+      "phase": "3-Phase",
+      "inverterSize": "20kW",
+      "panelType": "Waaree",
+      "price": 900000
+    },
+    {
+      "systemSize": "25kW",
+      "phase": "3-Phase",
+      "inverterSize": "25kW",
+      "panelType": "Adani",
+      "price": 1145000
+    },
+    {
+      "systemSize": "25kW",
+      "phase": "3-Phase",
+      "inverterSize": "25kW",
+      "panelType": "Adani Topcon",
+      "price": 1210000
+    },
+    {
+      "systemSize": "25kW",
+      "phase": "3-Phase",
+      "inverterSize": "25kW",
+      "panelType": "Waaree",
+      "price": 1090000
+    },
+    {
+      "systemSize": "30kW",
+      "phase": "3-Phase",
+      "inverterSize": "30kW",
+      "panelType": "Adani",
+      "price": 1350000
+    },
+    {
+      "systemSize": "30kW",
+      "phase": "3-Phase",
+      "inverterSize": "30kW",
+      "panelType": "Adani Topcon",
+      "price": 1420000
+    },
+    {
+      "systemSize": "30kW",
+      "phase": "3-Phase",
+      "inverterSize": "30kW",
+      "panelType": "Waaree",
+      "price": 1350000
+    },
+    {
+      "systemSize": "40kW",
+      "phase": "3-Phase",
+      "inverterSize": "40kW",
+      "panelType": "Adani",
+      "price": 1760000
+    },
+    {
+      "systemSize": "40kW",
+      "phase": "3-Phase",
+      "inverterSize": "40kW",
+      "panelType": "Adani Topcon",
+      "price": 1870000
+    },
+    {
+      "systemSize": "40kW",
+      "phase": "3-Phase",
+      "inverterSize": "40kW",
+      "panelType": "Waaree",
+      "price": 1760000
+    },
+    {
+      "systemSize": "50kW",
+      "phase": "3-Phase",
+      "inverterSize": "50kW",
+      "panelType": "Adani",
+      "price": 2150000
+    },
+    {
+      "systemSize": "50kW",
+      "phase": "3-Phase",
+      "inverterSize": "50kW",
+      "panelType": "Adani Topcon",
+      "price": 2280000
+    },
+    {
+      "systemSize": "50kW",
+      "phase": "3-Phase",
+      "inverterSize": "50kW",
+      "panelType": "Waaree",
+      "price": 2150000
+    },
+    {
+      "systemSize": "50kW",
+      "phase": "3-Phase",
+      "inverterSize": "50kW",
+      "panelType": "Premier Energies",
+      "price": 2010000
+    },
+    {
+      "systemSize": "50kW",
+      "phase": "3-Phase",
+      "inverterSize": "50kW",
+      "panelType": "INA",
+      "price": 2010000
+    },
+    {
+      "systemSize": "60kW",
+      "phase": "3-Phase",
+      "inverterSize": "60kW",
+      "panelType": "Adani",
+      "price": 2600000
+    },
+    {
+      "systemSize": "60kW",
+      "phase": "3-Phase",
+      "inverterSize": "60kW",
+      "panelType": "Adani Topcon",
+      "price": 2760000
+    },
+    {
+      "systemSize": "60kW",
+      "phase": "3-Phase",
+      "inverterSize": "60kW",
+      "panelType": "Waaree",
+      "price": 2600000
+    },
+    {
+      "systemSize": "80kW",
+      "phase": "3-Phase",
+      "inverterSize": "80kW",
+      "panelType": "Adani",
+      "price": 3450000
+    },
+    {
+      "systemSize": "80kW",
+      "phase": "3-Phase",
+      "inverterSize": "80kW",
+      "panelType": "Adani Topcon",
+      "price": 3660000
+    },
+    {
+      "systemSize": "80kW",
+      "phase": "3-Phase",
+      "inverterSize": "80kW",
+      "panelType": "Waaree",
+      "price": 3450000
+    },
+    {
+      "systemSize": "100kW",
+      "phase": "3-Phase",
+      "inverterSize": "100kW",
+      "panelType": "Adani",
+      "price": 4200000
+    },
+    {
+      "systemSize": "100kW",
+      "phase": "3-Phase",
+      "inverterSize": "100kW",
+      "panelType": "Adani Topcon",
+      "price": 4465000
+    },
+    {
+      "systemSize": "100kW",
+      "phase": "3-Phase",
+      "inverterSize": "100kW",
+      "panelType": "Waaree",
+      "price": 4200000
+    },
+    {
+      "systemSize": "3.1kW",
+      "phase": "1-Phase",
+      "inverterSize": "As per the set",
+      "panelType": "Tata",
+      "price": 220000
+    },
+    {
+      "systemSize": "5.1kW",
+      "phase": "1-Phase",
+      "inverterSize": "As per the set",
+      "panelType": "Tata",
+      "price": 310000
+    },
+    {
+      "systemSize": "5.1kW",
+      "phase": "3-Phase",
+      "inverterSize": "As per the set",
+      "panelType": "Tata",
+      "price": 335000
+    },
+    {
+      "systemSize": "6kW",
+      "phase": "1-Phase",
+      "inverterSize": "As per the set",
+      "panelType": "Tata",
+      "price": 360000
+    },
+    {
+      "systemSize": "6kW",
+      "phase": "3-Phase",
+      "inverterSize": "As per the set",
+      "panelType": "Tata",
+      "price": 380000
+    },
+    {
+      "systemSize": "8kW",
+      "phase": "3-Phase",
+      "inverterSize": "As per the set",
+      "panelType": "Tata",
+      "price": 470000
+    },
+    {
+      "systemSize": "10kW",
+      "phase": "3-Phase",
+      "inverterSize": "As per the set",
+      "panelType": "Tata",
+      "price": 550000
+    },
+    {
+      "systemSize": "3kW",
+      "phase": "1-Phase",
+      "inverterSize": "3.6kW",
+      "panelType": "Crompton set",
+      "price": 210000,
+      "notes": "Premier Energy 600W–610W panels; Crompton 3.6kW inverter + ACDB/DCDB"
+    },
+    {
+      "systemSize": "5kW",
+      "phase": "1-Phase",
+      "inverterSize": "3.6kW",
+      "panelType": "Crompton set",
+      "price": 295000,
+      "notes": "Premier Energy 600W–610W panels; Crompton 3.6kW inverter + ACDB/DCDB"
+    }
+  ],
+  "nonDcr": [
+    {
+      "systemSize": "3kW",
+      "phase": "1-Phase",
+      "inverterSize": "3kW",
+      "panelType": "Adani",
+      "price": 145000
+    },
+    {
+      "systemSize": "3kW",
+      "phase": "1-Phase",
+      "inverterSize": "3kW",
+      "panelType": "Waaree",
+      "price": 145000
+    },
+    {
+      "systemSize": "5kW",
+      "phase": "1-Phase",
+      "inverterSize": "5kW",
+      "panelType": "Adani",
+      "price": 222000
+    },
+    {
+      "systemSize": "5kW",
+      "phase": "1-Phase",
+      "inverterSize": "5kW",
+      "panelType": "Waaree",
+      "price": 222000
+    },
+    {
+      "systemSize": "6kW",
+      "phase": "1-Phase",
+      "inverterSize": "6kW",
+      "panelType": "Adani",
+      "price": 240000
+    },
+    {
+      "systemSize": "6kW",
+      "phase": "1-Phase",
+      "inverterSize": "6kW",
+      "panelType": "Waaree",
+      "price": 240000
+    },
+    {
+      "systemSize": "3kW",
+      "phase": "3-Phase",
+      "inverterSize": "5kW",
+      "panelType": "Adani",
+      "price": 180000
+    },
+    {
+      "systemSize": "3kW",
+      "phase": "3-Phase",
+      "inverterSize": "5kW",
+      "panelType": "Waaree",
+      "price": 180000
+    },
+    {
+      "systemSize": "5kW",
+      "phase": "3-Phase",
+      "inverterSize": "5kW",
+      "panelType": "Adani",
+      "price": 250000
+    },
+    {
+      "systemSize": "5kW",
+      "phase": "3-Phase",
+      "inverterSize": "5kW",
+      "panelType": "Waaree",
+      "price": 250000
+    },
+    {
+      "systemSize": "6kW",
+      "phase": "3-Phase",
+      "inverterSize": "6kW",
+      "panelType": "Adani",
+      "price": 278000
+    },
+    {
+      "systemSize": "6kW",
+      "phase": "3-Phase",
+      "inverterSize": "6kW",
+      "panelType": "Waaree",
+      "price": 278000
+    },
+    {
+      "systemSize": "6kW",
+      "phase": "3-Phase",
+      "inverterSize": "6kW",
+      "panelType": "Tata",
+      "price": 320000
+    },
+    {
+      "systemSize": "7kW",
+      "phase": "3-Phase",
+      "inverterSize": "8kW",
+      "panelType": "Adani",
+      "price": 299000
+    },
+    {
+      "systemSize": "7kW",
+      "phase": "3-Phase",
+      "inverterSize": "8kW",
+      "panelType": "Waaree",
+      "price": 299000
+    },
+    {
+      "systemSize": "8kW",
+      "phase": "3-Phase",
+      "inverterSize": "8kW",
+      "panelType": "Adani",
+      "price": 320000
+    },
+    {
+      "systemSize": "8kW",
+      "phase": "3-Phase",
+      "inverterSize": "8kW",
+      "panelType": "Waaree",
+      "price": 320000
+    },
+    {
+      "systemSize": "8kW",
+      "phase": "3-Phase",
+      "inverterSize": "8kW",
+      "panelType": "Tata",
+      "price": 391000
+    },
+    {
+      "systemSize": "10kW",
+      "phase": "3-Phase",
+      "inverterSize": "10kW",
+      "panelType": "Adani",
+      "price": 391000
+    },
+    {
+      "systemSize": "10kW",
+      "phase": "3-Phase",
+      "inverterSize": "10kW",
+      "panelType": "Waaree",
+      "price": 391000
+    },
+    {
+      "systemSize": "10kW",
+      "phase": "3-Phase",
+      "inverterSize": "10kW",
+      "panelType": "Tata",
+      "price": 465000
+    },
+    {
+      "systemSize": "12kW",
+      "phase": "3-Phase",
+      "inverterSize": "12kW",
+      "panelType": "Adani",
+      "price": 455000
+    },
+    {
+      "systemSize": "12kW",
+      "phase": "3-Phase",
+      "inverterSize": "12kW",
+      "panelType": "Waaree",
+      "price": 455000
+    },
+    {
+      "systemSize": "12kW",
+      "phase": "3-Phase",
+      "inverterSize": "12kW",
+      "panelType": "Tata",
+      "price": 525000
+    },
+    {
+      "systemSize": "15kW",
+      "phase": "3-Phase",
+      "inverterSize": "15kW",
+      "panelType": "Adani",
+      "price": 567000
+    },
+    {
+      "systemSize": "15kW",
+      "phase": "3-Phase",
+      "inverterSize": "15kW",
+      "panelType": "Waaree",
+      "price": 567000
+    },
+    {
+      "systemSize": "15kW",
+      "phase": "3-Phase",
+      "inverterSize": "15kW",
+      "panelType": "Tata",
+      "price": 630000
+    },
+    {
+      "systemSize": "20kW",
+      "phase": "3-Phase",
+      "inverterSize": "20kW",
+      "panelType": "Adani",
+      "price": 700000
+    },
+    {
+      "systemSize": "20kW",
+      "phase": "3-Phase",
+      "inverterSize": "20kW",
+      "panelType": "Waaree",
+      "price": 700000
+    },
+    {
+      "systemSize": "20kW",
+      "phase": "3-Phase",
+      "inverterSize": "20kW",
+      "panelType": "Tata",
+      "price": 800000
+    },
+    {
+      "systemSize": "25kW",
+      "phase": "3-Phase",
+      "inverterSize": "25kW",
+      "panelType": "Adani",
+      "price": 845000
+    },
+    {
+      "systemSize": "25kW",
+      "phase": "3-Phase",
+      "inverterSize": "25kW",
+      "panelType": "Waaree",
+      "price": 845000
+    },
+    {
+      "systemSize": "25kW",
+      "phase": "3-Phase",
+      "inverterSize": "25kW",
+      "panelType": "Tata",
+      "price": 940000
+    },
+    {
+      "systemSize": "30kW",
+      "phase": "3-Phase",
+      "inverterSize": "30kW",
+      "panelType": "Adani",
+      "price": 1000000
+    },
+    {
+      "systemSize": "30kW",
+      "phase": "3-Phase",
+      "inverterSize": "30kW",
+      "panelType": "Waaree",
+      "price": 1000000
+    },
+    {
+      "systemSize": "30kW",
+      "phase": "3-Phase",
+      "inverterSize": "30kW",
+      "panelType": "Tata",
+      "price": 1101000
+    },
+    {
+      "systemSize": "80kW",
+      "phase": "3-Phase",
+      "inverterSize": "80kW",
+      "panelType": "Renew Energy",
+      "price": 2510000
+    },
+    {
+      "systemSize": "80kW",
+      "phase": "3-Phase",
+      "inverterSize": "80kW",
+      "panelType": "Waaree",
+      "price": 2590000
+    },
+    {
+      "systemSize": "80kW",
+      "phase": "3-Phase",
+      "inverterSize": "80kW",
+      "panelType": "Adani",
+      "price": 2590000
+    }
+  ],
+  "both": [
+    {
+      "systemSize": "5kW",
+      "phase": "3-Phase",
+      "inverterSize": "5kW",
+      "dcrCapacity": "3kW",
+      "nonDcrCapacity": "2kW",
+      "panelType": "Adani",
+      "price": 270000
+    },
+    {
+      "systemSize": "5kW",
+      "phase": "3-Phase",
+      "inverterSize": "5kW",
+      "dcrCapacity": "3kW",
+      "nonDcrCapacity": "2kW",
+      "panelType": "Waaree",
+      "price": 270000
+    },
+    {
+      "systemSize": "6kW",
+      "phase": "3-Phase",
+      "inverterSize": "6kW",
+      "dcrCapacity": "3kW",
+      "nonDcrCapacity": "3kW",
+      "panelType": "Adani",
+      "price": 310000
+    },
+    {
+      "systemSize": "6kW",
+      "phase": "3-Phase",
+      "inverterSize": "6kW",
+      "dcrCapacity": "3kW",
+      "nonDcrCapacity": "3kW",
+      "panelType": "Waaree",
+      "price": 310000
+    },
+    {
+      "systemSize": "8kW",
+      "phase": "3-Phase",
+      "inverterSize": "8kW",
+      "dcrCapacity": "3kW",
+      "nonDcrCapacity": "5kW",
+      "panelType": "Adani",
+      "price": 371000
+    },
+    {
+      "systemSize": "8kW",
+      "phase": "3-Phase",
+      "inverterSize": "8kW",
+      "dcrCapacity": "3kW",
+      "nonDcrCapacity": "5kW",
+      "panelType": "Waaree",
+      "price": 371000
+    },
+    {
+      "systemSize": "10kW",
+      "phase": "3-Phase",
+      "inverterSize": "10kW",
+      "dcrCapacity": "3kW",
+      "nonDcrCapacity": "7kW",
+      "panelType": "Adani",
+      "price": 421000
+    },
+    {
+      "systemSize": "10kW",
+      "phase": "3-Phase",
+      "inverterSize": "10kW",
+      "dcrCapacity": "3kW",
+      "nonDcrCapacity": "7kW",
+      "panelType": "Waaree",
+      "price": 421000
+    },
+    {
+      "systemSize": "12kW",
+      "phase": "3-Phase",
+      "inverterSize": "12kW",
+      "dcrCapacity": "3kW",
+      "nonDcrCapacity": "9kW",
+      "panelType": "Adani",
+      "price": 485000
+    },
+    {
+      "systemSize": "12kW",
+      "phase": "3-Phase",
+      "inverterSize": "12kW",
+      "dcrCapacity": "3kW",
+      "nonDcrCapacity": "9kW",
+      "panelType": "Waaree",
+      "price": 485000
+    },
+    {
+      "systemSize": "15kW",
+      "phase": "3-Phase",
+      "inverterSize": "15kW",
+      "dcrCapacity": "3kW",
+      "nonDcrCapacity": "12kW",
+      "panelType": "Adani",
+      "price": 580000
+    },
+    {
+      "systemSize": "15kW",
+      "phase": "3-Phase",
+      "inverterSize": "15kW",
+      "dcrCapacity": "3kW",
+      "nonDcrCapacity": "12kW",
+      "panelType": "Waaree",
+      "price": 580000
+    },
+    {
+      "systemSize": "20kW",
+      "phase": "3-Phase",
+      "inverterSize": "20kW",
+      "dcrCapacity": "3kW",
+      "nonDcrCapacity": "17kW",
+      "panelType": "Adani",
+      "price": 793100
+    },
+    {
+      "systemSize": "20kW",
+      "phase": "3-Phase",
+      "inverterSize": "20kW",
+      "dcrCapacity": "3kW",
+      "nonDcrCapacity": "17kW",
+      "panelType": "Waaree",
+      "price": 793100
+    },
+    {
+      "systemSize": "25kW",
+      "phase": "3-Phase",
+      "inverterSize": "25kW",
+      "dcrCapacity": "3kW",
+      "nonDcrCapacity": "22kW",
+      "panelType": "Adani",
+      "price": 988800
+    },
+    {
+      "systemSize": "25kW",
+      "phase": "3-Phase",
+      "inverterSize": "25kW",
+      "dcrCapacity": "3kW",
+      "nonDcrCapacity": "22kW",
+      "panelType": "Waaree",
+      "price": 988800
+    },
+    {
+      "systemSize": "30kW",
+      "phase": "3-Phase",
+      "inverterSize": "30kW",
+      "dcrCapacity": "3kW",
+      "nonDcrCapacity": "27kW",
+      "panelType": "Adani",
+      "price": 1184500
+    },
+    {
+      "systemSize": "30kW",
+      "phase": "3-Phase",
+      "inverterSize": "30kW",
+      "dcrCapacity": "3kW",
+      "nonDcrCapacity": "27kW",
+      "panelType": "Waaree",
+      "price": 1184500
+    },
+    {
+      "systemSize": "5kW",
+      "phase": "1-Phase",
+      "inverterSize": "5kW",
+      "dcrCapacity": "3kW",
+      "nonDcrCapacity": "2kW",
+      "panelType": "Adani",
+      "price": 270000
+    },
+    {
+      "systemSize": "5kW",
+      "phase": "1-Phase",
+      "inverterSize": "5kW",
+      "dcrCapacity": "3kW",
+      "nonDcrCapacity": "2kW",
+      "panelType": "Waaree",
+      "price": 270000
+    },
+    {
+      "systemSize": "6kW",
+      "phase": "1-Phase",
+      "inverterSize": "6kW",
+      "dcrCapacity": "3kW",
+      "nonDcrCapacity": "3kW",
+      "panelType": "Adani",
+      "price": 310000
+    },
+    {
+      "systemSize": "6kW",
+      "phase": "1-Phase",
+      "inverterSize": "6kW",
+      "dcrCapacity": "3kW",
+      "nonDcrCapacity": "3kW",
+      "panelType": "Waaree",
+      "price": 310000
+    },
+    {
+      "systemSize": "8kW",
+      "phase": "1-Phase",
+      "inverterSize": "8kW",
+      "dcrCapacity": "3kW",
+      "nonDcrCapacity": "5kW",
+      "panelType": "Adani",
+      "price": 371000
+    },
+    {
+      "systemSize": "8kW",
+      "phase": "1-Phase",
+      "inverterSize": "8kW",
+      "dcrCapacity": "3kW",
+      "nonDcrCapacity": "5kW",
+      "panelType": "Waaree",
+      "price": 371000
+    },
+    {
+      "systemSize": "10kW",
+      "phase": "1-Phase",
+      "inverterSize": "10kW",
+      "dcrCapacity": "3kW",
+      "nonDcrCapacity": "7kW",
+      "panelType": "Adani",
+      "price": 421000
+    },
+    {
+      "systemSize": "10kW",
+      "phase": "1-Phase",
+      "inverterSize": "10kW",
+      "dcrCapacity": "3kW",
+      "nonDcrCapacity": "7kW",
+      "panelType": "Waaree",
+      "price": 421000
+    },
+    {
+      "systemSize": "12kW",
+      "phase": "1-Phase",
+      "inverterSize": "12kW",
+      "dcrCapacity": "3kW",
+      "nonDcrCapacity": "9kW",
+      "panelType": "Adani",
+      "price": 485000
+    },
+    {
+      "systemSize": "12kW",
+      "phase": "1-Phase",
+      "inverterSize": "12kW",
+      "dcrCapacity": "3kW",
+      "nonDcrCapacity": "9kW",
+      "panelType": "Waaree",
+      "price": 485000
+    },
+    {
+      "systemSize": "15kW",
+      "phase": "1-Phase",
+      "inverterSize": "15kW",
+      "dcrCapacity": "3kW",
+      "nonDcrCapacity": "12kW",
+      "panelType": "Adani",
+      "price": 580000
+    },
+    {
+      "systemSize": "15kW",
+      "phase": "1-Phase",
+      "inverterSize": "15kW",
+      "dcrCapacity": "3kW",
+      "nonDcrCapacity": "12kW",
+      "panelType": "Waaree",
+      "price": 580000
+    },
+    {
+      "systemSize": "20kW",
+      "phase": "1-Phase",
+      "inverterSize": "20kW",
+      "dcrCapacity": "3kW",
+      "nonDcrCapacity": "17kW",
+      "panelType": "Adani",
+      "price": 793100
+    },
+    {
+      "systemSize": "20kW",
+      "phase": "1-Phase",
+      "inverterSize": "20kW",
+      "dcrCapacity": "3kW",
+      "nonDcrCapacity": "17kW",
+      "panelType": "Waaree",
+      "price": 793100
+    },
+    {
+      "systemSize": "25kW",
+      "phase": "1-Phase",
+      "inverterSize": "25kW",
+      "dcrCapacity": "3kW",
+      "nonDcrCapacity": "22kW",
+      "panelType": "Adani",
+      "price": 988800
+    },
+    {
+      "systemSize": "25kW",
+      "phase": "1-Phase",
+      "inverterSize": "25kW",
+      "dcrCapacity": "3kW",
+      "nonDcrCapacity": "22kW",
+      "panelType": "Waaree",
+      "price": 988800
+    },
+    {
+      "systemSize": "30kW",
+      "phase": "1-Phase",
+      "inverterSize": "30kW",
+      "dcrCapacity": "3kW",
+      "nonDcrCapacity": "27kW",
+      "panelType": "Adani",
+      "price": 1184500
+    },
+    {
+      "systemSize": "30kW",
+      "phase": "1-Phase",
+      "inverterSize": "30kW",
+      "dcrCapacity": "3kW",
+      "nonDcrCapacity": "27kW",
+      "panelType": "Waaree",
+      "price": 1184500
+    }
+  ],
+  "panels": [
+    {
+      "brand": "Adani",
+      "size": "320W",
+      "price": 18000
+    },
+    {
+      "brand": "Adani",
+      "size": "330W",
+      "price": 18500
+    },
+    {
+      "brand": "Adani",
+      "size": "340W",
+      "price": 19000
+    },
+    {
+      "brand": "Adani",
+      "size": "350W",
+      "price": 19500
+    },
+    {
+      "brand": "Adani",
+      "size": "360W",
+      "price": 20000
+    },
+    {
+      "brand": "Adani",
+      "size": "370W",
+      "price": 20500
+    },
+    {
+      "brand": "Adani",
+      "size": "380W",
+      "price": 21000
+    },
+    {
+      "brand": "Adani",
+      "size": "390W",
+      "price": 21500
+    },
+    {
+      "brand": "Adani",
+      "size": "400W",
+      "price": 22000
+    },
+    {
+      "brand": "Adani",
+      "size": "410W",
+      "price": 22500
+    },
+    {
+      "brand": "Adani",
+      "size": "420W",
+      "price": 23000
+    },
+    {
+      "brand": "Adani",
+      "size": "430W",
+      "price": 23500
+    },
+    {
+      "brand": "Adani",
+      "size": "440W",
+      "price": 25000
+    },
+    {
+      "brand": "Adani",
+      "size": "445W",
+      "price": 25500
+    },
+    {
+      "brand": "Adani",
+      "size": "450W",
+      "price": 26000
+    },
+    {
+      "brand": "Adani",
+      "size": "455W",
+      "price": 26500
+    },
+    {
+      "brand": "Adani",
+      "size": "460W",
+      "price": 27000
+    },
+    {
+      "brand": "Adani",
+      "size": "470W",
+      "price": 27500
+    },
+    {
+      "brand": "Adani",
+      "size": "480W",
+      "price": 28000
+    },
+    {
+      "brand": "Adani",
+      "size": "490W",
+      "price": 28500
+    },
+    {
+      "brand": "Adani",
+      "size": "500W",
+      "price": 29000
+    },
+    {
+      "brand": "Adani",
+      "size": "510W",
+      "price": 29500
+    },
+    {
+      "brand": "Adani",
+      "size": "520W",
+      "price": 30000
+    },
+    {
+      "brand": "Adani",
+      "size": "530W",
+      "price": 30500
+    },
+    {
+      "brand": "Adani",
+      "size": "540W",
+      "price": 30800
+    },
+    {
+      "brand": "Adani",
+      "size": "550W",
+      "price": 31000
+    },
+    {
+      "brand": "Adani",
+      "size": "550W",
+      "price": 31200
+    },
+    {
+      "brand": "Adani",
+      "size": "555W",
+      "price": 31500
+    },
+    {
+      "brand": "Adani",
+      "size": "560W",
+      "price": 31800
+    },
+    {
+      "brand": "Adani",
+      "size": "570W",
+      "price": 32200
+    },
+    {
+      "brand": "Adani",
+      "size": "580W",
+      "price": 32600
+    },
+    {
+      "brand": "Adani",
+      "size": "590W",
+      "price": 33000
+    },
+    {
+      "brand": "Adani",
+      "size": "600W",
+      "price": 33500
+    },
+    {
+      "brand": "Adani",
+      "size": "610W",
+      "price": 34000
+    },
+    {
+      "brand": "Adani",
+      "size": "620W",
+      "price": 35000
+    },
+    {
+      "brand": "Adani",
+      "size": "630W",
+      "price": 36000
+    },
+    {
+      "brand": "Adani",
+      "size": "640W",
+      "price": 37000
+    },
+    {
+      "brand": "Adani",
+      "size": "650W",
+      "price": 38000
+    },
+    {
+      "brand": "Adani",
+      "size": "660W",
+      "price": 39000
+    },
+    {
+      "brand": "Adani",
+      "size": "670W",
+      "price": 40000
+    },
+    {
+      "brand": "Adani",
+      "size": "680W",
+      "price": 41000
+    },
+    {
+      "brand": "Adani",
+      "size": "690W",
+      "price": 42000
+    },
+    {
+      "brand": "Adani",
+      "size": "700W",
+      "price": 43000
+    },
+    {
+      "brand": "Adani",
+      "size": "720W",
+      "price": 45000
+    },
+    {
+      "brand": "Adani",
+      "size": "750W",
+      "price": 48000
+    },
+    {
+      "brand": "Tata",
+      "size": "320W",
+      "price": 19000
+    },
+    {
+      "brand": "Tata",
+      "size": "330W",
+      "price": 19500
+    },
+    {
+      "brand": "Tata",
+      "size": "340W",
+      "price": 20000
+    },
+    {
+      "brand": "Tata",
+      "size": "350W",
+      "price": 20500
+    },
+    {
+      "brand": "Tata",
+      "size": "360W",
+      "price": 21000
+    },
+    {
+      "brand": "Tata",
+      "size": "370W",
+      "price": 21500
+    },
+    {
+      "brand": "Tata",
+      "size": "380W",
+      "price": 22000
+    },
+    {
+      "brand": "Tata",
+      "size": "390W",
+      "price": 22500
+    },
+    {
+      "brand": "Tata",
+      "size": "400W",
+      "price": 23000
+    },
+    {
+      "brand": "Tata",
+      "size": "410W",
+      "price": 23500
+    },
+    {
+      "brand": "Tata",
+      "size": "420W",
+      "price": 24000
+    },
+    {
+      "brand": "Tata",
+      "size": "430W",
+      "price": 24500
+    },
+    {
+      "brand": "Tata",
+      "size": "440W",
+      "price": 26000
+    },
+    {
+      "brand": "Tata",
+      "size": "445W",
+      "price": 26500
+    },
+    {
+      "brand": "Tata",
+      "size": "450W",
+      "price": 27000
+    },
+    {
+      "brand": "Tata",
+      "size": "455W",
+      "price": 27500
+    },
+    {
+      "brand": "Tata",
+      "size": "460W",
+      "price": 28000
+    },
+    {
+      "brand": "Tata",
+      "size": "470W",
+      "price": 28500
+    },
+    {
+      "brand": "Tata",
+      "size": "480W",
+      "price": 29000
+    },
+    {
+      "brand": "Tata",
+      "size": "490W",
+      "price": 29500
+    },
+    {
+      "brand": "Tata",
+      "size": "500W",
+      "price": 30000
+    },
+    {
+      "brand": "Tata",
+      "size": "510W",
+      "price": 30500
+    },
+    {
+      "brand": "Tata",
+      "size": "520W",
+      "price": 31000
+    },
+    {
+      "brand": "Tata",
+      "size": "530W",
+      "price": 31500
+    },
+    {
+      "brand": "Tata",
+      "size": "540W",
+      "price": 31800
+    },
+    {
+      "brand": "Tata",
+      "size": "550W",
+      "price": 32000
+    },
+    {
+      "brand": "Tata",
+      "size": "550W",
+      "price": 32200
+    },
+    {
+      "brand": "Tata",
+      "size": "555W",
+      "price": 32500
+    },
+    {
+      "brand": "Tata",
+      "size": "560W",
+      "price": 32800
+    },
+    {
+      "brand": "Tata",
+      "size": "570W",
+      "price": 33200
+    },
+    {
+      "brand": "Tata",
+      "size": "580W",
+      "price": 33600
+    },
+    {
+      "brand": "Tata",
+      "size": "590W",
+      "price": 34000
+    },
+    {
+      "brand": "Tata",
+      "size": "600W",
+      "price": 34500
+    },
+    {
+      "brand": "Tata",
+      "size": "610W",
+      "price": 35000
+    },
+    {
+      "brand": "Tata",
+      "size": "620W",
+      "price": 36000
+    },
+    {
+      "brand": "Tata",
+      "size": "630W",
+      "price": 37000
+    },
+    {
+      "brand": "Tata",
+      "size": "640W",
+      "price": 38000
+    },
+    {
+      "brand": "Tata",
+      "size": "650W",
+      "price": 39000
+    },
+    {
+      "brand": "Tata",
+      "size": "660W",
+      "price": 40000
+    },
+    {
+      "brand": "Tata",
+      "size": "670W",
+      "price": 41000
+    },
+    {
+      "brand": "Tata",
+      "size": "680W",
+      "price": 42000
+    },
+    {
+      "brand": "Tata",
+      "size": "690W",
+      "price": 43000
+    },
+    {
+      "brand": "Tata",
+      "size": "700W",
+      "price": 44000
+    },
+    {
+      "brand": "Tata",
+      "size": "720W",
+      "price": 46000
+    },
+    {
+      "brand": "Tata",
+      "size": "750W",
+      "price": 49000
+    },
+    {
+      "brand": "Waaree",
+      "size": "320W",
+      "price": 17500
+    },
+    {
+      "brand": "Waaree",
+      "size": "330W",
+      "price": 18000
+    },
+    {
+      "brand": "Waaree",
+      "size": "340W",
+      "price": 18500
+    },
+    {
+      "brand": "Waaree",
+      "size": "350W",
+      "price": 19000
+    },
+    {
+      "brand": "Waaree",
+      "size": "360W",
+      "price": 19500
+    },
+    {
+      "brand": "Waaree",
+      "size": "370W",
+      "price": 20000
+    },
+    {
+      "brand": "Waaree",
+      "size": "380W",
+      "price": 20500
+    },
+    {
+      "brand": "Waaree",
+      "size": "390W",
+      "price": 21000
+    },
+    {
+      "brand": "Waaree",
+      "size": "400W",
+      "price": 21500
+    },
+    {
+      "brand": "Waaree",
+      "size": "410W",
+      "price": 22000
+    },
+    {
+      "brand": "Waaree",
+      "size": "420W",
+      "price": 22500
+    },
+    {
+      "brand": "Waaree",
+      "size": "430W",
+      "price": 23000
+    },
+    {
+      "brand": "Waaree",
+      "size": "440W",
+      "price": 24000
+    },
+    {
+      "brand": "Waaree",
+      "size": "445W",
+      "price": 24500
+    },
+    {
+      "brand": "Waaree",
+      "size": "450W",
+      "price": 25000
+    },
+    {
+      "brand": "Waaree",
+      "size": "455W",
+      "price": 25500
+    },
+    {
+      "brand": "Waaree",
+      "size": "460W",
+      "price": 26000
+    },
+    {
+      "brand": "Waaree",
+      "size": "470W",
+      "price": 26500
+    },
+    {
+      "brand": "Waaree",
+      "size": "480W",
+      "price": 27000
+    },
+    {
+      "brand": "Waaree",
+      "size": "490W",
+      "price": 27500
+    },
+    {
+      "brand": "Waaree",
+      "size": "500W",
+      "price": 28000
+    },
+    {
+      "brand": "Waaree",
+      "size": "510W",
+      "price": 28500
+    },
+    {
+      "brand": "Waaree",
+      "size": "520W",
+      "price": 29000
+    },
+    {
+      "brand": "Waaree",
+      "size": "530W",
+      "price": 29500
+    },
+    {
+      "brand": "Waaree",
+      "size": "540W",
+      "price": 29800
+    },
+    {
+      "brand": "Waaree",
+      "size": "550W",
+      "price": 30000
+    },
+    {
+      "brand": "Waaree",
+      "size": "550W",
+      "price": 30200
+    },
+    {
+      "brand": "Waaree",
+      "size": "555W",
+      "price": 30500
+    },
+    {
+      "brand": "Waaree",
+      "size": "560W",
+      "price": 30800
+    },
+    {
+      "brand": "Waaree",
+      "size": "570W",
+      "price": 31200
+    },
+    {
+      "brand": "Waaree",
+      "size": "580W",
+      "price": 31600
+    },
+    {
+      "brand": "Waaree",
+      "size": "590W",
+      "price": 32000
+    },
+    {
+      "brand": "Waaree",
+      "size": "600W",
+      "price": 32500
+    },
+    {
+      "brand": "Waaree",
+      "size": "610W",
+      "price": 33000
+    },
+    {
+      "brand": "Waaree",
+      "size": "620W",
+      "price": 34000
+    },
+    {
+      "brand": "Waaree",
+      "size": "630W",
+      "price": 35000
+    },
+    {
+      "brand": "Waaree",
+      "size": "640W",
+      "price": 36000
+    },
+    {
+      "brand": "Waaree",
+      "size": "650W",
+      "price": 37000
+    },
+    {
+      "brand": "Waaree",
+      "size": "660W",
+      "price": 38000
+    },
+    {
+      "brand": "Waaree",
+      "size": "670W",
+      "price": 39000
+    },
+    {
+      "brand": "Waaree",
+      "size": "680W",
+      "price": 40000
+    },
+    {
+      "brand": "Waaree",
+      "size": "690W",
+      "price": 41000
+    },
+    {
+      "brand": "Waaree",
+      "size": "700W",
+      "price": 42000
+    },
+    {
+      "brand": "Waaree",
+      "size": "720W",
+      "price": 44000
+    },
+    {
+      "brand": "Waaree",
+      "size": "750W",
+      "price": 47000
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "320W",
+      "price": 18000
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "330W",
+      "price": 18500
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "340W",
+      "price": 19000
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "350W",
+      "price": 19500
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "360W",
+      "price": 20000
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "370W",
+      "price": 20500
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "380W",
+      "price": 21000
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "390W",
+      "price": 21500
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "400W",
+      "price": 22000
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "410W",
+      "price": 22500
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "420W",
+      "price": 23000
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "430W",
+      "price": 23500
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "440W",
+      "price": 24500
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "445W",
+      "price": 25000
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "450W",
+      "price": 25500
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "455W",
+      "price": 26000
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "460W",
+      "price": 26500
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "470W",
+      "price": 27000
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "480W",
+      "price": 27500
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "490W",
+      "price": 28000
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "500W",
+      "price": 28500
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "510W",
+      "price": 29000
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "520W",
+      "price": 29500
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "530W",
+      "price": 30000
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "540W",
+      "price": 30300
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "550W",
+      "price": 30500
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "550W",
+      "price": 30700
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "555W",
+      "price": 31000
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "560W",
+      "price": 31300
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "570W",
+      "price": 31700
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "580W",
+      "price": 32100
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "590W",
+      "price": 32500
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "600W",
+      "price": 33000
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "610W",
+      "price": 33500
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "620W",
+      "price": 34500
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "630W",
+      "price": 35500
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "640W",
+      "price": 36500
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "650W",
+      "price": 37500
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "660W",
+      "price": 38500
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "670W",
+      "price": 39500
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "680W",
+      "price": 40500
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "690W",
+      "price": 41500
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "700W",
+      "price": 42500
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "720W",
+      "price": 44500
+    },
+    {
+      "brand": "Vikram Solar",
+      "size": "750W",
+      "price": 47500
+    },
+    {
+      "brand": "RenewSys",
+      "size": "320W",
+      "price": 17000
+    },
+    {
+      "brand": "RenewSys",
+      "size": "330W",
+      "price": 17500
+    },
+    {
+      "brand": "RenewSys",
+      "size": "340W",
+      "price": 18000
+    },
+    {
+      "brand": "RenewSys",
+      "size": "350W",
+      "price": 18500
+    },
+    {
+      "brand": "RenewSys",
+      "size": "360W",
+      "price": 19000
+    },
+    {
+      "brand": "RenewSys",
+      "size": "370W",
+      "price": 19500
+    },
+    {
+      "brand": "RenewSys",
+      "size": "380W",
+      "price": 20000
+    },
+    {
+      "brand": "RenewSys",
+      "size": "390W",
+      "price": 20500
+    },
+    {
+      "brand": "RenewSys",
+      "size": "400W",
+      "price": 21000
+    },
+    {
+      "brand": "RenewSys",
+      "size": "410W",
+      "price": 21500
+    },
+    {
+      "brand": "RenewSys",
+      "size": "420W",
+      "price": 22000
+    },
+    {
+      "brand": "RenewSys",
+      "size": "430W",
+      "price": 22500
+    },
+    {
+      "brand": "RenewSys",
+      "size": "440W",
+      "price": 23500
+    },
+    {
+      "brand": "RenewSys",
+      "size": "445W",
+      "price": 24000
+    },
+    {
+      "brand": "RenewSys",
+      "size": "450W",
+      "price": 24500
+    },
+    {
+      "brand": "RenewSys",
+      "size": "455W",
+      "price": 25000
+    },
+    {
+      "brand": "RenewSys",
+      "size": "460W",
+      "price": 25500
+    },
+    {
+      "brand": "RenewSys",
+      "size": "470W",
+      "price": 26000
+    },
+    {
+      "brand": "RenewSys",
+      "size": "480W",
+      "price": 26500
+    },
+    {
+      "brand": "RenewSys",
+      "size": "490W",
+      "price": 27000
+    },
+    {
+      "brand": "RenewSys",
+      "size": "500W",
+      "price": 27500
+    },
+    {
+      "brand": "RenewSys",
+      "size": "510W",
+      "price": 28000
+    },
+    {
+      "brand": "RenewSys",
+      "size": "520W",
+      "price": 28500
+    },
+    {
+      "brand": "RenewSys",
+      "size": "530W",
+      "price": 29000
+    },
+    {
+      "brand": "RenewSys",
+      "size": "540W",
+      "price": 29300
+    },
+    {
+      "brand": "RenewSys",
+      "size": "550W",
+      "price": 29500
+    },
+    {
+      "brand": "RenewSys",
+      "size": "550W",
+      "price": 29700
+    },
+    {
+      "brand": "RenewSys",
+      "size": "555W",
+      "price": 30000
+    },
+    {
+      "brand": "RenewSys",
+      "size": "560W",
+      "price": 30300
+    },
+    {
+      "brand": "RenewSys",
+      "size": "570W",
+      "price": 30700
+    },
+    {
+      "brand": "RenewSys",
+      "size": "580W",
+      "price": 31100
+    },
+    {
+      "brand": "RenewSys",
+      "size": "590W",
+      "price": 31500
+    },
+    {
+      "brand": "RenewSys",
+      "size": "600W",
+      "price": 32000
+    },
+    {
+      "brand": "RenewSys",
+      "size": "610W",
+      "price": 32500
+    },
+    {
+      "brand": "RenewSys",
+      "size": "620W",
+      "price": 33500
+    },
+    {
+      "brand": "RenewSys",
+      "size": "630W",
+      "price": 34500
+    },
+    {
+      "brand": "RenewSys",
+      "size": "640W",
+      "price": 35500
+    },
+    {
+      "brand": "RenewSys",
+      "size": "650W",
+      "price": 36500
+    },
+    {
+      "brand": "RenewSys",
+      "size": "660W",
+      "price": 37500
+    },
+    {
+      "brand": "RenewSys",
+      "size": "670W",
+      "price": 38500
+    },
+    {
+      "brand": "RenewSys",
+      "size": "680W",
+      "price": 39500
+    },
+    {
+      "brand": "RenewSys",
+      "size": "690W",
+      "price": 40500
+    },
+    {
+      "brand": "RenewSys",
+      "size": "700W",
+      "price": 41500
+    },
+    {
+      "brand": "RenewSys",
+      "size": "720W",
+      "price": 43500
+    },
+    {
+      "brand": "RenewSys",
+      "size": "750W",
+      "price": 46500
+    },
+    {
+      "brand": "INA",
+      "size": "500W",
+      "price": 27800
+    },
+    {
+      "brand": "INA",
+      "size": "510W",
+      "price": 28200
+    },
+    {
+      "brand": "INA",
+      "size": "520W",
+      "price": 28600
+    },
+    {
+      "brand": "INA",
+      "size": "530W",
+      "price": 29000
+    },
+    {
+      "brand": "INA",
+      "size": "540W",
+      "price": 29400
+    },
+    {
+      "brand": "INA",
+      "size": "550W",
+      "price": 29800
+    },
+    {
+      "brand": "INA",
+      "size": "560W",
+      "price": 30200
+    },
+    {
+      "brand": "INA",
+      "size": "570W",
+      "price": 30600
+    },
+    {
+      "brand": "INA",
+      "size": "580W",
+      "price": 31000
+    },
+    {
+      "brand": "INA",
+      "size": "590W",
+      "price": 31400
+    },
+    {
+      "brand": "INA",
+      "size": "600W",
+      "price": 31800
+    },
+    {
+      "brand": "Premier Energy",
+      "size": "600W",
+      "price": 32800
+    },
+    {
+      "brand": "Premier Energy",
+      "size": "605W",
+      "price": 33000
+    },
+    {
+      "brand": "Premier Energy",
+      "size": "610W",
+      "price": 33200
+    }
+  ],
+  "inverters": [
+    {
+      "brand": "Crompton",
+      "size": "3.6kW",
+      "price": 42000
+    },
+    {
+      "brand": "Growatt",
+      "size": "3kW",
+      "price": 35000
+    },
+    {
+      "brand": "Growatt",
+      "size": "5kW",
+      "price": 58000
+    },
+    {
+      "brand": "Growatt",
+      "size": "6kW",
+      "price": 70000
+    },
+    {
+      "brand": "Growatt",
+      "size": "8kW",
+      "price": 93000
+    },
+    {
+      "brand": "Growatt",
+      "size": "10kW",
+      "price": 117000
+    },
+    {
+      "brand": "Solis",
+      "size": "3kW",
+      "price": 32000
+    },
+    {
+      "brand": "Solis",
+      "size": "5kW",
+      "price": 53000
+    },
+    {
+      "brand": "Solis",
+      "size": "6kW",
+      "price": 64000
+    },
+    {
+      "brand": "Fronius",
+      "size": "3kW",
+      "price": 45000
+    },
+    {
+      "brand": "Fronius",
+      "size": "5kW",
+      "price": 75000
+    },
+    {
+      "brand": "Fronius",
+      "size": "6kW",
+      "price": 90000
+    },
+    {
+      "brand": "Havells",
+      "size": "3kW",
+      "price": 38000
+    },
+    {
+      "brand": "Havells",
+      "size": "5kW",
+      "price": 63000
+    },
+    {
+      "brand": "Polycab",
+      "size": "3kW",
+      "price": 36000
+    },
+    {
+      "brand": "Polycab",
+      "size": "5kW",
+      "price": 60000
+    },
+    {
+      "brand": "Delta",
+      "size": "3kW",
+      "price": 40000
+    },
+    {
+      "brand": "Delta",
+      "size": "5kW",
+      "price": 67000
+    }
+  ],
+  "structures": [
+    {
+      "type": "GI Structure",
+      "size": "1kW",
+      "price": 8000
+    },
+    {
+      "type": "GI Structure",
+      "size": "3kW",
+      "price": 24000
+    },
+    {
+      "type": "GI Structure",
+      "size": "5kW",
+      "price": 40000
+    },
+    {
+      "type": "GI Structure",
+      "size": "10kW",
+      "price": 80000
+    },
+    {
+      "type": "Aluminum Structure",
+      "size": "1kW",
+      "price": 10000
+    },
+    {
+      "type": "Aluminum Structure",
+      "size": "3kW",
+      "price": 30000
+    },
+    {
+      "type": "Aluminum Structure",
+      "size": "5kW",
+      "price": 50000
+    },
+    {
+      "type": "MS Structure",
+      "size": "1kW",
+      "price": 9000
+    },
+    {
+      "type": "MS Structure",
+      "size": "3kW",
+      "price": 27000
+    },
+    {
+      "type": "MS Structure",
+      "size": "5kW",
+      "price": 45000
+    }
+  ],
+  "meters": [
+    {
+      "brand": "L&T",
+      "price": 5000
+    },
+    {
+      "brand": "HPL",
+      "price": 4800
+    },
+    {
+      "brand": "Havells",
+      "price": 5200
+    },
+    {
+      "brand": "Genus",
+      "price": 4900
+    },
+    {
+      "brand": "Secure",
+      "price": 5100
+    }
+  ],
+  "cables": [
+    {
+      "brand": "Polycab",
+      "size": "4 sq mm",
+      "type": "AC",
+      "price": 3000
+    },
+    {
+      "brand": "Polycab",
+      "size": "6 sq mm",
+      "type": "AC",
+      "price": 3500
+    },
+    {
+      "brand": "Polycab",
+      "size": "4 sq mm",
+      "type": "DC",
+      "price": 3000
+    },
+    {
+      "brand": "Polycab",
+      "size": "6 sq mm",
+      "type": "DC",
+      "price": 3500
+    },
+    {
+      "brand": "Havells",
+      "size": "4 sq mm",
+      "type": "AC",
+      "price": 3200
+    },
+    {
+      "brand": "Havells",
+      "size": "6 sq mm",
+      "type": "AC",
+      "price": 3800
+    },
+    {
+      "brand": "Havells",
+      "size": "4 sq mm",
+      "type": "DC",
+      "price": 3200
+    },
+    {
+      "brand": "KEI",
+      "size": "4 sq mm",
+      "type": "DC",
+      "price": 3100
+    },
+    {
+      "brand": "KEI",
+      "size": "6 sq mm",
+      "type": "DC",
+      "price": 3600
+    },
+    {
+      "brand": "Finolex",
+      "size": "6 sq mm",
+      "type": "AC",
+      "price": 3400
+    },
+    {
+      "brand": "RR Kabel",
+      "size": "6 sq mm",
+      "type": "AC",
+      "price": 3600
+    },
+    {
+      "brand": "RR Kabel",
+      "size": "10 sq mm",
+      "type": "AC",
+      "price": 4500
+    }
+  ],
+  "acdb": [
+    {
+      "brand": "Havells",
+      "phase": "1-Phase",
+      "price": 2500
+    },
+    {
+      "brand": "L&T",
+      "phase": "1-Phase",
+      "price": 2800
+    },
+    {
+      "brand": "Polycab",
+      "phase": "1-Phase",
+      "price": 2300
+    },
+    {
+      "brand": "HPL",
+      "phase": "1-Phase",
+      "price": 2400
+    },
+    {
+      "brand": "Crompton",
+      "phase": "1-Phase",
+      "price": 2500
+    },
+    {
+      "brand": "Havells",
+      "phase": "3-Phase",
+      "price": 5000
+    },
+    {
+      "brand": "L&T",
+      "phase": "3-Phase",
+      "price": 5500
+    },
+    {
+      "brand": "Polycab",
+      "phase": "3-Phase",
+      "price": 4800
+    },
+    {
+      "brand": "HPL",
+      "phase": "3-Phase",
+      "price": 4900
+    },
+    {
+      "brand": "Crompton",
+      "phase": "3-Phase",
+      "price": 5000
+    }
+  ],
+  "dcdb": [
+    {
+      "brand": "Havells",
+      "phase": "1-Phase",
+      "price": 2500
+    },
+    {
+      "brand": "L&T",
+      "phase": "1-Phase",
+      "price": 2800
+    },
+    {
+      "brand": "Polycab",
+      "phase": "1-Phase",
+      "price": 2300
+    },
+    {
+      "brand": "HPL",
+      "phase": "1-Phase",
+      "price": 2400
+    },
+    {
+      "brand": "Crompton",
+      "phase": "1-Phase",
+      "price": 2500
+    },
+    {
+      "brand": "Havells",
+      "phase": "3-Phase",
+      "price": 5000
+    },
+    {
+      "brand": "L&T",
+      "phase": "3-Phase",
+      "price": 5500
+    },
+    {
+      "brand": "Polycab",
+      "phase": "3-Phase",
+      "price": 4800
+    },
+    {
+      "brand": "HPL",
+      "phase": "3-Phase",
+      "price": 4900
+    },
+    {
+      "brand": "Crompton",
+      "phase": "3-Phase",
+      "price": 5000
+    }
+  ],
+  "systemConfigs": [
+    {
+      "systemType": "dcr",
+      "systemSize": "3kW",
+      "phase": "1-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "555W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "3kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "3kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (1-Phase)",
+      "dcdb": "Havells (1-Phase)",
+      "centralSubsidy": 78000
+    },
+    {
+      "systemType": "dcr",
+      "systemSize": "4kW",
+      "phase": "1-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "555W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "5kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "4kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (1-Phase)",
+      "dcdb": "Havells (1-Phase)",
+      "centralSubsidy": 78000
+    },
+    {
+      "systemType": "dcr",
+      "systemSize": "5kW",
+      "phase": "1-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "555W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "5kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "5kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (1-Phase)",
+      "dcdb": "Havells (1-Phase)",
+      "centralSubsidy": 78000
+    },
+    {
+      "systemType": "dcr",
+      "systemSize": "6kW",
+      "phase": "1-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "555W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "6kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "6kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (1-Phase)",
+      "dcdb": "Havells (1-Phase)",
+      "centralSubsidy": 78000
+    },
+    {
+      "systemType": "dcr",
+      "systemSize": "3kW",
+      "phase": "1-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "540W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "3kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "3kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (1-Phase)",
+      "dcdb": "Havells (1-Phase)",
+      "centralSubsidy": 78000
+    },
+    {
+      "systemType": "dcr",
+      "systemSize": "4kW",
+      "phase": "1-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "540W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "5kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "4kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (1-Phase)",
+      "dcdb": "Havells (1-Phase)",
+      "centralSubsidy": 78000
+    },
+    {
+      "systemType": "dcr",
+      "systemSize": "5kW",
+      "phase": "1-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "540W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "5kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "5kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (1-Phase)",
+      "dcdb": "Havells (1-Phase)",
+      "centralSubsidy": 78000
+    },
+    {
+      "systemType": "dcr",
+      "systemSize": "6kW",
+      "phase": "1-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "540W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "6kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "6kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (1-Phase)",
+      "dcdb": "Havells (1-Phase)",
+      "centralSubsidy": 78000
+    },
+    {
+      "systemType": "dcr",
+      "systemSize": "3.1kW",
+      "phase": "1-Phase",
+      "panelBrand": "Tata",
+      "panelSize": "As per the set",
+      "inverterBrand": "As per the set",
+      "inverterSize": "As per the set",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "3.1kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (1-Phase)",
+      "dcdb": "Havells (1-Phase)",
+      "centralSubsidy": 78000
+    },
+    {
+      "systemType": "dcr",
+      "systemSize": "5.1kW",
+      "phase": "1-Phase",
+      "panelBrand": "Tata",
+      "panelSize": "As per the set",
+      "inverterBrand": "As per the set",
+      "inverterSize": "As per the set",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "5.1kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (1-Phase)",
+      "dcdb": "Havells (1-Phase)",
+      "centralSubsidy": 78000
+    },
+    {
+      "systemType": "dcr",
+      "systemSize": "6kW",
+      "phase": "1-Phase",
+      "panelBrand": "Tata",
+      "panelSize": "As per the set",
+      "inverterBrand": "As per the set",
+      "inverterSize": "As per the set",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "6kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (1-Phase)",
+      "dcdb": "Havells (1-Phase)",
+      "centralSubsidy": 78000
+    },
+    {
+      "systemType": "dcr",
+      "systemSize": "3kW",
+      "phase": "1-Phase",
+      "panelBrand": "Crompton set",
+      "panelSize": "610W",
+      "inverterBrand": "Crompton",
+      "inverterSize": "3.6kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "3kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Crompton (1-Phase)",
+      "dcdb": "Crompton (1-Phase)",
+      "centralSubsidy": 78000
+    },
+    {
+      "systemType": "dcr",
+      "systemSize": "5kW",
+      "phase": "1-Phase",
+      "panelBrand": "Crompton set",
+      "panelSize": "610W",
+      "inverterBrand": "Crompton",
+      "inverterSize": "3.6kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "5kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Crompton (1-Phase)",
+      "dcdb": "Crompton (1-Phase)",
+      "centralSubsidy": 78000
+    },
+    {
+      "systemType": "dcr",
+      "systemSize": "3kW",
+      "phase": "3-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "555W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "5kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "3kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)",
+      "centralSubsidy": 78000
+    },
+    {
+      "systemType": "dcr",
+      "systemSize": "4kW",
+      "phase": "3-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "555W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "5kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "4kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)",
+      "centralSubsidy": 78000
+    },
+    {
+      "systemType": "dcr",
+      "systemSize": "5kW",
+      "phase": "3-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "555W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "5kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "5kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)",
+      "centralSubsidy": 78000
+    },
+    {
+      "systemType": "dcr",
+      "systemSize": "6kW",
+      "phase": "3-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "555W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "6kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "6kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)",
+      "centralSubsidy": 78000
+    },
+    {
+      "systemType": "dcr",
+      "systemSize": "7kW",
+      "phase": "3-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "555W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "8kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "7kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)",
+      "centralSubsidy": 78000
+    },
+    {
+      "systemType": "dcr",
+      "systemSize": "8kW",
+      "phase": "3-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "555W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "8kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "8kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)",
+      "centralSubsidy": 78000
+    },
+    {
+      "systemType": "dcr",
+      "systemSize": "10kW",
+      "phase": "3-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "555W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "10kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "10kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)",
+      "centralSubsidy": 78000
+    },
+    {
+      "systemType": "dcr",
+      "systemSize": "12kW",
+      "phase": "3-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "555W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "12kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "12kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)",
+      "centralSubsidy": 78000
+    },
+    {
+      "systemType": "dcr",
+      "systemSize": "15kW",
+      "phase": "3-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "555W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "15kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "15kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)",
+      "centralSubsidy": 78000
+    },
+    {
+      "systemType": "dcr",
+      "systemSize": "20kW",
+      "phase": "3-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "555W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "20kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "20kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)",
+      "centralSubsidy": 78000
+    },
+    {
+      "systemType": "dcr",
+      "systemSize": "25kW",
+      "phase": "3-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "555W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "25kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "25kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)",
+      "centralSubsidy": 78000
+    },
+    {
+      "systemType": "dcr",
+      "systemSize": "30kW",
+      "phase": "3-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "555W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "30kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "30kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)",
+      "centralSubsidy": 78000
+    },
+    {
+      "systemType": "dcr",
+      "systemSize": "3kW",
+      "phase": "3-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "540W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "5kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "3kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)",
+      "centralSubsidy": 78000
+    },
+    {
+      "systemType": "dcr",
+      "systemSize": "4kW",
+      "phase": "3-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "540W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "5kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "4kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)",
+      "centralSubsidy": 78000
+    },
+    {
+      "systemType": "dcr",
+      "systemSize": "5kW",
+      "phase": "3-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "540W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "5kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "5kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)",
+      "centralSubsidy": 78000
+    },
+    {
+      "systemType": "dcr",
+      "systemSize": "6kW",
+      "phase": "3-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "540W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "6kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "6kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)",
+      "centralSubsidy": 78000
+    },
+    {
+      "systemType": "dcr",
+      "systemSize": "7kW",
+      "phase": "3-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "540W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "8kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "7kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)",
+      "centralSubsidy": 78000
+    },
+    {
+      "systemType": "dcr",
+      "systemSize": "8kW",
+      "phase": "3-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "540W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "8kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "8kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)",
+      "centralSubsidy": 78000
+    },
+    {
+      "systemType": "dcr",
+      "systemSize": "10kW",
+      "phase": "3-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "540W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "10kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "10kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)",
+      "centralSubsidy": 78000
+    },
+    {
+      "systemType": "dcr",
+      "systemSize": "12kW",
+      "phase": "3-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "540W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "12kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "12kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)",
+      "centralSubsidy": 78000
+    },
+    {
+      "systemType": "dcr",
+      "systemSize": "15kW",
+      "phase": "3-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "540W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "15kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "15kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)",
+      "centralSubsidy": 78000
+    },
+    {
+      "systemType": "dcr",
+      "systemSize": "20kW",
+      "phase": "3-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "540W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "20kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "20kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)",
+      "centralSubsidy": 78000
+    },
+    {
+      "systemType": "dcr",
+      "systemSize": "25kW",
+      "phase": "3-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "540W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "25kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "25kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)",
+      "centralSubsidy": 78000
+    },
+    {
+      "systemType": "dcr",
+      "systemSize": "30kW",
+      "phase": "3-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "540W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "30kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "30kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)",
+      "centralSubsidy": 78000
+    },
+    {
+      "systemType": "dcr",
+      "systemSize": "5.1kW",
+      "phase": "3-Phase",
+      "panelBrand": "Tata",
+      "panelSize": "As per the set",
+      "inverterBrand": "As per the set",
+      "inverterSize": "As per the set",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "5.1kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)",
+      "centralSubsidy": 78000
+    },
+    {
+      "systemType": "dcr",
+      "systemSize": "6kW",
+      "phase": "3-Phase",
+      "panelBrand": "Tata",
+      "panelSize": "As per the set",
+      "inverterBrand": "As per the set",
+      "inverterSize": "As per the set",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "6kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)",
+      "centralSubsidy": 78000
+    },
+    {
+      "systemType": "dcr",
+      "systemSize": "8kW",
+      "phase": "3-Phase",
+      "panelBrand": "Tata",
+      "panelSize": "As per the set",
+      "inverterBrand": "As per the set",
+      "inverterSize": "As per the set",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "8kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)",
+      "centralSubsidy": 78000
+    },
+    {
+      "systemType": "dcr",
+      "systemSize": "10kW",
+      "phase": "3-Phase",
+      "panelBrand": "Tata",
+      "panelSize": "As per the set",
+      "inverterBrand": "As per the set",
+      "inverterSize": "As per the set",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "10kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)",
+      "centralSubsidy": 78000
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "3kW",
+      "phase": "1-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "555W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "3kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "3kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (1-Phase)",
+      "dcdb": "Havells (1-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "4kW",
+      "phase": "1-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "555W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "5kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "4kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (1-Phase)",
+      "dcdb": "Havells (1-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "5kW",
+      "phase": "1-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "555W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "5kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "5kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (1-Phase)",
+      "dcdb": "Havells (1-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "6kW",
+      "phase": "1-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "555W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "6kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "6kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (1-Phase)",
+      "dcdb": "Havells (1-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "3kW",
+      "phase": "1-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "540W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "3kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "3kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (1-Phase)",
+      "dcdb": "Havells (1-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "4kW",
+      "phase": "1-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "540W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "5kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "4kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (1-Phase)",
+      "dcdb": "Havells (1-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "5kW",
+      "phase": "1-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "540W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "5kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "5kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (1-Phase)",
+      "dcdb": "Havells (1-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "6kW",
+      "phase": "1-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "540W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "6kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "6kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (1-Phase)",
+      "dcdb": "Havells (1-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "3kW",
+      "phase": "1-Phase",
+      "panelBrand": "Tata",
+      "panelSize": "610W",
+      "inverterBrand": "GoodWe",
+      "inverterSize": "3kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "3kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (1-Phase)",
+      "dcdb": "Havells (1-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "4kW",
+      "phase": "1-Phase",
+      "panelBrand": "Tata",
+      "panelSize": "610W",
+      "inverterBrand": "GoodWe",
+      "inverterSize": "5kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "4kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (1-Phase)",
+      "dcdb": "Havells (1-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "5kW",
+      "phase": "1-Phase",
+      "panelBrand": "Tata",
+      "panelSize": "610W",
+      "inverterBrand": "GoodWe",
+      "inverterSize": "5kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "5kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (1-Phase)",
+      "dcdb": "Havells (1-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "6kW",
+      "phase": "1-Phase",
+      "panelBrand": "Tata",
+      "panelSize": "610W",
+      "inverterBrand": "GoodWe",
+      "inverterSize": "6kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "6kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (1-Phase)",
+      "dcdb": "Havells (1-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "3kW",
+      "phase": "3-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "550W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "5kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "3kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "4kW",
+      "phase": "3-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "550W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "5kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "4kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "5kW",
+      "phase": "3-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "550W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "5kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "5kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "6kW",
+      "phase": "3-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "550W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "6kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "6kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "7kW",
+      "phase": "3-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "550W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "8kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "7kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "8kW",
+      "phase": "3-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "550W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "8kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "8kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "10kW",
+      "phase": "3-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "550W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "10kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "10kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "12kW",
+      "phase": "3-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "550W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "12kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "12kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "15kW",
+      "phase": "3-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "550W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "15kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "15kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "20kW",
+      "phase": "3-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "550W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "20kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "20kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "25kW",
+      "phase": "3-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "550W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "25kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "25kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "30kW",
+      "phase": "3-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "550W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "30kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "30kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "80kW",
+      "phase": "3-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "600W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "80kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "80kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "3kW",
+      "phase": "3-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "550W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "5kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "3kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "4kW",
+      "phase": "3-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "550W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "5kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "4kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "5kW",
+      "phase": "3-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "550W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "5kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "5kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "6kW",
+      "phase": "3-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "550W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "6kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "6kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "7kW",
+      "phase": "3-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "550W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "8kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "7kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "8kW",
+      "phase": "3-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "550W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "8kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "8kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "10kW",
+      "phase": "3-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "550W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "10kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "10kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "12kW",
+      "phase": "3-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "550W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "12kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "12kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "15kW",
+      "phase": "3-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "550W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "15kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "15kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "20kW",
+      "phase": "3-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "550W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "20kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "20kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "25kW",
+      "phase": "3-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "550W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "25kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "25kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "30kW",
+      "phase": "3-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "550W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "30kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "30kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "80kW",
+      "phase": "3-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "580W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "80kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "80kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "80kW",
+      "phase": "3-Phase",
+      "panelBrand": "Renew Energy",
+      "panelSize": "600W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "80kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "80kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "3kW",
+      "phase": "3-Phase",
+      "panelBrand": "Tata",
+      "panelSize": "550W",
+      "inverterBrand": "GoodWe",
+      "inverterSize": "5kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "3kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "4kW",
+      "phase": "3-Phase",
+      "panelBrand": "Tata",
+      "panelSize": "550W",
+      "inverterBrand": "GoodWe",
+      "inverterSize": "5kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "4kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "5kW",
+      "phase": "3-Phase",
+      "panelBrand": "Tata",
+      "panelSize": "550W",
+      "inverterBrand": "GoodWe",
+      "inverterSize": "5kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "5kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "6kW",
+      "phase": "3-Phase",
+      "panelBrand": "Tata",
+      "panelSize": "610W",
+      "inverterBrand": "GoodWe",
+      "inverterSize": "6kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "6kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "7kW",
+      "phase": "3-Phase",
+      "panelBrand": "Tata",
+      "panelSize": "610W",
+      "inverterBrand": "GoodWe",
+      "inverterSize": "8kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "7kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "8kW",
+      "phase": "3-Phase",
+      "panelBrand": "Tata",
+      "panelSize": "610W",
+      "inverterBrand": "GoodWe",
+      "inverterSize": "8kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "8kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "10kW",
+      "phase": "3-Phase",
+      "panelBrand": "Tata",
+      "panelSize": "610W",
+      "inverterBrand": "GoodWe",
+      "inverterSize": "10kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "10kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "12kW",
+      "phase": "3-Phase",
+      "panelBrand": "Tata",
+      "panelSize": "610W",
+      "inverterBrand": "GoodWe",
+      "inverterSize": "12kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "12kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "15kW",
+      "phase": "3-Phase",
+      "panelBrand": "Tata",
+      "panelSize": "610W",
+      "inverterBrand": "GoodWe",
+      "inverterSize": "15kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "15kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "20kW",
+      "phase": "3-Phase",
+      "panelBrand": "Tata",
+      "panelSize": "610W",
+      "inverterBrand": "GoodWe",
+      "inverterSize": "20kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "20kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "25kW",
+      "phase": "3-Phase",
+      "panelBrand": "Tata",
+      "panelSize": "610W",
+      "inverterBrand": "GoodWe",
+      "inverterSize": "25kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "25kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "non-dcr",
+      "systemSize": "30kW",
+      "phase": "3-Phase",
+      "panelBrand": "Tata",
+      "panelSize": "610W",
+      "inverterBrand": "GoodWe",
+      "inverterSize": "30kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "30kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "both",
+      "systemSize": "5kW",
+      "phase": "3-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "555W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "5kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "5kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "both",
+      "systemSize": "6kW",
+      "phase": "3-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "555W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "6kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "6kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "both",
+      "systemSize": "8kW",
+      "phase": "3-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "555W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "8kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "8kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "both",
+      "systemSize": "10kW",
+      "phase": "3-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "555W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "10kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "10kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "both",
+      "systemSize": "12kW",
+      "phase": "3-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "555W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "12kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "12kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "both",
+      "systemSize": "15kW",
+      "phase": "3-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "555W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "15kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "15kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "both",
+      "systemSize": "20kW",
+      "phase": "3-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "555W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "20kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "20kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "both",
+      "systemSize": "25kW",
+      "phase": "3-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "555W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "25kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "25kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "both",
+      "systemSize": "30kW",
+      "phase": "3-Phase",
+      "panelBrand": "Adani",
+      "panelSize": "555W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "30kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "30kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "both",
+      "systemSize": "5kW",
+      "phase": "3-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "555W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "5kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "5kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "both",
+      "systemSize": "6kW",
+      "phase": "3-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "555W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "6kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "6kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "both",
+      "systemSize": "8kW",
+      "phase": "3-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "555W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "8kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "8kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "both",
+      "systemSize": "10kW",
+      "phase": "3-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "555W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "10kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "10kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "both",
+      "systemSize": "12kW",
+      "phase": "3-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "555W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "12kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "12kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "both",
+      "systemSize": "15kW",
+      "phase": "3-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "555W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "15kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "15kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "both",
+      "systemSize": "20kW",
+      "phase": "3-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "555W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "20kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "20kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "both",
+      "systemSize": "25kW",
+      "phase": "3-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "555W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "25kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "25kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    },
+    {
+      "systemType": "both",
+      "systemSize": "30kW",
+      "phase": "3-Phase",
+      "panelBrand": "Waaree",
+      "panelSize": "555W",
+      "inverterBrand": "Vsole/Xwatt",
+      "inverterSize": "30kW",
+      "inverterType": "String Inverter",
+      "structureType": "GI Structure",
+      "structureSize": "30kW",
+      "meterBrand": "L&T",
+      "acCableBrand": "Polycab",
+      "acCableSize": "As per Set",
+      "dcCableBrand": "Polycab",
+      "dcCableSize": "As per Set",
+      "acdb": "Havells (3-Phase)",
+      "dcdb": "Havells (3-Phase)"
+    }
+  ]
+}

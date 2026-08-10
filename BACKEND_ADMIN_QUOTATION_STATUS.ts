@@ -181,6 +181,7 @@ function normalizeFileLoginStatus(raw) {
  *   ALTER TABLE quotations ADD COLUMN IF NOT EXISTS remaining_amount NUMERIC(14,2);
  *   ALTER TABLE quotations ADD COLUMN IF NOT EXISTS loan_amount NUMERIC(14,2);
  *   ALTER TABLE quotations ADD COLUMN IF NOT EXISTS cash_amount NUMERIC(14,2);
+ *   ALTER TABLE quotations ADD COLUMN IF NOT EXISTS site_cost NUMERIC(14,2);
  *   -- Or compute `remaining` in API from subtotal − sum(phases.paidAmount) if you do not store it.
  *   -- payment_mode often already exists; ensure it can store loan|cash|mix
  *
@@ -200,6 +201,7 @@ function normalizeFileLoginStatus(raw) {
  *   ALTER TABLE quotations ADD COLUMN remaining_amount DECIMAL(14,2) NULL;
  *   ALTER TABLE quotations ADD COLUMN loan_amount DECIMAL(14,2) NULL;
  *   ALTER TABLE quotations ADD COLUMN cash_amount DECIMAL(14,2) NULL;
+ *   ALTER TABLE quotations ADD COLUMN site_cost DECIMAL(14,2) NULL;
  *
  * Sequelize model (example):
  *   bankName: { type: DataTypes.STRING(255), allowNull: true, field: 'bank_name' },
@@ -207,6 +209,7 @@ function normalizeFileLoginStatus(raw) {
  *   paymentMode: { type: DataTypes.STRING(20), allowNull: true, field: 'payment_mode' },
  *   loanAmount: { type: DataTypes.DECIMAL(14, 2), allowNull: true, field: 'loan_amount' },
  *   cashAmount: { type: DataTypes.DECIMAL(14, 2), allowNull: true, field: 'cash_amount' },
+ *   siteCost: { type: DataTypes.DECIMAL(14, 2), allowNull: true, field: 'site_cost' },
  *   subsidyChequeDetails: { type: DataTypes.TEXT, allowNull: true, field: 'subsidy_cheque_details' },
  *   fileLoginStatus: { type: DataTypes.STRING(32), allowNull: true, field: 'file_login_status' },
  *   filePaymentType: { type: DataTypes.STRING(16), allowNull: true, field: 'file_payment_type' },
@@ -552,6 +555,8 @@ export function quotationToApiJson(row) {
     cashAmount: q.cashAmount ?? q.cash_amount ?? null,
     loan_amount: q.loanAmount ?? q.loan_amount ?? null,
     cash_amount: q.cashAmount ?? q.cash_amount ?? null,
+    siteCost: q.siteCost ?? q.site_cost ?? null,
+    site_cost: q.siteCost ?? q.site_cost ?? null,
     bankName: q.bankName ?? q.bank_name ?? null,
     bankIfsc: q.bankIfsc ?? q.bank_ifsc ?? null,
     subsidyChequeDetails: q.subsidyChequeDetails ?? q.subsidy_cheque_details ?? null,
@@ -594,7 +599,10 @@ export function normalizeSubsidyChequesFromRequestBody(body) {
 function pickQuotationSubtotalForPayments(row) {
   const q = row.get ? row.get({ plain: true }) : row
   const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0)
-  return Math.max(
+  // Account Management Payment Management shows quotation.subtotal (gross).
+  // Do NOT prefer amountAfterSubsidy − discount here — that caused
+  // "Total paid (126000) cannot exceed payable after discount (117000)" while AM UI showed a higher subtotal.
+  const amSubtotal = Math.max(
     0,
     Math.round(
       n(q.subtotal) ||
@@ -604,6 +612,9 @@ function pickQuotationSubtotalForPayments(row) {
         n(q.finalAmount),
     ),
   )
+  const discountAmount = n(q.discountAmount ?? q.discount_amount ?? q.pricing?.discountAmount)
+  // Cap for paid validation = AM subtotal minus settlement/pricing discount (same as FE getPaymentEffectiveCap).
+  return Math.max(0, amSubtotal - Math.max(0, Math.round(discountAmount)))
 }
 
 /**
@@ -642,8 +653,9 @@ export async function patchQuotationPaymentDetails(req, res) {
     }
 
     const body = req.body || {}
+    const hasPhasesKey = Array.isArray(body.phases) || Array.isArray(body.installments)
     const phasesInput = body.phases || body.installments || []
-    if (!Array.isArray(phasesInput)) {
+    if (hasPhasesKey && !Array.isArray(phasesInput)) {
       res.status(400).json({ success: false, error: { code: "VAL_011", message: "phases must be an array" } })
       return
     }
@@ -653,6 +665,48 @@ export async function patchQuotationPaymentDetails(req, res) {
       body.replace === true ||
       body.syncInstallments === "replace" ||
       req.method === "PUT"
+
+    // Site-cost / status-only PATCH: do not wipe installments.
+    if (!hasPhasesKey || body.replaceInstallments === false) {
+      const siteRaw = body.siteCost ?? body.site_cost ?? body.costOfSite ?? body.cost_of_site
+      const updates = {
+        ...(body.paymentMode ? { paymentMode: String(body.paymentMode).toLowerCase() } : {}),
+        ...(body.paymentType ? { paymentType: String(body.paymentType).toLowerCase() } : {}),
+        ...(body.paymentStatus ? { paymentStatus: String(body.paymentStatus).toLowerCase() } : {}),
+      }
+      if (siteRaw !== undefined && siteRaw !== null && siteRaw !== "") {
+        const n = Math.max(0, Math.round(Number(String(siteRaw).replace(/[₹,\s]/g, "")) || 0))
+        updates.siteCost = n
+        updates.site_cost = n
+      } else if (siteRaw === 0 || siteRaw === "0") {
+        updates.siteCost = 0
+        updates.site_cost = 0
+      }
+      const subsidyNormalized = normalizeSubsidyChequesFromRequestBody(body)
+      if (subsidyNormalized !== undefined) updates.subsidyCheques = subsidyNormalized
+
+      if (Object.keys(updates).length === 0 && !hasPhasesKey) {
+        res.status(400).json({
+          success: false,
+          error: { code: "VAL_013", message: "No payment fields to update" },
+        })
+        return
+      }
+
+      if (Object.keys(updates).length > 0) {
+        await quotation.update(updates)
+        await quotation.reload()
+      }
+
+      // If no phases in body, return after site/status merge.
+      if (!hasPhasesKey) {
+        res.json({
+          success: true,
+          data: quotationToApiJson(quotation),
+        })
+        return
+      }
+    }
 
     // When replaceMode is true (default for Account Management Submit), persist exactly
     // phasesInput.length rows — delete orphans. See BACKEND_INSTALLMENT_REPLACE.ts.
@@ -705,6 +759,12 @@ export async function patchQuotationPaymentDetails(req, res) {
       ...(subsidyNormalized !== undefined ? { subsidyCheques: subsidyNormalized } : {}),
       ...(body.paymentMode ? { paymentMode: String(body.paymentMode).toLowerCase() } : {}),
       ...(body.paymentType ? { paymentType: String(body.paymentType).toLowerCase() } : {}),
+      ...(() => {
+        const raw = body.siteCost ?? body.site_cost ?? body.costOfSite ?? body.cost_of_site
+        if (raw === undefined || raw === null || raw === "") return {}
+        const n = Math.max(0, Math.round(Number(String(raw).replace(/[₹,\s]/g, "")) || 0))
+        return { siteCost: n, site_cost: n }
+      })(),
     }
 
     await quotation.update(updates)

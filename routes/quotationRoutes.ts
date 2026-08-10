@@ -46,7 +46,7 @@ import {
   uploadInstallerDocument
 } from '../controllers/workflowController';
 import { getVisitsForQuotation, rescheduleVisit } from '../controllers/visitController';
-import { getPricingTables } from '../controllers/configController';
+import { getPricingTables, updatePricingTables } from '../controllers/configController';
 import {
   authenticate,
   authorizeDealer,
@@ -64,6 +64,7 @@ import {
 import { validate } from '../middleware/validate';
 import { logRequestBeforeValidation, logRequestAfterValidation } from '../middleware/requestLogger';
 import { createQuotationSchema, updateDiscountSchema, updateProductsSchema, updatePricingSchema, updatePaymentDetailsSchema, updatePaymentModeSchema, updateInstallationReleaseSchema, updateInstallationScheduledAtSchema, finalSettlementSchema, revertFinalSettlementSchema } from '../validations/quotationValidations';
+import { updatePricingTablesSchema } from '../validations/pricingValidations';
 import { patchQuotationInstallationTeamSchema, bankProcessSchema } from '../validations/adminValidations';
 import {
   meteringDetailsSchema,
@@ -556,8 +557,15 @@ router.post('/',
  */
 router.get('/product-catalog', rejectAccountManager, authorizeDealerAdminOrVisitor, getProductCatalog);
 
-/** Alias for GET /api/config/pricing — used by quotation proposal UI */
+/** Alias for GET /api/config/pricing — used by quotation proposal UI + dealer pricing PDF */
 router.get('/pricing-tables', rejectAccountManager, authorizeDealerAdminOrVisitor, getPricingTables);
+/** Admin → Pricing → Save (FE: api.quotations.updatePricingTables) */
+router.put(
+  '/pricing-tables',
+  authorizeAdmin,
+  validate(updatePricingTablesSchema),
+  updatePricingTables
+);
 
 /**
  * @swagger
@@ -905,6 +913,8 @@ router.post('/:quotationId/final-settlement', authorizeDealerOrAccountManager, v
 router.post('/:quotationId/revert-final-settlement', authorizeDealerOrAccountManager, validate(revertFinalSettlementSchema), revertQuotationFinalSettlement);
 router.delete('/:quotationId/final-settlement', authorizeDealerOrAccountManager, validate(revertFinalSettlementSchema), revertQuotationFinalSettlement);
 router.patch('/:quotationId/payment-details', authorizeDealerOrAccountManager, validate(updatePaymentDetailsSchema), updateQuotationPaymentDetails);
+/** §30 optional alias — same handler as payment-details (siteCost-only body OK). */
+router.patch('/:quotationId/site-cost', authorizeDealerOrAccountManager, validate(updatePaymentDetailsSchema), updateQuotationPaymentDetails);
 router.patch('/:quotationId/installments', authorizeDealerOrAccountManager, validate(updatePaymentDetailsSchema), updateQuotationPaymentDetails);
 router.put('/:quotationId/installments', authorizeDealerOrAccountManager, validate(updatePaymentDetailsSchema), updateQuotationPaymentDetails);
 router.patch('/:quotationId/payment-mode', authorizeDealerOrAccountManager, validate(updatePaymentModeSchema), updateQuotationPaymentDetails);

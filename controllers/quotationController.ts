@@ -13,7 +13,10 @@ import { decodeS3UrlPathToKey, generatePublicUrl, isPresignedS3GetUrl } from '..
 import { normalizePaymentModeInput, isLoanOnlyPaymentType, FINAL_SETTLEMENT_LOAN_ONLY_MESSAGE } from '../utils/paymentMode';
 import {
   normalizePaymentType,
-  isPhaseModeAllowedForPaymentType
+  isPhaseModeAllowedForPaymentType,
+  pickAmInstallmentPaymentCap,
+  pickQuotationSubtotalForPayments,
+  parseSiteCostFromBody
 } from '../utils/cashLoanAmounts';
 import {
   quotationAmountApiFields,
@@ -3589,6 +3592,9 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
     }
 
     const { actorId } = resolveActorForAudit(req);
+    const siteCostParsed = parseSiteCostFromBody(req.body as Record<string, unknown>);
+    const siteCostFields =
+      siteCostParsed !== undefined ? { siteCost: siteCostParsed } : {};
     const settlementFields = {
       ...(finalSettlementAmount !== undefined
         ? { finalSettlementAmount: Number(finalSettlementAmount) }
@@ -3634,22 +3640,24 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
 
       const mergedPhases = await loadQuotationPaymentPhases(quotation.id);
       const totalPaidAmount = sumPhasePaidAmounts(mergedPhases);
-      const amountAfterSubsidyCap = resolveAmountAfterSubsidy(quotation as any);
+      const plainQ = quotation.get({ plain: true }) as unknown as Record<string, unknown>;
       const discountAmt = Number((quotation as any).discountAmount || 0);
-      const payableCap = effectivePayableCap(amountAfterSubsidyCap, discountAmt);
-      if (totalPaidAmount > payableCap + 0.01) {
+      // §31: AM installment cap = subtotal − discount (not amountAfterSubsidy − discount)
+      const paymentCap = pickAmInstallmentPaymentCap(plainQ);
+      const amGross = pickQuotationSubtotalForPayments(plainQ);
+      if (totalPaidAmount > paymentCap + 0.01) {
         res.status(400).json({
           success: false,
           error: {
             code: 'VAL_012',
-            message: `Total paid (${totalPaidAmount}) cannot exceed payable after discount (${payableCap})`
+            message: `Total paid (${totalPaidAmount}) cannot exceed subtotal (${paymentCap})`
           }
         });
         return;
       }
       const reconciled = reconcilePaymentRemainingStatus(
         paymentStatusFromBody ?? quotation.paymentStatus,
-        amountAfterSubsidyCap,
+        amGross || paymentCap,
         totalPaidAmount,
         discountAmt
       );
@@ -3689,6 +3697,7 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
         paymentDate: latestPaymentDate ? new Date(latestPaymentDate) : quotation.paymentDate,
         paymentPhases: mergedPhases,
         remainingAmount: remainingStored,
+        ...siteCostFields,
         ...settlementFields,
         ...(subsidyCheques !== undefined ? { subsidyCheques } : {}),
         paymentPlanUpdatedBy: actorId,
@@ -3731,12 +3740,13 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
         finalSettlementAmount: auditSettlement,
         finalSettlementAt: new Date(),
         finalSettlementBy: actorId,
+        ...siteCostFields,
         ...(subsidyCheques !== undefined ? { subsidyCheques } : {}),
         paymentPlanUpdatedBy: actorId,
         paymentPlanUpdatedAt: new Date()
       });
     } else {
-      // Status-only update (no settlement flag) — do not touch installments; skip VAL_012.
+      // Status-only / site-cost-only update — do not touch installments; skip VAL_012.
       const discountAmt = Number((quotation as any).discountAmount || 0);
       const amountAfterSubsidyCap = resolveAmountAfterSubsidy(quotation as any);
       const paidAmt = Number(quotation.paidAmount || 0);
@@ -3787,6 +3797,7 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
         ...(paymentStatusFromBody !== undefined || bodyRemaining !== undefined
           ? { paymentStatus: resolvedPaymentStatus, remainingAmount: remainingStored }
           : {}),
+        ...siteCostFields,
         ...settlementFields,
         ...(subsidyCheques !== undefined ? { subsidyCheques } : {}),
         paymentPlanUpdatedBy: actorId,

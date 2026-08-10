@@ -1,11 +1,14 @@
 /**
- * Default DCR system pricing rows (June 2026 matrix) when DB config is empty or stale.
- * Admin can override via PUT /api/config/pricing; API merge keeps these rows authoritative.
+ * Fallback DCR / Non-DCR / BOTH rows when DB `pricing_tables` is empty.
+ * Prefer Aug 2026 FE seed (`utils/pricingTablesSeed.ts` / BACKEND_PRICING_TABLES_SEED.json).
+ * Admin PUT /api/quotations/pricing-tables (and /api/config/pricing) is authoritative once stored.
  */
 
+import { loadPricingTablesSeed, PRICING_TABLES_META } from './pricingTablesSeed';
+
 export const JUNE_2026_PRICING_META = {
-  effectiveFrom: '2026-06-03',
-  effectiveTo: '2026-06-30'
+  effectiveFrom: PRICING_TABLES_META.effectiveFrom,
+  effectiveTo: PRICING_TABLES_META.validTill
 } as const;
 
 export const JUNE_2026_DCR_PRICING_DEFAULTS = [
@@ -543,34 +546,37 @@ type NonDcrRow = (typeof JUNE_2026_NON_DCR_PRICING_DEFAULTS)[number];
 type BothRow = (typeof JUNE_2026_BOTH_PRICING_DEFAULTS)[number];
 type SystemConfigRow = (typeof JUNE_2026_SYSTEM_CONFIG_DEFAULTS)[number];
 
-const dcrRowKey = (row: { systemSize: string; phase: string; panelType: string }) =>
-  `${row.systemSize}|${row.phase}|${row.panelType}`;
-
-const systemConfigKey = (row: {
-  systemType: string;
-  systemSize: string;
-  panelBrand: string;
-}) => `${row.systemType}|${row.systemSize}|${row.panelBrand}`;
-
-/** Map stored DCR row panelType → matrix column key (June 2026 dealer matrix). */
-const DCR_PANEL_TYPE_MATRIX_COLUMN: Record<string, 'adani' | 'waaree' | 'premierTopcon' | 'ina' | 'tata'> = {
+/** Map stored DCR row panelType → matrix column key (Aug 2026 dealer matrix). */
+const DCR_PANEL_TYPE_MATRIX_COLUMN: Record<
+  string,
+  'adani' | 'adaniTopcon' | 'waaree' | 'waareeTopcon' | 'premierTopcon' | 'ina' | 'tata' | 'cromptonSet'
+> = {
+  Adani: 'adani',
   'Adani 555W': 'adani',
-  'Adani Topcon 620W': 'adani',
+  'Adani Topcon': 'adaniTopcon',
+  'Adani Topcon 620W': 'adaniTopcon',
+  Waaree: 'waaree',
   'Waaree 540W': 'waaree',
+  'Waaree Topcon': 'waareeTopcon',
   'Premier Energies': 'premierTopcon',
   INA: 'ina',
   'INA 500W': 'ina',
-  'Tata DCR': 'tata'
+  Tata: 'tata',
+  'Tata DCR': 'tata',
+  'Crompton set': 'cromptonSet'
 };
 
 export type DcrPricingMatrixRow = {
   systemSize: string;
   phase: string;
   adani?: number;
+  adaniTopcon?: number;
   waaree?: number;
+  waareeTopcon?: number;
   premierTopcon?: number;
   ina?: number;
   tata?: number;
+  cromptonSet?: number;
 };
 
 /** Pivot flat `dcr` rows into brand-column matrix for frontend pricing UI. */
@@ -590,73 +596,78 @@ export function buildDcrPricingMatrix(dcrRows: DcrRow[]): DcrPricingMatrixRow[] 
   return Array.from(byKey.values());
 }
 
-/** June 2026 DCR rows override stale stored rows with the same key. */
+/**
+ * DB / Admin PUT wins. When key is an array (including empty after Delete→Save), keep it.
+ * Seed only when the key is missing (null/undefined) — never refill emptied tables.
+ */
 export function mergeDefaultDcrPricing(stored: unknown): DcrRow[] {
-  if (!Array.isArray(stored) || stored.length === 0) {
+  if (Array.isArray(stored)) {
+    return stored.filter(
+      (row): row is DcrRow =>
+        !!row &&
+        typeof row === 'object' &&
+        !!(row as DcrRow).systemSize &&
+        !!(row as DcrRow).phase &&
+        !!(row as DcrRow).panelType
+    );
+  }
+  try {
+    return loadPricingTablesSeed().dcr as DcrRow[];
+  } catch {
     return [...JUNE_2026_DCR_PRICING_DEFAULTS];
   }
-  const map = new Map<string, DcrRow>();
-  for (const row of stored) {
-    if (!row || typeof row !== 'object') continue;
-    const typed = row as DcrRow;
-    if (!typed.systemSize || !typed.phase || !typed.panelType) continue;
-    map.set(dcrRowKey(typed), typed);
-  }
-  for (const row of JUNE_2026_DCR_PRICING_DEFAULTS) {
-    map.set(dcrRowKey(row), row);
-  }
-  return Array.from(map.values());
 }
 
 export function mergeDefaultNonDcrPricing(stored: unknown): NonDcrRow[] {
-  if (!Array.isArray(stored) || stored.length === 0) {
+  if (Array.isArray(stored)) {
+    return stored.filter(
+      (row): row is NonDcrRow =>
+        !!row &&
+        typeof row === 'object' &&
+        !!(row as NonDcrRow).systemSize &&
+        !!(row as NonDcrRow).phase &&
+        !!(row as NonDcrRow).panelType
+    );
+  }
+  try {
+    return loadPricingTablesSeed().nonDcr as NonDcrRow[];
+  } catch {
     return [...JUNE_2026_NON_DCR_PRICING_DEFAULTS];
   }
-  const map = new Map<string, NonDcrRow>();
-  for (const row of stored) {
-    if (!row || typeof row !== 'object') continue;
-    const typed = row as NonDcrRow;
-    if (!typed.systemSize || !typed.phase || !typed.panelType) continue;
-    map.set(dcrRowKey(typed), typed);
-  }
-  for (const row of JUNE_2026_NON_DCR_PRICING_DEFAULTS) {
-    map.set(dcrRowKey(row), row);
-  }
-  return Array.from(map.values());
 }
 
 export function mergeDefaultBothPricing(stored: unknown): BothRow[] {
-  if (!Array.isArray(stored) || stored.length === 0) {
+  if (Array.isArray(stored)) {
+    return stored.filter(
+      (row): row is BothRow =>
+        !!row &&
+        typeof row === 'object' &&
+        !!(row as BothRow).systemSize &&
+        !!(row as BothRow).phase &&
+        !!(row as BothRow).panelType
+    );
+  }
+  try {
+    return loadPricingTablesSeed().both as BothRow[];
+  } catch {
     return [...JUNE_2026_BOTH_PRICING_DEFAULTS];
   }
-  const map = new Map<string, BothRow>();
-  const bothRowKey = (row: BothRow) =>
-    `${row.systemSize}|${row.phase}|${row.panelType}|${row.dcrCapacity}|${row.nonDcrCapacity}`;
-  for (const row of stored) {
-    if (!row || typeof row !== 'object') continue;
-    const typed = row as BothRow;
-    if (!typed.systemSize || !typed.phase || !typed.panelType) continue;
-    map.set(bothRowKey(typed), typed);
-  }
-  for (const row of JUNE_2026_BOTH_PRICING_DEFAULTS) {
-    map.set(bothRowKey(row), row);
-  }
-  return Array.from(map.values());
 }
 
 export function mergeDefaultSystemConfigs(stored: unknown): SystemConfigRow[] {
-  if (!Array.isArray(stored) || stored.length === 0) {
+  if (Array.isArray(stored)) {
+    return stored.filter(
+      (row): row is SystemConfigRow =>
+        !!row &&
+        typeof row === 'object' &&
+        !!(row as SystemConfigRow).systemType &&
+        !!(row as SystemConfigRow).systemSize &&
+        !!(row as SystemConfigRow).panelBrand
+    );
+  }
+  try {
+    return loadPricingTablesSeed().systemConfigs as SystemConfigRow[];
+  } catch {
     return [...JUNE_2026_SYSTEM_CONFIG_DEFAULTS];
   }
-  const map = new Map<string, SystemConfigRow>();
-  for (const row of stored) {
-    if (!row || typeof row !== 'object') continue;
-    const typed = row as SystemConfigRow;
-    if (!typed.systemType || !typed.systemSize || !typed.panelBrand) continue;
-    map.set(systemConfigKey(typed), typed);
-  }
-  for (const row of JUNE_2026_SYSTEM_CONFIG_DEFAULTS) {
-    map.set(systemConfigKey(row), row);
-  }
-  return Array.from(map.values());
 }

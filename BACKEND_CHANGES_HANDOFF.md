@@ -29,7 +29,7 @@
 | 19 | Medium | Admin dealers `includeInactive` + pagination | **Done** | §10 |
 | 20 | Medium | Payment Management list fields (dealer, phases, dates) | **Done** | §12 |
 | 21 | Medium | Admin Overview kW — `products` + `systemKw` on list | **Done** | §13 |
-| 22 | Medium | `GET /api/quotations/pricing-tables` (June 2026 defaults) | **Done** | §2 |
+| 22 | High | Pricing tables GET + admin PUT (Aug 2026 FE seed, Waaree Topcon) | **Done** | §2.6.4 / `BACKEND_PRICING_TABLES.md` |
 | 22b | Medium | Commercial PDF flag `pdfCommercialSet` | **Done** | §2.5 |
 | 22c | Medium | Proposal PDF dates (`updatedAt`, `validUntil` +7d) | **Done** | §2.7 |
 | 23 | High | Payment Management → Admin Installation release gate | **Done** | §17 |
@@ -54,6 +54,7 @@
 | 42 | High | Crompton DCR set — Premier Energy 600–610W + Crompton 3.6kW | **Done** | §27 / `BACKEND_CROMPTON_DCR_SET.md` |
 | 43 | High | Cash + loan amounts on approve + GET echo | **Done** | §28 / `BACKEND_CASH_LOAN_AMOUNTS.md` |
 | 44 | High | Installation completion upload from pending_installer | **Done** | §29 / `BACKEND_INSTALLATION_UPLOAD_STATE.ts` |
+| 45 | High | Account Management siteCost (DB-only, no localStorage) + AM installment cap | **Done** | §30–§31 / `BACKEND_ACCOUNT_PAYMENT_MANAGEMENT.md` |
 
 **Deploy before QA:**
 
@@ -72,6 +73,8 @@ yarn migrate
 | `20260606120000-ensure-calling-remark-text-columns.js` | `callRemark` TEXT on assignments + action history (§E.2) |
 | `20260725120000-bank-process-done.js` | `bankProcessDone` / `bankProcessDoneAt` for Metering dual track (§17) |
 | `20260803120000-add-loan-cash-amount-to-quotations.js` | `loan_amount` / `cash_amount` for Cash + loan approve (§28) |
+| `20260806120000-add-site-cost-to-quotations.js` | `site_cost` for Account Management Cost of site (§30) |
+| `20260808120000-seed-pricing-tables-aug-2026.js` | Seed Aug 2026 FE pricing catalog into `system_config.pricing_tables` (§2.6.4) |
 
 After migrate, optional backfill: `npx ts-node scripts/backfill-system-kw.ts`
 
@@ -187,7 +190,7 @@ Optional: `TZ=Asia/Kolkata` if weekly HR reports must match SPA Mon–Sun in IST
 
 **Frontend flow:** create may omit PDF keys on POST; follow-up `PATCH …/products` with range keys — backend must accept that PATCH (this implementation).
 
-**Pricing tables:** `GET /api/quotations/pricing-tables` (alias of `GET /api/config/pricing`). When DB `dcr` is empty, API returns June 2026 defaults: Adani 555W, Adani Topcon 620W, Waaree 540W, Premier Energies, **Tata DCR**, **Crompton set** (`utils/defaultPricingTables.ts`).
+**Pricing tables (required):** `GET` + admin `PUT /api/quotations/pricing-tables` — Aug 2026 FE seed in `system_config.pricing_tables` (`BACKEND_PRICING_TABLES_SEED.json`, HANDOFF **§2.6.4**). Empty DB falls back to that seed (incl. **Waaree Topcon**).
 
 **New quotes:** frontend is **DCR-only**; legacy rows may remain `non-dcr` / `both`. **GET is source of truth** for `pdf_panel_range_key` after save (not browser `localStorage`).
 
@@ -362,6 +365,29 @@ Frontend no longer needs Adani catalog alias when API returns:
 See §4.4–§4.5.1 for queue tab arrays and active-lead rules.
 
 **Code:** `controllers/callingLeadController.ts`, `routes/dealerRoutes.ts`.
+
+### 2.6.4 Pricing tables — Aug 2026 FE seed + GET/PUT (**required**, implemented)
+
+**Docs:** `BACKEND_PRICING_TABLES.md` · `BACKEND_PRICING_TABLES_CONTROLLER.ts` · `BACKEND_PRICING_TABLES_API.md` · `BACKEND_PRICING_TABLES_SEED.json` / `.ts`  
+**Code:** `utils/pricingTablesSeed.ts`, `controllers/configController.ts`, migration `20260808120000-seed-pricing-tables-aug-2026.js`  
+**Routes:** `GET` + admin `PUT /api/quotations/pricing-tables` (alias `GET/PUT /api/config/pricing`)
+
+| Endpoint | Auth | Behavior |
+|----------|------|----------|
+| `GET /api/quotations/pricing-tables` | dealers / admins / visitors | Saved JSON (`system_config.pricing_tables`); seed if empty |
+| `PUT /api/quotations/pricing-tables` | **admin only** | Admin → Pricing → **Save**; **replace** each of `dcr` / `nonDcr` / `both` when sent (no append) |
+
+**Admin UI:** Add/Delete are **draft-only**; only Save PUTs. Empty arrays after delete-all are kept (not refilled from seed).  
+**PUT response + next GET:** same `data` shape (`PricingTablesData`).  
+**Seed:** ~97 DCR (incl. **Waaree Topcon**) + Non-DCR + BOTH + `systemConfigs` + components. Validity `2026-08-04` → `2026-08-31`.  
+**Source:** FE `lib/pricing-tables.ts` → regenerate seed JSON → upsert DB.
+
+- [x] Storage (`system_config.pricing_tables`)
+- [x] Seed from `BACKEND_PRICING_TABLES_SEED.json`
+- [x] GET returns saved / seed
+- [x] PUT admin-only; replaces `dcr` / `nonDcr` / `both`
+- [x] Echo saved payload on PUT + subsequent GET
+- [x] Spot-checks (Waaree Topcon etc.)
 
 ### 2.7 Proposal PDF dates — `updatedAt` and `validUntil` (Jun 2026)
 
@@ -2447,6 +2473,45 @@ Migration: `20260803120000-add-loan-cash-amount-to-quotations.js`
 
 ---
 
+## 30. Account Management — Cost of site (`siteCost`) — **no localStorage** (required for hard refresh)
+
+**Frontend:** Account Management → Payment Management — Manage modal + payment **grid** (Cost of site / Profit)  
+**Full handoff:** **`BACKEND_SITE_COST.md`** · pack: **`BACKEND_ACCOUNT_PAYMENT_MANAGEMENT.md`**  
+**Code:** `utils/cashLoanAmounts.ts` (`parseSiteCostFromBody`, `serializeSiteCostFields`), `quotationPaymentApiFields`, `updateQuotationPaymentDetails`
+
+**Why:** After Submit, Cost of site shows in the grid, but **hard refresh resets to ₹0** until GET echoes `siteCost` from DB.  
+**No localStorage** — reload needs GET echo for **everyone** (all users/devices). Profit = FE-only `subtotal − siteCost` (do not store).
+
+### Backend delivered (must ship — fixes hard refresh → ₹0)
+
+- [x] DB column `site_cost` (`20260806120000-add-site-cost-to-quotations.js`)
+- [x] `PATCH …/payment-details` `{ siteCost, replaceInstallments: false }` — save, **don’t wipe** installments
+- [x] Same on `PATCH …/site-cost` + admin aliases (`/admin/quotations/:id/site-cost`, site-cost-only `/admin/…/payment-details`)
+- [x] **GET** list/detail echo `siteCost` / `site_cost`
+- [x] Accept `siteCost` on installment Submit with `phases`
+- [x] Profit stays FE-only (`subtotal − siteCost`) — not stored
+
+### Acceptance
+
+Save ₹2,00,000 → GET returns it → **hard refresh** still shows Cost of site + Profit.
+
+---
+
+## 31. Account Management — Installment paid vs AM subtotal
+
+**Bug:** `Total paid (126000) cannot exceed payable after discount (117000)` while AM Subtotal shows 126000.  
+**Full handoff:** **`BACKEND_ACCOUNT_PAYMENT_MANAGEMENT.md` §D**
+
+- [x] Cap = `subtotal − discountAmount` (not `amountAfterSubsidy − discount`)
+- [x] Error: `Total paid (X) cannot exceed subtotal (Y)`
+- [x] Status-only / site-cost PATCH (`replaceInstallments: false`, no phases): skip paid-vs-cap; do not wipe phases
+
+### QA
+
+Submit installments with total paid = AM subtotal → **200**. Refresh → phases persist.
+
+---
+
 ## Related docs
 
 | Doc | Section |
@@ -2475,6 +2540,9 @@ Migration: `20260803120000-add-loan-cash-amount-to-quotations.js`
 | **§19** (this file) | Non-DCR 80kW set — Renew Energy / Waaree / Adani |
 | **`BACKEND_NON_DCR_80KW.md`** | **§19** PDF range keys + pricing-tables 80kW rows |
 | **§27** (this file) | Crompton DCR set — Premier Energy 600–610W + Crompton 3.6kW |
+| **`BACKEND_PRICING_TABLES.md`** | **§2.6.4** Admin Pricing GET + PUT |
+| **`BACKEND_PRICING_TABLES_CONTROLLER.ts`** | **§2.6.4** copy-paste GET/PUT handlers |
+| **`BACKEND_PRICING_TABLES_SEED.json`** | **§2.6.4** Aug 2026 FE catalog seed |
 | **`BACKEND_CROMPTON_DCR_SET.md`** | **§27** full Crompton set prices, range key, pricing-tables |
 | **`BACKEND_CROMPTON_DCR_SET.ts`** | **§27** allowlist helpers + pricing/preset migrate |
 | **§28** (this file) | Cash + loan amounts + installment payment modes |
@@ -2483,4 +2551,8 @@ Migration: `20260803120000-add-loan-cash-amount-to-quotations.js`
 | **§29** (this file) | Installation upload — not allowed for this quotation state |
 | **`BACKEND_INSTALLATION_UPLOAD_STATE.ts`** | **§29** allow `pending_installer` completion upload + gate helper |
 | **`BACKEND_PAYMENT_EXCEL_JOURNEY_STATUS.ts`** | **§24–§25** journey helpers + required GET fields |
+| **§30** (this file) | Account Management Cost of site |
+| **`BACKEND_SITE_COST.md`** | **§30** `siteCost` persist + GET echo |
+| **§31** (this file) | AM installment paid vs subtotal (not payable-after-discount) |
+| **`BACKEND_ACCOUNT_PAYMENT_MANAGEMENT.md`** | **§30–§31** pack — site cost + installment payment cap |
 
