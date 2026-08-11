@@ -9,7 +9,14 @@ import { Product } from '../models';
 import { Op, Sequelize } from 'sequelize';
 import { logError, logInfo } from '../utils/loggerHelper';
 import { deleteFileFromS3IfExists } from '../middleware/upload';
-import { decodeS3UrlPathToKey, generatePublicUrl, isPresignedS3GetUrl } from '../utils/s3Service';
+import {
+  decodeS3UrlPathToKey,
+  generatePublicUrl,
+  isPresignedS3GetUrl,
+  persistableMediaReference,
+  resolveBrowsableMediaUrls,
+  uploadFileToS3FromBuffer
+} from '../utils/s3Service';
 import { normalizePaymentModeInput, isLoanOnlyPaymentType, FINAL_SETTLEMENT_LOAN_ONLY_MESSAGE } from '../utils/paymentMode';
 import {
   normalizePaymentType,
@@ -4904,6 +4911,229 @@ export const uploadQuotationDocument = async (req: Request, res: Response): Prom
       res.status(error.statusCode || 500).json(error.errorPayload);
       return;
     }
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
+};
+
+const parseJsonStringArray = (raw: unknown): { values: string[]; error?: string } => {
+  if (raw === undefined || raw === null || raw === '') return { values: [] };
+  if (Array.isArray(raw)) {
+    return { values: raw.map((v) => String(v).trim()).filter(Boolean) };
+  }
+  if (typeof raw !== 'string') return { values: [], error: 'Expected a JSON array string' };
+  const trimmed = raw.trim();
+  if (!trimmed) return { values: [] };
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (!Array.isArray(parsed)) return { values: [], error: 'existingPiUploadUrlsJson must be a JSON array' };
+    return { values: parsed.map((v) => String(v).trim()).filter(Boolean) };
+  } catch {
+    return { values: [], error: 'existingPiUploadUrlsJson is not valid JSON' };
+  }
+};
+
+const parseBooleanFromBody = (raw: unknown, defaultValue = false): boolean => {
+  if (raw === undefined) return defaultValue;
+  if (raw === null) return defaultValue;
+  if (typeof raw === 'boolean') return raw;
+  if (typeof raw === 'number') return raw === 1;
+  const s = String(raw).trim().toLowerCase();
+  if (['true', '1', 'yes', 'y', 'on'].includes(s)) return true;
+  if (['false', '0', 'no', 'n', 'off'].includes(s)) return false;
+  return defaultValue;
+};
+
+const uniquePreserveOrder = (values: string[]): string[] => {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const v of values) {
+    const key = String(v);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(key);
+  }
+  return out;
+};
+
+/**
+ * Account Management PI upload — multiple PDFs/images per quotation.
+ * Persists into `quotation_installation_docs` with `docType='installer_pi'`,
+ * so GET /quotations?status=approved echoes `piUploadUrls` via installationDocumentsApi.
+ */
+export const uploadAccountPiDocuments = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const role = req.user?.role;
+    const isAccountManager = role === 'account-management';
+    const isInventoryAdmin = role === 'super-admin' || role === 'super-admin-manager' || role === 'admin';
+    const isQuotationAdmin = req.dealer?.role === 'admin';
+    if (!isAccountManager && !isInventoryAdmin && !isQuotationAdmin) {
+      res.status(403).json({
+        success: false,
+        error: { code: 'AUTH_004', message: 'Insufficient permissions' }
+      });
+      return;
+    }
+
+    const quotationId = String(req.params.id || req.params.quotationId || '').trim();
+    if (!quotationId) {
+      res.status(400).json({
+        success: false,
+        error: { code: 'RES_001', message: 'quotationId is required' }
+      });
+      return;
+    }
+
+    const body = req.body as Record<string, unknown>;
+    const replacePiUploads = parseBooleanFromBody(body.replacePiUploads ?? body.replace_pi_uploads, false);
+
+    const { values: existingPiUploadUrlsJsonRaw, error: jsonParseError } = parseJsonStringArray(
+      body.existingPiUploadUrlsJson ?? body.existing_pi_upload_urls_json
+    );
+    if (jsonParseError) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VAL_002',
+          message: 'existingPiUploadUrlsJson must be a JSON array of URL/keys',
+          details: [{ field: 'existingPiUploadUrlsJson', message: jsonParseError }]
+        }
+      });
+      return;
+    }
+
+    const jsonPiKeys = uniquePreserveOrder(
+      existingPiUploadUrlsJsonRaw.map((v) => persistableMediaReference(v)).filter((k): k is string => !!k)
+    );
+
+    const uploadedFiles = Array.isArray((req as any).files)
+      ? (((req as any).files as Express.Multer.File[]).filter((f) => !!f?.buffer && f.buffer.length > 0))
+      : [];
+
+    const newUploadedKeys: string[] = [];
+    const newFiles = uploadedFiles.slice(0, 50);
+    for (const file of newFiles) {
+      const ext = path.extname(file.originalname || '').toLowerCase();
+      const folder = `quotation-workflow/${quotationId}/installer_pi`;
+      // Store object key in DB (stable); response will resolve to browsable URLs.
+      const key = await uploadFileToS3FromBuffer(file.buffer, String(file.originalname || `pi${ext}`), folder);
+      newUploadedKeys.push(key);
+    }
+
+    // Access-controlled quotation rows:
+    // - account-management writes only for approved quotations
+    // - admin/superadmin can write regardless
+    const where: any = { id: quotationId };
+    if (isAccountManager) where.status = 'approved';
+
+    const quotation = await Quotation.findOne({ where });
+    if (!quotation) {
+      res.status(404).json({
+        success: false,
+        error: { code: 'NOT_001', message: 'Quotation not found' }
+      });
+      return;
+    }
+
+    const existingDocs = await QuotationInstallationDoc.findAll({
+      where: { quotationId, docType: 'installer_pi' },
+      order: [['uploadedAt', 'ASC'], ['createdAt', 'ASC']]
+    });
+    const existingKeys = existingDocs.map((d) => String(d.fileUrl));
+
+    // What the next stored list should be (ordered, unique).
+    let nextKeysOrdered: string[];
+    if (replacePiUploads) {
+      nextKeysOrdered = jsonPiKeys;
+    } else {
+      nextKeysOrdered = uniquePreserveOrder([
+        ...existingKeys,
+        ...jsonPiKeys,
+        ...newUploadedKeys
+      ]);
+    }
+
+    if (!nextKeysOrdered.length && !replacePiUploads) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VAL_002',
+          message: 'piUpload files are required (or send replacePiUploads=true with existingPiUploadUrlsJson)'
+        }
+      });
+      return;
+    }
+
+    const nextKeysSet = new Set(nextKeysOrdered);
+    const keysToDelete = existingKeys.filter((k) => !nextKeysSet.has(k));
+    const keysToAdd = nextKeysOrdered.filter((k) => !existingKeys.includes(k));
+
+    const sequelizeInstance = QuotationInstallationDoc.sequelize;
+    if (!sequelizeInstance) {
+      res.status(500).json({ success: false, error: { code: 'SYS_001', message: 'Sequelize unavailable' } });
+      return;
+    }
+
+    await sequelizeInstance.transaction(async (transaction) => {
+      if (keysToDelete.length) {
+        // Remove DB rows first, then best-effort delete S3 objects.
+        await QuotationInstallationDoc.destroy(
+          { where: { quotationId, docType: 'installer_pi', fileUrl: { [Op.in]: keysToDelete } }, transaction }
+        );
+        await Promise.all(keysToDelete.map((k) => deleteFileFromS3IfExists(k).catch(() => undefined)));
+      }
+
+      if (keysToAdd.length) {
+        const uploaderId = String(req.user?.id ?? req.dealer?.id ?? '');
+        const uploaderRole = String(req.user?.role ?? req.dealer?.role ?? 'account-management');
+        await Promise.all(
+          keysToAdd.map((fileUrl) =>
+            QuotationInstallationDoc.create(
+              {
+                id: uuidv4(),
+                quotationId,
+                docType: 'installer_pi',
+                fileUrl,
+                uploadedByUserId: uploaderId || quotation.dealerId || 'unknown',
+                uploadedByRole: uploaderRole || 'account-management',
+                remarks: null,
+                metadata: null
+              },
+              { transaction }
+            )
+          )
+        );
+      }
+    });
+
+    const piUploadUrls = await resolveBrowsableMediaUrls(nextKeysOrdered);
+    const piUploadUrl = piUploadUrls[0] ?? null;
+
+    const responsePayload = {
+      quotationId,
+      piUploadUrl,
+      piUploadUrls,
+      pi_upload_url: piUploadUrl,
+      pi_upload_urls: piUploadUrls
+    };
+
+    res.json({
+      success: true,
+      ...responsePayload,
+      data: {
+        ...responsePayload,
+        documents: {
+          piUploadUrl,
+          piUploadUrls,
+          pi_upload_url: piUploadUrl,
+          pi_upload_urls: piUploadUrls
+        }
+      }
+    });
+  } catch (error) {
+    logError('Account PI upload error', error, { quotationId: req.params.quotationId || req.params.id });
     res.status(500).json({
       success: false,
       error: { code: 'SYS_001', message: 'Internal server error' }

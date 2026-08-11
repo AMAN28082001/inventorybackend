@@ -30,7 +30,8 @@ import {
   getProductCatalog,
   saveQuotationDocuments,
   saveFinalConfirmationDocuments,
-  uploadQuotationDocument
+  uploadQuotationDocument,
+  uploadAccountPiDocuments
 } from '../controllers/quotationController';
 import {
   FINAL_CONFIRMATION_DOCUMENT_FIELDS,
@@ -118,6 +119,52 @@ const looksLikeInstallerCompletionUpload = (req: express.Request): boolean => {
 };
 
 const router: Router = express.Router();
+
+// §Account Management — PI upload (multiple PDFs/images) for quotations
+const MAX_PI_UPLOAD_BYTES = 25 * 1024 * 1024; // 25 MB per file
+const MAX_PI_UPLOAD_COUNT = 20; // FE expects >= 20 parts
+
+const piUploadMulter = multer({
+  storage: multer.memoryStorage(),
+  fileFilter: (_req, file, cb) => {
+    try {
+      const original = String(file.originalname || '');
+      const lowerName = original.toLowerCase();
+      const extOk = /\.(pdf|jpe?g|png|webp|gif|heic|heif)$/.test(lowerName);
+
+      const mime = String(file.mimetype || '').toLowerCase();
+      const isPdf = mime === 'application/pdf' || (extOk && lowerName.endsWith('.pdf'));
+      const isImgExt = /\.(jpe?g|png|webp|gif|heic|heif)$/.test(lowerName);
+
+      const allowedImageMimes = new Set([
+        'image/jpeg',
+        'image/png',
+        'image/webp',
+        'image/gif',
+        'image/heic',
+        'image/heif'
+      ]);
+
+      const mimeOk =
+        (isPdf && (mime === 'application/pdf' || mime === 'application/octet-stream' || mime === '')) ||
+        (isImgExt &&
+          (allowedImageMimes.has(mime) || mime === 'application/octet-stream' || mime === ''));
+
+      if (extOk && mimeOk) {
+        cb(null, true);
+        return;
+      }
+
+      cb(new Error('Only PDF or images (.pdf, .jpg/.jpeg, .png, .webp, .gif, .heic/.heif) are allowed'));
+    } catch {
+      cb(new Error('Only PDF or images are allowed'));
+    }
+  },
+  limits: {
+    fileSize: MAX_PI_UPLOAD_BYTES,
+    files: MAX_PI_UPLOAD_COUNT
+  }
+});
 const MAX_PDF_UPLOAD_BYTES = 30 * 1024 * 1024; // 30 MB
 
 const documentsUpload = multer({
@@ -1039,6 +1086,39 @@ router.post(
   handleSingleInstallerUploadMultipart,
   uploadInstallerDocument
 );
+
+// Account Management / Admin — upload 1..N PI docs per quotation (multipart, repeated `piUpload`)
+const handlePiUploadMultipart = (req: express.Request, res: express.Response, next: express.NextFunction): void => {
+  piUploadMulter.array('piUpload', MAX_PI_UPLOAD_COUNT)(req, res, (err?: unknown) => {
+    if (!err) {
+      next();
+      return;
+    }
+    const e = err as MulterError;
+    if ((e as any).code === 'LIMIT_FILE_SIZE') {
+      res.status(413).json({
+        success: false,
+        error: { code: 'VAL_001', message: 'One or more PI files exceed the maximum upload size' }
+      });
+      return;
+    }
+    if ((e as any).code === 'LIMIT_FILE_COUNT') {
+      res.status(400).json({
+        success: false,
+        error: { code: 'VAL_001', message: 'Too many PI files in this request (max 20)' }
+      });
+      return;
+    }
+    res.status(400).json({
+      success: false,
+      error: { code: 'VAL_002', message: (err as any)?.message || 'Invalid piUpload files' }
+    });
+  });
+};
+
+router.post('/:quotationId/pi-upload', handlePiUploadMultipart, uploadAccountPiDocuments);
+// FE alias on 404 (primary route above)
+router.post('/:quotationId/pi-documents', handlePiUploadMultipart, uploadAccountPiDocuments);
 
 router.patch(
   '/:quotationId/documents',
