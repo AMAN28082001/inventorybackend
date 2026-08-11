@@ -22,13 +22,57 @@ export const uploadCallingLeadsSchema = z.object({
 
 export const assignUnassignedLeadsSchema = z
   .object({
+    /** Default active_cap (1/dealer). Opt-in: round_robin_all dumps every Unassigned row. */
     assignmentMode: z.string().max(64).optional(),
     assignment_mode: z.string().max(64).optional(),
+    mode: z.string().max(64).optional(),
+    activeLimitPerDealer: z.preprocess((value) => {
+      if (value !== undefined && value !== null && value !== '') return value;
+      return undefined;
+    }, z.coerce.number().int().min(1).max(50).optional()),
+    activeLeadsLimit: z.preprocess((value) => {
+      if (value !== undefined && value !== null && value !== '') return value;
+      return undefined;
+    }, z.coerce.number().int().min(1).max(50).optional()),
+    /** Demote excess Assigned → Unassigned before top-up (default true for active_cap). */
+    rebalance: z.preprocess((value) => {
+      if (value === undefined || value === null || value === '') return undefined;
+      if (typeof value === 'boolean') return value;
+      const s = String(value).trim().toLowerCase();
+      if (['false', '0', 'no'].includes(s)) return false;
+      if (['true', '1', 'yes'].includes(s)) return true;
+      return undefined;
+    }, z.boolean().optional()),
     dealerIds: z.preprocess((value) => {
       if (value === undefined || value === null || value === '') return undefined;
       if (Array.isArray(value)) return value;
       return [value];
     }, z.array(z.string().min(1)).optional())
+  })
+  .passthrough();
+
+/** §15-D / Manage dealers — replace or merge upload dealer pool */
+export const updateUploadDealerPoolSchema = z
+  .object({
+    dealerIds: z.preprocess((value) => {
+      if (Array.isArray(value)) return value;
+      if (value === undefined || value === null || value === '') return [];
+      if (typeof value === 'string' && value.trim().startsWith('[')) {
+        try {
+          const parsed = JSON.parse(value);
+          if (Array.isArray(parsed)) return parsed;
+        } catch {
+          /* fall through */
+        }
+      }
+      return [value];
+    }, z.array(z.string().min(1)).min(1, 'Select at least one dealer')),
+    dealer_ids: z.preprocess((value) => {
+      if (value === undefined || value === null || value === '') return undefined;
+      if (Array.isArray(value)) return value;
+      return [value];
+    }, z.array(z.string().min(1)).optional()),
+    mode: z.enum(['replace', 'add']).optional()
   })
   .passthrough();
 

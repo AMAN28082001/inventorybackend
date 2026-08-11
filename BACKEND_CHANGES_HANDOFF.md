@@ -39,7 +39,7 @@
 | 27 | High | Quotations tab → Send to Metering | **Done** | §21 / §L.1 |
 | 28 | High | Admin Overview → Product Needed (installation-pending brands) | **Done** | §13 / `BACKEND_ADMIN_PRODUCT_NEEDED.ts` |
 | 29 | High | Inventory Tally import — `POST /products` without serials + clear errors | **Done** | §14 |
-| 30 | High | Calling FCFS + `/current` never 500 + assign-unassigned (Unassigned→0) | **Done** | §15 / `BACKEND_ASSIGN_UNASSIGNED.ts` |
+| 30 | High | Calling FCFS + `/current` never 500 + assign-unassigned (`active_cap` default) | **Done** | §15 / `BACKEND_ASSIGN_UNASSIGNED.ts` |
 | 31 | High | Inventory Review & Dispatch — `dispatched_by_id` FK (Quotation Admin) | **Done** | §16 / `BACKEND_STOCK_REQUESTS_DISPATCHED_BY.ts` |
 | 32 | High | Inventory Agent sale — `sales_created_by_fkey` | **Done** | §20 / `BACKEND_SALES_CREATED_BY.ts` |
 | 33 | High | Inventory Agent sale — admin stock (not central) | **Done** | §21 / `BACKEND_SALES_ADMIN_STOCK.ts` |
@@ -55,6 +55,8 @@
 | 43 | High | Cash + loan amounts on approve + GET echo | **Done** | §28 / `BACKEND_CASH_LOAN_AMOUNTS.md` |
 | 44 | High | Installation completion upload from pending_installer | **Done** | §29 / `BACKEND_INSTALLATION_UPLOAD_STATE.ts` |
 | 45 | High | Account Management siteCost (DB-only, no localStorage) + AM installment cap | **Done** | §30–§31 / `BACKEND_ACCOUNT_PAYMENT_MANAGEMENT.md` |
+| 46 | High | Dealer Payments tab (read-only approved list + payment fields) | **Done** | §32 / `BACKEND_DEALER_PAYMENTS.md` |
+| 47 | High | HR Manage dealers — replace pool + active_cap assign (1/dealer) | **Done** | §15-D / `BACKEND_MANAGE_DEALERS.md` |
 
 **Deploy before QA:**
 
@@ -2250,13 +2252,27 @@ Completion `POST …/documents` used a Multer allow-list that rejected client fi
 |-------|----------------|
 | `/current` + `/next` always **200** | `getDealerCallingQueueCurrent` / `Next` — empty on error, never SYS_001 |
 | FCFS allocate | `promoteQueuedLeadIfSlotAvailable` + SKIP LOCKED; stuck reclaim |
-| **`POST …/uploads/:uploadId/assign-unassigned`** | Round-robin all pool/unassigned leads → `unassignedCount === 0` |
+| **`POST …/assign-unassigned`** | Default **`active_cap`** (1 open / dealer) + **`rebalance`**; opt-in `round_robin_all` |
 | Upload `assignmentMode=round_robin_all` | Assign **every** new row (ignore `activeLimitPerDealer` leftovers) |
 | Upload Zod | `activeLimitPerDealer` / `activeLeadsLimit` **1..50** (SPA sends `1`; do **not** send >50 — use `round_robin_all` to assign all) |
 
-**Refs:** `BACKEND_ASSIGN_UNASSIGNED.ts`, `BACKEND_CALLING_QUEUE_CURRENT.ts`
+**Refs:** `BACKEND_ASSIGN_UNASSIGNED.ts`, `BACKEND_CALLING_QUEUE_CURRENT.ts`, `BACKEND_MANAGE_DEALERS.md`
 
-**QA:** Upload with `activeLimitPerDealer=1` succeeds; HR Assign unassigned → Unassigned **0**; `/current` never 500; `/next` returns dealer’s assigned lead until Assigned **0**.
+**QA (Manage dealers):** 7 dealers / ~4918 rows → Assigned ≈ **7**, Unassigned ≈ **4910** (not Assigned 4916). `/next` after Complete claims next Unassigned.
+
+### §15-D — HR Manage dealers / Add dealers (replace pool) — **Done**
+
+**Full handoff:** **`BACKEND_MANAGE_DEALERS.md`** · reference **`BACKEND_ASSIGN_UNASSIGNED.ts`**
+
+| Piece | Implementation |
+|-------|----------------|
+| `PATCH …/uploads/:uploadId/dealers` `{ dealerIds, mode: "replace" }` | `updateHrUploadDealerPool` — overwrites `calling_lead_upload_batches.assignedDealers` |
+| Aliases | calling-uploads PATCH, uploads PUT, admin PATCH, POST add-dealers |
+| Does not reassign | Completed leads untouched; pool replace does not change lead assignees |
+| Then FE | `POST …/assign-unassigned` `{ assignmentMode: "active_cap", activeLimitPerDealer: 1, rebalance: true }` — **not** `round_robin_all` |
+| GET uploads | Echoes `dealerIds` + dealers with `name` |
+
+**Code:** `controllers/callingLeadController.ts` (`activeCapAssignUnassignedLeadsForBatch`, `assignHrUploadUnassigned`), `routes/hrLeadRoutes.ts`, `routes/adminRoutes.ts`
 
 ### §15-C-2 — Upload CSV must never 500 on Assign Leads (Jul 2026)
 
@@ -2512,6 +2528,27 @@ Submit installments with total paid = AM subtotal → **200**. Refresh → phase
 
 ---
 
+## 32. Dealer Payments tab — read-only (`GET` approved list)
+
+**Frontend:** Dealer nav → **Payments** (`/dashboard/payments`)  
+**Full handoff:** **`BACKEND_DEALER_PAYMENTS.md`**  
+**No new write API** — reuses Account Management–saved payment data.
+
+### Backend delivered
+
+- [x] `GET /api/quotations?status=approved` — dealer-scoped (`dealerId = auth.dealer.id`)
+- [x] List echoes `paymentType`, `loanAmount` / `cashAmount`, `remaining` / `remainingAmount`, `installments` + `paymentPhases` (`paidAmount`, `paymentMode`)
+- [x] Regular dealers **403** on `PATCH …/payment-details` (and installments / site-cost) via `authorizeAccountManagerOrAdminPayment`
+- [x] AM / inventory admin / quotation-system admin still write as before
+
+### QA
+
+1. Dealer A → Payments → only A’s approved rows; Paid / Remaining / Cash+loan match AM.
+2. Dealer PATCH payment-details → **403**.
+3. After AM installment Save → dealer refresh updates Paid/Remaining (no localStorage).
+
+---
+
 ## Related docs
 
 | Doc | Section |
@@ -2531,6 +2568,7 @@ Submit installments with total paid = AM subtotal → **200**. Refresh → phase
 | **§14** (this file) | Inventory Tally import — `POST /products` + serial attach on PUT |
 | **§15** (this file) | Calling `/current` 500 + FCFS + Unassigned → 0 |
 | **`BACKEND_ASSIGN_UNASSIGNED.ts`** | **§15-C** `POST …/assign-unassigned` + upload `round_robin_all` |
+| **`BACKEND_MANAGE_DEALERS.md`** | **§15-D** HR Add dealers — replace pool + assign-unassigned |
 | **`BACKEND_CALLING_QUEUE_CURRENT.ts`** | **§15** `/calling-queue/current` + `/next` (never SYS_001) |
 | **§17** (this file) | Metering dual track — Meter left + Bank right |
 | **`BACKEND_METERING_DUAL_TRACK.md`** | **§17** `bank_process_done` + installer auth on metering routes |
@@ -2555,4 +2593,5 @@ Submit installments with total paid = AM subtotal → **200**. Refresh → phase
 | **`BACKEND_SITE_COST.md`** | **§30** `siteCost` persist + GET echo |
 | **§31** (this file) | AM installment paid vs subtotal (not payable-after-discount) |
 | **`BACKEND_ACCOUNT_PAYMENT_MANAGEMENT.md`** | **§30–§31** pack — site cost + installment payment cap |
+| **`BACKEND_DEALER_PAYMENTS.md`** | **§32** Dealer Payments tab (read-only) |
 

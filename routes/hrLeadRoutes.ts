@@ -11,12 +11,14 @@ import {
   getHrLeadUploadBatches,
   getHrLeadUploadBatchRows,
   getHrLeadsSearchByMobile,
-  assignHrUploadUnassigned
+  assignHrUploadUnassigned,
+  updateHrUploadDealerPool
 } from '../controllers/callingLeadController';
 import { validate } from '../middleware/validate';
 import {
   uploadCallingLeadsSchema,
-  assignUnassignedLeadsSchema
+  assignUnassignedLeadsSchema,
+  updateUploadDealerPoolSchema
 } from '../validations/callingLeadValidations';
 
 const router: Router = express.Router();
@@ -52,6 +54,37 @@ router.get('/calling-queue/actions', getHrCallingActions);
 router.get('/leads/search', getHrLeadsSearchByMobile);
 router.get('/leads/uploads', getHrLeadUploadBatches);
 router.get('/leads/uploads/:batchId', getHrLeadUploadBatchRows);
+/** §15-D — Manage dealers: replace (or add) upload dealer pool */
+router.patch(
+  '/leads/uploads/:uploadId/dealers',
+  validate(updateUploadDealerPoolSchema),
+  updateHrUploadDealerPool
+);
+router.patch(
+  '/leads/uploads/:uploadId',
+  validate(updateUploadDealerPoolSchema),
+  updateHrUploadDealerPool
+);
+router.put(
+  '/uploads/:uploadId/dealers',
+  validate(updateUploadDealerPoolSchema),
+  updateHrUploadDealerPool
+);
+router.patch(
+  '/calling-uploads/:uploadId/dealers',
+  validate(updateUploadDealerPoolSchema),
+  updateHrUploadDealerPool
+);
+router.post(
+  '/leads/uploads/:uploadId/add-dealers',
+  validate(updateUploadDealerPoolSchema),
+  updateHrUploadDealerPool
+);
+router.post(
+  '/calling-uploads/:uploadId/add-dealers',
+  validate(updateUploadDealerPoolSchema),
+  updateHrUploadDealerPool
+);
 // §15-C — drain Unassigned → 0 for an existing batch (round-robin onto dealer pool)
 router.post(
   '/leads/uploads/:uploadId/assign-unassigned',

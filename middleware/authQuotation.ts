@@ -621,4 +621,32 @@ export const authorizeDealerOrAccountManagerPayment = (req: Request, res: Respon
   });
 };
 
+/**
+ * Dealer Payments tab is read-only — regular dealers must not PATCH payment-details.
+ * Account Management / inventory admin / quotation-system admin may write.
+ */
+export const authorizeAccountManagerOrAdminPayment = (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void => {
+  const isQuotationAdmin = !!(req.dealer && req.dealer.role === 'admin');
+  const isAccountManager =
+    !!(req.user && (req.user.role === 'account-management' || req.user.role === 'hr'));
+  const isInventoryAdmin = !!(req.user && isInventorySystemAdminRole(req.user.role));
+
+  if (isQuotationAdmin || isAccountManager || isInventoryAdmin) {
+    next();
+    return;
+  }
+
+  res.status(403).json({
+    success: false,
+    error: {
+      code: 'AUTH_004',
+      message: 'Insufficient permissions. Payment details are Account Management only.'
+    }
+  });
+};
+
 

@@ -54,6 +54,7 @@ import {
   authenticateInventoryOrQuotation,
   authorizeQuotationCustomerByPhone,
   authorizeDealerOrAccountManager,
+  authorizeAccountManagerOrAdminPayment,
   authorizeFinalConfirmationUploader,
   authorizeQuotationDocumentsEditor,
   authorizeInstallerOrAdmin,
@@ -912,12 +913,12 @@ router.patch('/:quotationId/pricing', authorizeDealerOrAccountManager, validate(
 router.post('/:quotationId/final-settlement', authorizeDealerOrAccountManager, validate(finalSettlementSchema), submitQuotationFinalSettlement);
 router.post('/:quotationId/revert-final-settlement', authorizeDealerOrAccountManager, validate(revertFinalSettlementSchema), revertQuotationFinalSettlement);
 router.delete('/:quotationId/final-settlement', authorizeDealerOrAccountManager, validate(revertFinalSettlementSchema), revertQuotationFinalSettlement);
-router.patch('/:quotationId/payment-details', authorizeDealerOrAccountManager, validate(updatePaymentDetailsSchema), updateQuotationPaymentDetails);
+router.patch('/:quotationId/payment-details', authorizeAccountManagerOrAdminPayment, validate(updatePaymentDetailsSchema), updateQuotationPaymentDetails);
 /** §30 optional alias — same handler as payment-details (siteCost-only body OK). */
-router.patch('/:quotationId/site-cost', authorizeDealerOrAccountManager, validate(updatePaymentDetailsSchema), updateQuotationPaymentDetails);
-router.patch('/:quotationId/installments', authorizeDealerOrAccountManager, validate(updatePaymentDetailsSchema), updateQuotationPaymentDetails);
-router.put('/:quotationId/installments', authorizeDealerOrAccountManager, validate(updatePaymentDetailsSchema), updateQuotationPaymentDetails);
-router.patch('/:quotationId/payment-mode', authorizeDealerOrAccountManager, validate(updatePaymentModeSchema), updateQuotationPaymentDetails);
+router.patch('/:quotationId/site-cost', authorizeAccountManagerOrAdminPayment, validate(updatePaymentDetailsSchema), updateQuotationPaymentDetails);
+router.patch('/:quotationId/installments', authorizeAccountManagerOrAdminPayment, validate(updatePaymentDetailsSchema), updateQuotationPaymentDetails);
+router.put('/:quotationId/installments', authorizeAccountManagerOrAdminPayment, validate(updatePaymentDetailsSchema), updateQuotationPaymentDetails);
+router.patch('/:quotationId/payment-mode', authorizeAccountManagerOrAdminPayment, validate(updatePaymentModeSchema), updateQuotationPaymentDetails);
 /** §17 Bank process dual-track (SPA fallbacks + installer/metering JWT). */
 router.patch(
   '/:quotationId/bank-process',

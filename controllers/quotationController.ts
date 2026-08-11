@@ -3563,14 +3563,17 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
     const hasPhasePayload = Array.isArray(phasePayload);
 
     const role = req.user?.role;
-    const isAccountManager = role === 'account-management';
-    const isInventoryAdmin = role === 'admin';
+    const isAccountManager = role === 'account-management' || role === 'hr';
+    const isInventoryAdmin = role === 'admin' || role === 'super-admin' || role === 'super-admin-manager';
     const isQuotationAdmin = req.dealer && req.dealer.role === 'admin';
 
     if (!isAccountManager && !isInventoryAdmin && !isQuotationAdmin) {
       res.status(403).json({
         success: false,
-        error: { code: 'AUTH_004', message: 'Insufficient permissions' }
+        error: {
+          code: 'AUTH_004',
+          message: 'Insufficient permissions. Payment details are Account Management only.'
+        }
       });
       return;
     }

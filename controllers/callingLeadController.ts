@@ -656,8 +656,218 @@ const extractDealerIdsFromBatchPool = (assignedDealers: unknown): string[] => {
 };
 
 /**
+ * §15-C / §15-D — active_cap assign for one upload batch.
+ * - rebalance: keep oldest N open Assigned/in_progress per dealer; excess → pool (Unassigned)
+ * - top-up: fill dealers under cap from Unassigned (oldest first)
+ * Returns { assigned, released }. Never dumps every row (unlike round_robin_all).
+ */
+const activeCapAssignUnassignedLeadsForBatch = async ({
+  batchId,
+  dealerIds,
+  assignedByUserId,
+  activeLimit,
+  rebalance,
+  transaction
+}: {
+  batchId: string;
+  dealerIds: string[];
+  assignedByUserId: string;
+  activeLimit: number;
+  rebalance: boolean;
+  transaction: any;
+}): Promise<{ assigned: number; released: number }> => {
+  if (!dealerIds.length) return { assigned: 0, released: 0 };
+  const limit = Math.max(1, Math.min(50, Math.floor(activeLimit) || 1));
+  const safeBatchId = batchId.replace(/'/g, "''");
+  const now = new Date();
+  let released = 0;
+  let assigned = 0;
+
+  await ensureCallingPoolDealerExists(transaction);
+
+  const batchLeadClause = Sequelize.literal(`
+    EXISTS (
+      SELECT 1 FROM "calling_leads" AS cl
+      WHERE cl."id" = "DealerLeadAssignment"."leadId"
+        AND cl."batchId" = '${safeBatchId}'
+    )
+  `);
+
+  const openStatuses = ['assigned', 'active', 'in_progress'] as const;
+
+  // Open Assigned/in_progress for pool dealers on this batch (latest ownership only)
+  const openAssignments = await DealerLeadAssignment.findAll({
+    where: {
+      [Op.and]: [
+        { dealerId: { [Op.in]: dealerIds } },
+        { status: { [Op.in]: [...openStatuses] } },
+        LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE,
+        batchLeadClause
+      ]
+    },
+    order: [
+      [Sequelize.literal('COALESCE("DealerLeadAssignment"."assignedAt", "DealerLeadAssignment"."createdAt")'), 'ASC'],
+      ['id', 'ASC']
+    ],
+    transaction,
+    lock: transaction.LOCK.UPDATE
+  });
+
+  const openByDealer = new Map<string, typeof openAssignments>();
+  for (const id of dealerIds) openByDealer.set(id, []);
+  for (const row of openAssignments) {
+    const list = openByDealer.get(String(row.dealerId));
+    if (list) list.push(row);
+  }
+
+  if (rebalance) {
+    const excessIds: string[] = [];
+    for (const dealerId of dealerIds) {
+      const open = openByDealer.get(dealerId) || [];
+      const keep = open.slice(0, limit);
+      const excess = open.slice(limit);
+      openByDealer.set(dealerId, keep);
+      for (const row of excess) {
+        excessIds.push(String(row.id));
+      }
+    }
+    if (excessIds.length) {
+      // Bulk demote — Manage dealers can release thousands of over-cap Assigned rows.
+      const chunkSize = 500;
+      for (let i = 0; i < excessIds.length; i += chunkSize) {
+        const chunk = excessIds.slice(i, i + chunkSize);
+        await sequelize.query(
+          `
+          UPDATE "dealer_lead_assignments"
+          SET
+            "dealerId" = :poolDealerId,
+            "status" = 'queued',
+            "assignedAt" = NOW(),
+            "action" = NULL,
+            "callRemark" = NULL,
+            "nextFollowUpAt" = NULL,
+            "actionAt" = NULL,
+            "updatedAt" = NOW()
+          WHERE "id" IN (:excessIds)
+          `,
+          {
+            replacements: {
+              poolDealerId: POOL_UNASSIGNED_DEALER_ID,
+              excessIds: chunk
+            },
+            transaction
+          }
+        );
+      }
+      released = excessIds.length;
+    }
+  }
+
+  const openCount = new Map<string, number>();
+  for (const dealerId of dealerIds) {
+    openCount.set(dealerId, (openByDealer.get(dealerId) || []).length);
+  }
+
+  const sentinels = Array.from(HR_UPLOAD_UNASSIGNED_DEALER_SENTINELS)
+    .map((value) => `'${value.replace(/'/g, "''")}'`)
+    .join(', ');
+
+  // Unassigned / pool assignments for this batch — oldest first
+  const poolAssignments = await DealerLeadAssignment.findAll({
+    where: {
+      [Op.and]: [
+        LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE,
+        Sequelize.literal(`LOWER(TRIM("DealerLeadAssignment"."dealerId")) IN (${sentinels})`),
+        batchLeadClause,
+        { status: { [Op.in]: ['queued', 'assigned', 'active'] } }
+      ]
+    },
+    order: [
+      [Sequelize.literal('COALESCE("DealerLeadAssignment"."assignedAt", "DealerLeadAssignment"."createdAt")'), 'ASC'],
+      ['id', 'ASC']
+    ],
+    transaction,
+    lock: transaction.LOCK.UPDATE
+  });
+
+  // Leads in batch with no assignment row
+  const leadsWithoutAssignment = await CallingLead.findAll({
+    where: {
+      batchId,
+      [Op.and]: [
+        Sequelize.literal(`
+          NOT EXISTS (
+            SELECT 1 FROM "dealer_lead_assignments" AS da
+            WHERE da."leadId" = "CallingLead"."id"
+          )
+        `)
+      ]
+    },
+    order: [['createdAt', 'ASC'], ['id', 'ASC']],
+    transaction,
+    lock: transaction.LOCK.UPDATE
+  });
+
+  type Pending =
+    | { kind: 'assignment'; row: (typeof poolAssignments)[number] }
+    | { kind: 'lead'; lead: (typeof leadsWithoutAssignment)[number] };
+
+  const pending: Pending[] = [
+    ...poolAssignments.map((row) => ({ kind: 'assignment' as const, row })),
+    ...leadsWithoutAssignment.map((lead) => ({ kind: 'lead' as const, lead }))
+  ];
+
+  let cursor = 0;
+  for (const item of pending) {
+    let picked: string | null = null;
+    for (let i = 0; i < dealerIds.length; i += 1) {
+      const idx = (cursor + i) % dealerIds.length;
+      const dealerId = dealerIds[idx];
+      if ((openCount.get(dealerId) || 0) < limit) {
+        picked = dealerId;
+        cursor = idx + 1;
+        break;
+      }
+    }
+    if (!picked) break;
+
+    if (item.kind === 'assignment') {
+      await item.row.update(
+        {
+          dealerId: picked,
+          status: 'assigned',
+          assignedAt: now,
+          action: null,
+          callRemark: null,
+          nextFollowUpAt: null,
+          actionAt: null
+        },
+        { transaction }
+      );
+    } else {
+      await DealerLeadAssignment.create(
+        {
+          id: uuidv4(),
+          leadId: item.lead.id,
+          dealerId: picked,
+          assignedBy: assignedByUserId,
+          assignedAt: now,
+          status: 'assigned'
+        },
+        { transaction }
+      );
+    }
+    openCount.set(picked, (openCount.get(picked) || 0) + 1);
+    assigned += 1;
+  }
+
+  return { assigned, released };
+};
+
+/**
  * §15-C — round-robin assign all unassigned/pool leads in a batch to dealerIds.
  * Returns how many leads were moved to assigned.
+ * Prefer activeCapAssignUnassignedLeadsForBatch for Manage dealers (active_cap).
  */
 const roundRobinAssignUnassignedLeadsForBatch = async ({
   batchId,
@@ -4308,10 +4518,148 @@ export const getHrDealerAssignmentStats = async (_req: Request, res: Response): 
   }
 };
 
+/**
+ * §15-D — PATCH /hr/leads/uploads/:uploadId/dealers
+ * Replace (or merge) the eligible dealer pool on an upload batch.
+ * Does NOT reassign Assigned/Completed leads; FE calls assign-unassigned separately.
+ */
+export const updateHrUploadDealerPool = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const uploadId = String(req.params.uploadId || req.params.batchId || req.params.id || '').trim();
+    if (!uploadId) {
+      res.status(400).json({
+        success: false,
+        error: { code: 'VAL_001', message: 'uploadId is required' }
+      });
+      return;
+    }
+
+    const batch = await CallingLeadUploadBatch.findByPk(uploadId);
+    if (!batch) {
+      res.status(404).json({
+        success: false,
+        error: { code: 'NOT_001', message: 'Upload not found' }
+      });
+      return;
+    }
+
+    const modeRaw = String(req.body?.mode ?? 'replace')
+      .trim()
+      .toLowerCase();
+    const mode = modeRaw === 'add' ? 'add' : 'replace';
+
+    const incoming = Array.from(
+      new Set([
+        ...parseDealerIds(req.body?.dealerIds),
+        ...parseDealerIds(req.body?.dealer_ids),
+        ...parseDealerIds(req.body?.['dealerIds[]'])
+      ])
+    );
+
+    if (incoming.length === 0) {
+      res.status(400).json({
+        success: false,
+        error: { code: 'VAL_002', message: 'Select at least one dealer' }
+      });
+      return;
+    }
+
+    const dealers = await Dealer.findAll({
+      where: { id: { [Op.in]: incoming }, role: 'dealer', isActive: true },
+      attributes: ['id', 'firstName', 'lastName']
+    });
+    const foundIds = new Set(dealers.map((d) => d.id));
+    const missing = incoming.filter((id) => !foundIds.has(id));
+    if (missing.length > 0) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VAL_003',
+          message: `Dealer not found or inactive: ${missing[0]}`,
+          details: missing.map((id) => ({ field: 'dealerIds', message: `Invalid dealer id: ${id}` }))
+        }
+      });
+      return;
+    }
+
+    const existing = extractDealerIdsFromBatchPool(batch.assignedDealers);
+    const nextDealerIds =
+      mode === 'add' ? Array.from(new Set([...existing, ...incoming])) : incoming;
+
+    await batch.update({ assignedDealers: nextDealerIds });
+
+    const dealerById = new Map(dealers.map((d) => [d.id, d]));
+    // When mode=add, some ids may already be in pool but not in this request's findAll result set size —
+    // re-fetch full next pool for names.
+    const poolDealers =
+      nextDealerIds.length === dealers.length
+        ? dealers
+        : await Dealer.findAll({
+            where: { id: { [Op.in]: nextDealerIds } },
+            attributes: ['id', 'firstName', 'lastName']
+          });
+    for (const d of poolDealers) dealerById.set(d.id, d);
+
+    const dealersOut = nextDealerIds.map((id) => {
+      const d = dealerById.get(id);
+      const name = d
+        ? `${d.firstName || ''} ${d.lastName || ''}`.trim() || id
+        : id;
+      return {
+        id,
+        name,
+        firstName: d?.firstName || null,
+        lastName: d?.lastName || null
+      };
+    });
+
+    logInfo('HR upload dealer pool updated', {
+      uploadId: batch.id,
+      mode,
+      dealerCount: nextDealerIds.length,
+      userId: req.user?.id
+    });
+
+    emitRealtime(realtimeEvents.callingUploadsUpdated, {
+      batchId: batch.id,
+      assignedDealers: nextDealerIds,
+      source: 'upload-dealers',
+      mode,
+      at: new Date().toISOString()
+    });
+
+    res.json({
+      success: true,
+      uploadId: batch.id,
+      batchId: batch.id,
+      dealerIds: nextDealerIds,
+      dealers: dealersOut,
+      mode,
+      data: {
+        uploadId: batch.id,
+        batchId: batch.id,
+        dealerIds: nextDealerIds,
+        dealers: dealersOut,
+        mode
+      }
+    });
+  } catch (error) {
+    logError('HR update upload dealer pool error', error, {
+      uploadId: req.params.uploadId || req.params.batchId,
+      userId: req.user?.id
+    });
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
+};
+
 export const assignHrUploadUnassigned = async (req: Request, res: Response): Promise<void> => {
   /**
-   * §15-C — POST /hr/leads/uploads/:uploadId/assign-unassigned
-   * Round-robin all unassigned/pool leads in the batch onto upload.dealerIds → unassignedCount === 0.
+   * §15-C / §15-D — POST /hr/leads/uploads/:uploadId/assign-unassigned
+   * Default: active_cap (1 open lead / dealer) + rebalance.
+   * Opt-in only: assignmentMode=round_robin_all (assigns every Unassigned row).
    */
   try {
     const uploadId = String(req.params.uploadId || req.params.batchId || '').trim();
@@ -4364,18 +4712,56 @@ export const assignHrUploadUnassigned = async (req: Request, res: Response): Pro
     }
     dealerIds = dealers.map((d) => d.id);
 
+    const rawMode = String(
+      req.body?.assignmentMode ?? req.body?.assignment_mode ?? req.body?.mode ?? 'active_cap'
+    )
+      .trim()
+      .toLowerCase();
+    const assignAll =
+      rawMode === 'round_robin_all' ||
+      rawMode === 'round-robin-all' ||
+      rawMode === 'all' ||
+      rawMode === 'full';
+    const assignmentMode = assignAll ? 'round_robin_all' : 'active_cap';
+    const activeLimit = Math.max(
+      1,
+      Math.min(
+        50,
+        normalizeActiveLimitPerDealer(
+          req.body?.activeLimitPerDealer ?? req.body?.activeLeadsLimit ?? DEFAULT_ACTIVE_LIMIT_PER_DEALER
+        )
+      )
+    );
+    // Default rebalance on for active_cap (FE sends rebalance: true). Explicit false skips demotion.
+    const rebalance = !assignAll && req.body?.rebalance !== false;
+
     let assigned = 0;
+    let released = 0;
     await sequelize.transaction(async (transaction) => {
       await ensureCallingPoolDealerExists(transaction);
-      // Free stuck assigned/in_progress into pool first, then RR onto dealers.
+      // Free hours-old stuck work into pool; active_cap rebalance handles over-cap separately.
       await reclaimStuckCallingAssignments(transaction);
       const assignedByUserId = await resolveAssignedByUserId(req, transaction);
-      assigned = await roundRobinAssignUnassignedLeadsForBatch({
-        batchId: batch.id,
-        dealerIds,
-        assignedByUserId,
-        transaction
-      });
+
+      if (assignAll) {
+        assigned = await roundRobinAssignUnassignedLeadsForBatch({
+          batchId: batch.id,
+          dealerIds,
+          assignedByUserId,
+          transaction
+        });
+      } else {
+        const result = await activeCapAssignUnassignedLeadsForBatch({
+          batchId: batch.id,
+          dealerIds,
+          assignedByUserId,
+          activeLimit,
+          rebalance,
+          transaction
+        });
+        assigned = result.assigned;
+        released = result.released;
+      }
     });
 
     const countsMap = await buildHrUploadCountsForBatches([
@@ -4386,7 +4772,11 @@ export const assignHrUploadUnassigned = async (req: Request, res: Response): Pro
 
     logInfo('HR assign-unassigned completed', {
       uploadId: batch.id,
+      assignmentMode,
+      activeLimitPerDealer: assignAll ? null : activeLimit,
+      rebalance,
       assigned,
+      released,
       unassignedCount: liveCounts.unassignedCount,
       assignedCount: liveCounts.assignedCount,
       userId: req.user?.id
@@ -4396,7 +4786,8 @@ export const assignHrUploadUnassigned = async (req: Request, res: Response): Pro
       batchId: batch.id,
       assignedAt: new Date().toISOString(),
       assignedDealers: dealerIds,
-      source: 'assign-unassigned'
+      source: 'assign-unassigned',
+      assignmentMode
     });
     emitRealtime(realtimeEvents.callingActionsUpdated, {
       source: 'assign-unassigned',
@@ -4404,18 +4795,26 @@ export const assignHrUploadUnassigned = async (req: Request, res: Response): Pro
     });
 
     const countFields = hrUploadCountsToApi(liveCounts);
+    const modeFields = {
+      assignmentMode,
+      activeLimitPerDealer: assignAll ? null : activeLimit,
+      rebalance: assignAll ? false : rebalance,
+      released
+    };
     res.json({
       success: true,
       uploadId: batch.id,
       batchId: batch.id,
       assigned,
       unassignedRemaining: liveCounts.unassignedCount,
+      ...modeFields,
       ...countFields,
       data: {
         uploadId: batch.id,
         batchId: batch.id,
         assigned,
         unassignedRemaining: liveCounts.unassignedCount,
+        ...modeFields,
         ...countFields
       }
     });
@@ -4466,7 +4865,8 @@ export const getHrLeadUploadBatches = async (req: Request, res: Response): Promi
         {
           id: dealer.id,
           firstName: dealer.firstName,
-          lastName: dealer.lastName
+          lastName: dealer.lastName,
+          name: `${dealer.firstName || ''} ${dealer.lastName || ''}`.trim() || dealer.id
         }
       ])
     );
@@ -4482,7 +4882,16 @@ export const getHrLeadUploadBatches = async (req: Request, res: Response): Promi
         dealerIds: assignedDealers,
         dealers: assignedDealers
           .map((dealerId) => dealerById.get(String(dealerId)))
-          .filter((dealer): dealer is { id: string; firstName: string; lastName: string } => Boolean(dealer)),
+          .filter(
+            (
+              dealer
+            ): dealer is {
+              id: string;
+              firstName: string;
+              lastName: string;
+              name: string;
+            } => Boolean(dealer)
+          ),
         ...hrUploadCountsToApi(liveCounts)
       };
     });
@@ -4505,11 +4914,20 @@ export const getHrLeadUploadBatches = async (req: Request, res: Response): Promi
             assignedDealers,
             dealers: assignedDealers
               .map((dealerId) => dealerById.get(String(dealerId)))
-              .filter((dealer): dealer is { id: string; firstName: string; lastName: string } => Boolean(dealer)),
+              .filter(
+                (
+                  dealer
+                ): dealer is {
+                  id: string;
+                  firstName: string;
+                  lastName: string;
+                  name: string;
+                } => Boolean(dealer)
+              ),
             assignedDealerDetails: assignedDealers.map((dealerId) => ({
               dealerId,
               dealerName: dealerById.has(String(dealerId))
-                ? `${dealerById.get(String(dealerId))!.firstName || ''} ${dealerById.get(String(dealerId))!.lastName || ''}`.trim()
+                ? dealerById.get(String(dealerId))!.name
                 : ''
             })),
             ...hrUploadCountsToApi(liveCounts)

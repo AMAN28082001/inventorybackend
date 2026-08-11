@@ -33,8 +33,8 @@ import {
   updateVisitorPassword,
   deleteVisitor
 } from '../controllers/adminVisitorController';
-import { getAdminCallingActions, getAdminCallingActionsSummary, getHrLeadUploadBatchRows, assignHrUploadUnassigned } from '../controllers/callingLeadController';
-import { assignUnassignedLeadsSchema } from '../validations/callingLeadValidations';
+import { getAdminCallingActions, getAdminCallingActionsSummary, getHrLeadUploadBatchRows, assignHrUploadUnassigned, updateHrUploadDealerPool } from '../controllers/callingLeadController';
+import { assignUnassignedLeadsSchema, updateUploadDealerPoolSchema } from '../validations/callingLeadValidations';
 import {
   listInstallationTeams,
   createInstallationTeam,
@@ -46,7 +46,7 @@ import {
 import {
   authenticate,
   authorizeAdmin,
-  authorizeDealerOrAccountManager,
+  authorizeAccountManagerOrAdminPayment,
   authorizeMeteringOrAdmin
 } from '../middleware/authQuotation';
 import { validate } from '../middleware/validate';
@@ -139,7 +139,7 @@ router.patch(
  */
 router.patch('/quotations/:quotationId/payment-details', (req, res) => {
   if (isSiteCostOnlyPaymentDetailsBody(req.body as Record<string, unknown>)) {
-    return authorizeDealerOrAccountManager(req, res, () => {
+    return authorizeAccountManagerOrAdminPayment(req, res, () => {
       validate(updatePaymentDetailsSchema)(req, res, () => {
         void updateQuotationPaymentDetails(req, res);
       });
@@ -155,7 +155,7 @@ router.patch('/quotations/:quotationId/payment-details', (req, res) => {
 /** §30 optional alias — Account Management Cost of site (hard refresh / multi-device). */
 router.patch(
   '/quotations/:quotationId/site-cost',
-  authorizeDealerOrAccountManager,
+  authorizeAccountManagerOrAdminPayment,
   validate(updatePaymentDetailsSchema),
   updateQuotationPaymentDetails
 );
@@ -311,6 +311,11 @@ router.patch(
 router.delete('/installation/team-logins/:teamId', deleteInstallationTeam);
 router.delete('/installation-team-logins/:teamId', deleteInstallationTeam);
 router.get('/leads/uploads/:batchId', getHrLeadUploadBatchRows);
+router.patch(
+  '/leads/uploads/:uploadId/dealers',
+  validate(updateUploadDealerPoolSchema),
+  updateHrUploadDealerPool
+);
 router.post(
   '/leads/uploads/:uploadId/assign-unassigned',
   validate(assignUnassignedLeadsSchema),
