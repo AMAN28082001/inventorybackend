@@ -62,6 +62,7 @@
 | 50 | High | Unified Users create/edit + city persist/`?cities=` (H–I) | **Done** | `BACKEND_UNIFIED_USERS_AND_CITY_FILTER.md` |
 | 51 | High | Visit dropdown = Visitor-checkbox users (e.g. Saurav/`aman4119`); single assign; Transfer on Assign form + visit cards | **Done** | `BACKEND_VISIT_TRANSFER.md` |
 | 52 | High | Dealer/visitor lists from Admin checkboxes — quotation union (HR/Jagdish) + visitor union (visits/Saurav) | **Done** | `BACKEND_ACCESS_BASED_LISTS.md` |
+| 53 | High | Non-DCR Waaree 125kW @ ₹35,62,500 + catalog 125kW / 705W | **Done** | `BACKEND_NON_DCR_125KW_WAAREE.md` |
 
 **Deploy before QA:**
 
@@ -82,6 +83,7 @@ yarn migrate
 | `20260803120000-add-loan-cash-amount-to-quotations.js` | `loan_amount` / `cash_amount` for Cash + loan approve (§28) |
 | `20260806120000-add-site-cost-to-quotations.js` | `site_cost` for Account Management Cost of site (§30) |
 | `20260808120000-seed-pricing-tables-aug-2026.js` | Seed Aug 2026 FE pricing catalog into `system_config.pricing_tables` (§2.6.4) |
+| `20260817160000-add-non-dcr-waaree-125kw-pricing.js` | Merge Non-DCR Waaree 125kW @ ₹35,62,500 + catalog `125kW` / `705W` |
 
 After migrate, optional backfill: `npx ts-node scripts/backfill-system-kw.ts`
 
@@ -2620,6 +2622,7 @@ Example: `{ "role": "hr", "access": ["hr","quotation","visitor"] }` must open de
 | **`BACKEND_PROPERTY_DOCUMENT_OPTIONAL.md`** | **§18** stop requiring `propertyDocumentPdf` on PATCH …/documents |
 | **§19** (this file) | Non-DCR 80kW set — Renew Energy / Waaree / Adani |
 | **`BACKEND_NON_DCR_80KW.md`** | **§19** PDF range keys + pricing-tables 80kW rows |
+| **`BACKEND_NON_DCR_125KW_WAAREE.md`** | Non-DCR Waaree **125kW** @ ₹35,62,500 + catalog `125kW` / `705W` |
 | **§27** (this file) | Crompton DCR set — Premier Energy 600–610W + Crompton 3.6kW |
 | **`BACKEND_PRICING_TABLES.md`** | **§2.6.4** Admin Pricing GET + PUT |
 | **`BACKEND_PRICING_TABLES_CONTROLLER.ts`** | **§2.6.4** copy-paste GET/PUT handlers |

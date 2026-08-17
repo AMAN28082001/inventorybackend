@@ -4,10 +4,12 @@ import {
   DEFAULT_ACDB_OPTIONS,
   DEFAULT_DCDB_OPTIONS,
   DEFAULT_INVERTER_BRANDS,
+  DEFAULT_INVERTER_SIZES,
   DEFAULT_INVERTER_TYPES,
   DEFAULT_METER_BRANDS,
   DEFAULT_PANEL_BRANDS,
   DEFAULT_PANEL_SIZES,
+  DEFAULT_STRUCTURE_SIZES,
   DEFAULT_STRUCTURE_TYPES,
   normalizePanelSizeLabel
 } from './defaultProductCatalog';
@@ -45,12 +47,14 @@ export const isPanelSizeAllowed = (selectedSize: unknown, catalogSizes: unknown)
       .map((v) => normalizePanelSizeLabel(v))
       .filter(Boolean)
   );
-  if (allowed.size === 0) {
-    return selected.some((candidate) =>
-      (DEFAULT_PANEL_SIZES as readonly string[]).includes(candidate)
-    );
+  if (selected.some((candidate) => allowed.has(candidate))) return true;
+  if (
+    selected.some((candidate) => (DEFAULT_PANEL_SIZES as readonly string[]).includes(candidate))
+  ) {
+    return true;
   }
-  return selected.some((candidate) => allowed.has(candidate));
+  // Free-text wattage (e.g. 705W) must persist as selected — never rewrite to 615W.
+  return selected.some((candidate) => /^\d+(\.\d+)?W$/i.test(candidate));
 };
 
 /** Ensures DCR panel sizes + combined brands exist even when system_config is stale. */
@@ -69,11 +73,11 @@ export const normalizeProductCatalog = (catalog: any): any => {
     inverters: {
       types: mergeUniqueStrings(catalog?.inverters?.types, DEFAULT_INVERTER_TYPES),
       brands: mergeUniqueStrings(catalog?.inverters?.brands, DEFAULT_INVERTER_BRANDS),
-      sizes: Array.isArray(catalog?.inverters?.sizes) ? catalog.inverters.sizes : []
+      sizes: mergeUniqueStrings(catalog?.inverters?.sizes, DEFAULT_INVERTER_SIZES)
     },
     structures: {
       types: mergeUniqueStrings(catalog?.structures?.types, DEFAULT_STRUCTURE_TYPES),
-      sizes: Array.isArray(catalog?.structures?.sizes) ? catalog.structures.sizes : []
+      sizes: mergeUniqueStrings(catalog?.structures?.sizes, DEFAULT_STRUCTURE_SIZES)
     },
     meters: {
       brands: mergeUniqueStrings(catalog?.meters?.brands, DEFAULT_METER_BRANDS)

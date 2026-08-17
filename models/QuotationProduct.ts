@@ -46,6 +46,11 @@ interface QuotationProductAttributes {
   dcdb?: string | null;
   dcdbPrice?: number | null;
 
+  /** Earthing wire: "As per the set" | "2mm" | "4mm" | "6mm" | custom text */
+  earthingWireSize?: string | null;
+  /** Earthing brand: "As per the set" | "JMP" | "Polycab" | … | custom */
+  earthingWireBrand?: string | null;
+
   // Battery (for hybrid/off-grid)
   hybridInverter?: string | null;
   batteryCapacity?: string | null;
@@ -73,7 +78,7 @@ interface QuotationProductAttributes {
   finalAmount?: number | null;     // Final amount (Subtotal - Subsidy, discount NOT applied)
 }
 
-interface QuotationProductCreationAttributes extends Optional<QuotationProductAttributes, 'id' | 'phase' | 'panelBrand' | 'panelSize' | 'panelQuantity' | 'panelPrice' | 'dcrPanelBrand' | 'dcrPanelSize' | 'dcrPanelQuantity' | 'nonDcrPanelBrand' | 'nonDcrPanelSize' | 'nonDcrPanelQuantity' | 'inverterType' | 'inverterBrand' | 'inverterSize' | 'inverterPrice' | 'structureType' | 'structureSize' | 'structurePrice' | 'meterBrand' | 'meterPrice' | 'acCableBrand' | 'acCableSize' | 'acCablePrice' | 'dcCableBrand' | 'dcCableSize' | 'dcCablePrice' | 'acdb' | 'acdbPrice' | 'dcdb' | 'dcdbPrice' | 'hybridInverter' | 'batteryCapacity' | 'batteryPrice' | 'centralSubsidy' | 'stateSubsidy' | 'pdfUsePanelSizeRange' | 'pdfUseInverterBrandOptions' | 'pdfCommercialSet' | 'pdfPanelRangeKey' | 'pdfDcrPanelRangeKey' | 'pdfNonDcrPanelRangeKey' | 'panelType' | 'inaDcrPackage' | 'finalAmount'> { }
+interface QuotationProductCreationAttributes extends Optional<QuotationProductAttributes, 'id' | 'phase' | 'panelBrand' | 'panelSize' | 'panelQuantity' | 'panelPrice' | 'dcrPanelBrand' | 'dcrPanelSize' | 'dcrPanelQuantity' | 'nonDcrPanelBrand' | 'nonDcrPanelSize' | 'nonDcrPanelQuantity' | 'inverterType' | 'inverterBrand' | 'inverterSize' | 'inverterPrice' | 'structureType' | 'structureSize' | 'structurePrice' | 'meterBrand' | 'meterPrice' | 'acCableBrand' | 'acCableSize' | 'acCablePrice' | 'dcCableBrand' | 'dcCableSize' | 'dcCablePrice' | 'acdb' | 'acdbPrice' | 'dcdb' | 'dcdbPrice' | 'earthingWireSize' | 'earthingWireBrand' | 'hybridInverter' | 'batteryCapacity' | 'batteryPrice' | 'centralSubsidy' | 'stateSubsidy' | 'pdfUsePanelSizeRange' | 'pdfUseInverterBrandOptions' | 'pdfCommercialSet' | 'pdfPanelRangeKey' | 'pdfDcrPanelRangeKey' | 'pdfNonDcrPanelRangeKey' | 'panelType' | 'inaDcrPackage' | 'finalAmount'> { }
 
 class QuotationProduct extends Model<QuotationProductAttributes, QuotationProductCreationAttributes> implements QuotationProductAttributes {
   public id!: string;
@@ -109,6 +114,8 @@ class QuotationProduct extends Model<QuotationProductAttributes, QuotationProduc
   public acdbPrice!: number | null;
   public dcdb!: string | null;
   public dcdbPrice!: number | null;
+  public earthingWireSize!: string | null;
+  public earthingWireBrand!: string | null;
   public hybridInverter!: string | null;
   public batteryCapacity!: string | null;
   public batteryPrice!: number | null;
@@ -260,6 +267,14 @@ QuotationProduct.init(
     },
     dcdbPrice: {
       type: DataTypes.DECIMAL(12, 2),
+      allowNull: true
+    },
+    earthingWireSize: {
+      type: DataTypes.STRING(100),
+      allowNull: true
+    },
+    earthingWireBrand: {
+      type: DataTypes.STRING(100),
       allowNull: true
     },
     hybridInverter: {

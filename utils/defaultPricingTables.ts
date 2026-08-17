@@ -148,6 +148,86 @@ export const JUNE_2026_DCR_PRICING_DEFAULTS = [
   }
 ];
 
+/** Non-DCR Waaree 125kW set — Aug 2026 (₹35,62,500). */
+export const NON_DCR_WAAREE_125KW_PRICING = {
+  systemSize: '125kW',
+  phase: '3-Phase' as const,
+  inverterSize: '125kW',
+  panelType: 'Waaree',
+  price: 3562500
+};
+
+export const NON_DCR_WAAREE_125KW_SYSTEM_CONFIG = {
+  systemType: 'non-dcr' as const,
+  systemSize: '125kW',
+  phase: '3-Phase' as const,
+  panelBrand: 'Waaree',
+  panelSize: '580W',
+  inverterBrand: 'Vsole/Xwatt',
+  inverterSize: '125kW',
+  inverterType: 'String Inverter',
+  structureType: 'GI Structure',
+  structureSize: '125kW',
+  meterBrand: 'L&T',
+  acCableBrand: 'Polycab',
+  acCableSize: 'As per Set',
+  dcCableBrand: 'Polycab',
+  dcCableSize: 'As per Set',
+  acdb: 'Havells (3-Phase)',
+  dcdb: 'Havells (3-Phase)'
+};
+
+const normSizeKey = (value: unknown): string =>
+  String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '');
+
+const isWaareeBrand = (value: unknown): boolean =>
+  String(value || '')
+    .trim()
+    .toLowerCase() === 'waaree';
+
+export const hasNonDcrWaaree125KwRow = (
+  rows: Array<{ systemSize?: string; phase?: string; panelType?: string }>
+): boolean =>
+  rows.some(
+    (row) =>
+      normSizeKey(row.systemSize) === '125kw' &&
+      normSizeKey(row.phase).includes('3') &&
+      isWaareeBrand(row.panelType)
+  );
+
+export const hasNonDcrWaaree125KwConfig = (
+  rows: Array<{ systemType?: string; systemSize?: string; phase?: string; panelBrand?: string }>
+): boolean =>
+  rows.some(
+    (row) =>
+      String(row.systemType || '')
+        .trim()
+        .toLowerCase()
+        .replace(/_/g, '-') === 'non-dcr' &&
+      normSizeKey(row.systemSize) === '125kw' &&
+      normSizeKey(row.phase).includes('3') &&
+      isWaareeBrand(row.panelBrand)
+  );
+
+export const ensureNonDcrWaaree125KwPricing = <T extends { systemSize?: string; phase?: string; panelType?: string }>(
+  rows: T[]
+): T[] => {
+  if (hasNonDcrWaaree125KwRow(rows)) return rows;
+  return [...rows, NON_DCR_WAAREE_125KW_PRICING as unknown as T];
+};
+
+export const ensureNonDcrWaaree125KwSystemConfigs = <
+  T extends { systemType?: string; systemSize?: string; phase?: string; panelBrand?: string }
+>(
+  rows: T[]
+): T[] => {
+  if (hasNonDcrWaaree125KwConfig(rows)) return rows;
+  return [...rows, NON_DCR_WAAREE_125KW_SYSTEM_CONFIG as unknown as T];
+};
+
 /** Non-DCR system pricing defaults (no central subsidy on frontend). */
 export const JUNE_2026_NON_DCR_PRICING_DEFAULTS = [
   {
@@ -199,7 +279,8 @@ export const JUNE_2026_NON_DCR_PRICING_DEFAULTS = [
     inverterSize: '80kW',
     panelType: 'Adani',
     price: 2590000
-  }
+  },
+  NON_DCR_WAAREE_125KW_PRICING
 ];
 
 /** BOTH (DCR + non-DCR split) pricing defaults. */
@@ -424,6 +505,7 @@ export const JUNE_2026_SYSTEM_CONFIG_DEFAULTS = [
     acdb: 'Havells (3-Phase)',
     dcdb: 'Havells (3-Phase)'
   },
+  NON_DCR_WAAREE_125KW_SYSTEM_CONFIG,
   {
     systemType: 'non-dcr' as const,
     systemSize: '80kW',
@@ -620,7 +702,7 @@ export function mergeDefaultDcrPricing(stored: unknown): DcrRow[] {
 
 export function mergeDefaultNonDcrPricing(stored: unknown): NonDcrRow[] {
   if (Array.isArray(stored)) {
-    return stored.filter(
+    const filtered = stored.filter(
       (row): row is NonDcrRow =>
         !!row &&
         typeof row === 'object' &&
@@ -628,11 +710,12 @@ export function mergeDefaultNonDcrPricing(stored: unknown): NonDcrRow[] {
         !!(row as NonDcrRow).phase &&
         !!(row as NonDcrRow).panelType
     );
+    return ensureNonDcrWaaree125KwPricing(filtered);
   }
   try {
-    return loadPricingTablesSeed().nonDcr as NonDcrRow[];
+    return ensureNonDcrWaaree125KwPricing(loadPricingTablesSeed().nonDcr as NonDcrRow[]);
   } catch {
-    return [...JUNE_2026_NON_DCR_PRICING_DEFAULTS];
+    return ensureNonDcrWaaree125KwPricing([...JUNE_2026_NON_DCR_PRICING_DEFAULTS]);
   }
 }
 
@@ -656,7 +739,7 @@ export function mergeDefaultBothPricing(stored: unknown): BothRow[] {
 
 export function mergeDefaultSystemConfigs(stored: unknown): SystemConfigRow[] {
   if (Array.isArray(stored)) {
-    return stored.filter(
+    const filtered = stored.filter(
       (row): row is SystemConfigRow =>
         !!row &&
         typeof row === 'object' &&
@@ -664,10 +747,11 @@ export function mergeDefaultSystemConfigs(stored: unknown): SystemConfigRow[] {
         !!(row as SystemConfigRow).systemSize &&
         !!(row as SystemConfigRow).panelBrand
     );
+    return ensureNonDcrWaaree125KwSystemConfigs(filtered);
   }
   try {
-    return loadPricingTablesSeed().systemConfigs as SystemConfigRow[];
+    return ensureNonDcrWaaree125KwSystemConfigs(loadPricingTablesSeed().systemConfigs as SystemConfigRow[]);
   } catch {
-    return [...JUNE_2026_SYSTEM_CONFIG_DEFAULTS];
+    return ensureNonDcrWaaree125KwSystemConfigs([...JUNE_2026_SYSTEM_CONFIG_DEFAULTS]);
   }
 }

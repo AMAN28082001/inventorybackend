@@ -1357,6 +1357,8 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
       acdbPrice: products.acdbPrice,
       dcdb: packageProducts.dcdb ?? products.dcdb,
       dcdbPrice: products.dcdbPrice,
+      earthingWireSize: products.earthingWireSize ?? products.earthing_wire_size ?? null,
+      earthingWireBrand: products.earthingWireBrand ?? products.earthing_wire_brand ?? null,
       hybridInverter: products.hybridInverter,
       batteryCapacity: products.batteryCapacity,
       batteryPrice: products.batteryPrice,

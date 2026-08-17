@@ -251,6 +251,10 @@ export function quotationProductsApiFields(
     dcCableSize: plainProducts.dcCableSize ?? plainProducts.dc_cable_size,
     acdb: plainProducts.acdb,
     dcdb: plainProducts.dcdb,
+    earthingWireSize: plainProducts.earthingWireSize ?? plainProducts.earthing_wire_size,
+    earthing_wire_size: plainProducts.earthingWireSize ?? plainProducts.earthing_wire_size,
+    earthingWireBrand: plainProducts.earthingWireBrand ?? plainProducts.earthing_wire_brand,
+    earthing_wire_brand: plainProducts.earthingWireBrand ?? plainProducts.earthing_wire_brand,
     hybridInverter: plainProducts.hybridInverter ?? plainProducts.hybrid_inverter,
     batteryCapacity: plainProducts.batteryCapacity ?? plainProducts.battery_capacity,
     batteryPrice:

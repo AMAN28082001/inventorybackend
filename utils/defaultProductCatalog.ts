@@ -42,12 +42,52 @@ export const DEFAULT_PANEL_SIZES = [
   '600W',
   '605W',
   '610W',
+  '615W',
   '620W',
   '625W',
-  '630W'
+  '630W',
+  '640W',
+  '650W',
+  '700W',
+  '705W'
 ] as const;
 
 export const DEFAULT_INVERTER_TYPES = ['String Inverter', 'Hybrid Inverter'] as const;
+
+/** Large Non-DCR packages (80 / 100 / 125kW) must validate when DB catalog is stale. */
+export const DEFAULT_INVERTER_SIZES = [
+  '3kW',
+  '3.6kW',
+  '5kW',
+  '6kW',
+  '8kW',
+  '10kW',
+  '12kW',
+  '15kW',
+  '20kW',
+  '25kW',
+  '30kW',
+  '50kW',
+  '80kW',
+  '100kW',
+  '125kW'
+] as const;
+
+export const DEFAULT_STRUCTURE_SIZES = [
+  '1kW',
+  '2kW',
+  '3kW',
+  '5kW',
+  '10kW',
+  '15kW',
+  '20kW',
+  '25kW',
+  '30kW',
+  '50kW',
+  '80kW',
+  '100kW',
+  '125kW'
+] as const;
 
 export const DEFAULT_INVERTER_BRANDS = [
   'Growatt',

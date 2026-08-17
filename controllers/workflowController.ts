@@ -177,7 +177,9 @@ const mapInstallerProducts = (products: any, customPanels: any[]) => {
     dcCableBrand: products.dcCableBrand || null,
     dcCableSize: products.dcCableSize || null,
     acdb: products.acdb || null,
-    dcdb: products.dcdb || null
+    dcdb: products.dcdb || null,
+    earthingWireSize: products.earthingWireSize || products.earthing_wire_size || null,
+    earthingWireBrand: products.earthingWireBrand || products.earthing_wire_brand || null
   };
 };
 

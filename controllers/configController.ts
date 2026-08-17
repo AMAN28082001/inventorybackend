@@ -8,7 +8,9 @@ import {
   mergeDefaultNonDcrPricing,
   mergeDefaultBothPricing,
   mergeDefaultSystemConfigs,
-  buildDcrPricingMatrix
+  buildDcrPricingMatrix,
+  ensureNonDcrWaaree125KwPricing,
+  ensureNonDcrWaaree125KwSystemConfigs
 } from '../utils/defaultPricingTables';
 import { normalizeProductCatalog } from '../utils/productCatalogNormalize';
 import {
@@ -492,6 +494,15 @@ export const updatePricingTables = async (req: Request, res: Response): Promise<
         : loadPricingTablesSeed();
     // Replace each array key present in body (do not append). Unspecified keys kept from base.
     const merged = mergePricingTablesPayload(base, pricingTables);
+    merged.nonDcr = ensureNonDcrWaaree125KwPricing(merged.nonDcr || []);
+    merged.systemConfigs = ensureNonDcrWaaree125KwSystemConfigs(
+      (merged.systemConfigs || []) as Array<{
+        systemType?: string;
+        systemSize?: string;
+        phase?: string;
+        panelBrand?: string;
+      }>
+    );
     const configValue = JSON.stringify(merged);
 
     if (existingConfig) {
