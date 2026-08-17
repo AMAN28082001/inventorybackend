@@ -1,11 +1,13 @@
 # Backend — HR Manage dealers (Uploaded Data)
 
-**Frontend:** HR → Uploaded Data → **Add dealers**  
+**Frontend:** HR → Uploaded Data → **Add dealers** / Assignment → **Select Dealers**  
 **Code:** `app/dashboard/hr/page.tsx` · `lib/api.ts` (`updateUploadDealerPool`, `assignUnassignedLeads`)  
-**Related:** `BACKEND_ASSIGN_UNASSIGNED.ts` · HANDOFF §15-C · dealer queue `BACKEND_CALLING_QUEUE_CURRENT.ts`
+**Related:** `BACKEND_ASSIGN_UNASSIGNED.ts` · `BACKEND_USER_ACCESS.md` · `BACKEND_ACCESS_BASED_LISTS.md` · dealer queue `BACKEND_CALLING_QUEUE_CURRENT.ts`
 
 HR no longer has a separate **Assign unassigned** button.  
 **Add dealers** = pick the batch pool (check/uncheck) → save → FE calls **active_cap** assign (1 open lead per dealer). Rest stay **Unassigned** until Complete → `/next`.
+
+**UI rule (live):** Manage dealers + Select Dealers = **all active users with Quotation access** — dealers **and** visitors/ops who have the Quotation checkbox (not dealers-table-only). Example: visitor **Jagdish** with `access: ["visitor","quotation"]` must appear and be saveable in the pool.
 
 **Bug to fix:** `assignmentMode: "round_robin_all"` dumped every row into Assigned (e.g. Assigned **4916**). That mode must **not** be the default for Manage dealers.
 
@@ -20,8 +22,56 @@ HR no longer has a separate **Assign unassigned** button.
 | **C** | `POST …/assign-unassigned` with **`active_cap` + `rebalance`** (1 lead/dealer) | Assigned stays ~full CSV size; Unassigned never recovers |
 | **D** | GET uploads list returns updated `dealerIds` / names + counts | UI badges/names stale after save |
 | **E** | Dealer `GET …/calling-queue/next` claims next Unassigned after Complete | Dealer stuck after finishing 1 lead |
+| **F** | Quotation-assignable **union on `GET /hr/dealers`** (HR token, not admin-only); include visitors/ops with `"quotation"`; pool accepts their uuids | Jagdish missing for HR login; pool rejects visitor uuid |
 
 Optional: `POST …/add-dealers` with `mode: "replace"`. Prefer **A**.
+
+---
+
+## F) Quotation-access pool (union — not dealers table only)
+
+HR Manage dealers / Select Dealers must list anyone with **Quotation** checked in Admin.
+
+```http
+GET /api/hr/dealers?isActive=true&includeAccessUsers=true&access=quotation
+Authorization: Bearer <HR token>   ← must work without admin
+```
+
+Full union rules: `BACKEND_ACCESS_BASED_LISTS.md` **L4a**.
+
+**Critical:** Returning only the dealers table is insufficient. Visitor rows with Quotation checked (e.g. **Jagdish** / `jpyadav5793`) must be in this response for an HR login.
+
+Each row must include:
+
+```json
+{
+  "id": "dealer-or-visitor-or-ops-uuid",
+  "username": "jpyadav5793",
+  "firstName": "jagdish prasad",
+  "lastName": "yadav",
+  "mobile": "…",
+  "email": "…",
+  "isActive": true,
+  "role": "visitor",
+  "access": ["visitor", "quotation"],
+  "permissions": ["visitor", "quotation"]
+}
+```
+
+### Eligibility
+
+| Include | Exclude |
+|---------|---------|
+| Dealers with `"quotation"` (or legacy empty access + role dealer) | No `"quotation"` when access is set |
+| **Visitors** with `"quotation"` | Visitor-only / hr-only / admin-only |
+| Ops with `"quotation"` | `isActive === false` |
+
+### On pool replace / assign
+
+1. Accept ids from **any** of those tables if quotation-eligible.
+2. Reject inactive / no-quotation → `400` / `VAL_001`.
+3. Do **not** reject solely because id is not in the dealers table.
+4. Calling queue must resolve leads for that assignee id even if `role` is `visitor` (**L6**).
 
 ---
 

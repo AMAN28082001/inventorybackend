@@ -57,6 +57,11 @@
 | 45 | High | Account Management siteCost (DB-only, no localStorage) + AM installment cap | **Done** | §30–§31 / `BACKEND_ACCOUNT_PAYMENT_MANAGEMENT.md` |
 | 46 | High | Dealer Payments tab (read-only approved list + payment fields) | **Done** | §32 / `BACKEND_DEALER_PAYMENTS.md` |
 | 47 | High | HR Manage dealers — replace pool + active_cap assign (1/dealer) | **Done** | §15-D / `BACKEND_MANAGE_DEALERS.md` |
+| 48 | High | Admin Users tab — `access[]` CRUD + login JWT (A–E) | **Done** | `BACKEND_USER_ACCESS.md` |
+| 49 | High | Multi-access guards — Quotation/Visitor even if role is `hr` (F–G) | **Done** | `BACKEND_USER_ACCESS.md` §F–§G |
+| 50 | High | Unified Users create/edit + city persist/`?cities=` (H–I) | **Done** | `BACKEND_UNIFIED_USERS_AND_CITY_FILTER.md` |
+| 51 | High | Visit dropdown = Visitor-checkbox users (e.g. Saurav/`aman4119`); single assign; Transfer on Assign form + visit cards | **Done** | `BACKEND_VISIT_TRANSFER.md` |
+| 52 | High | Dealer/visitor lists from Admin checkboxes — quotation union (HR/Jagdish) + visitor union (visits/Saurav) | **Done** | `BACKEND_ACCESS_BASED_LISTS.md` |
 
 **Deploy before QA:**
 
@@ -2549,6 +2554,44 @@ Submit installments with total paid = AM subtotal → **200**. Refresh → phase
 
 ---
 
+## 33. Admin Users + multi-access Quotation / HR / Visitor (A–G)
+
+**Frontend:** Admin → **Users** · access checkboxes · single `/login` · switch (Quotation / HR / Visitor / …)  
+**Full handoff:** **`BACKEND_USER_ACCESS.md`** · **`BACKEND_USER_ACCESS.ts`**
+
+**FE-only (no API):** nav header merge, Quotation dropdown, removing navbar **New Quotation**.
+
+**Must ship A–G** (this repo: **Done**):
+
+| # | What |
+|---|------|
+| **A–D** | Persist/return `access` on dealers + account-managers CRUD |
+| **E** | Login returns `user.access` + JWT `access[]` |
+| **F** | Guard by `role` **or** `access` |
+| **G** | Quotation + Visitor APIs allow when `access` has those keys even if `role` is `hr` |
+
+Example: `{ "role": "hr", "access": ["hr","quotation","visitor"] }` must open dealer/quotation and visitor APIs without **AUTH_004**; keep primary role as-is.
+
+### Backend delivered
+
+- [x] `access` on `dealers` + `account_managers`; GET/PUT dealers; GET/POST/PUT account-managers
+- [x] `POST /auth/login` → `user.access` + JWT claim (role unchanged)
+- [x] Middleware: allow if `role` **or** `access` matches section
+- [x] `attachMultiAccessActors` — `req.dealer` / `req.visitor` from JWT `id` or same username/email
+- [x] `GET /quotations` dealer-scoped when acting as quotation (not AM approved-only)
+- [x] `GET /dealers/me` **200** even without a `dealers` row
+- [x] HR-only (`access: ["hr"]`) still **403** on quotation/visitor APIs
+
+### QA
+
+1. Users tab badges persist after Edit checkboxes + reload.
+2. `["hr","quotation"]` → `GET /quotations` **200** (own/empty, not AUTH_004); create quotation; calling-queue **200** or empty lead.
+3. `["hr","visitor"]` → `GET /visitors/me/visits?status=all` **200** (empty `[]` OK).
+4. `["hr"]` only → quotation/visitor APIs **403**.
+5. Pure dealer / pure visitor unchanged.
+
+---
+
 ## Related docs
 
 | Doc | Section |
@@ -2594,4 +2637,5 @@ Submit installments with total paid = AM subtotal → **200**. Refresh → phase
 | **§31** (this file) | AM installment paid vs subtotal (not payable-after-discount) |
 | **`BACKEND_ACCOUNT_PAYMENT_MANAGEMENT.md`** | **§30–§31** pack — site cost + installment payment cap |
 | **`BACKEND_DEALER_PAYMENTS.md`** | **§32** Dealer Payments tab (read-only) |
+| **`BACKEND_USER_ACCESS.md`** | Admin Users `access[]` (A–G) + multi-access Quotation/HR/Visitor |
 

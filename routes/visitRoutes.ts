@@ -11,7 +11,8 @@ import {
   markVisitIncomplete,
   rescheduleVisit,
   rejectVisit,
-  deleteVisit
+  deleteVisit,
+  transferVisit
 } from '../controllers/visitController';
 import { authenticate, authorizeDealer, authorizeVisitor, authorizeVisitorOrQuotationsDealer } from '../middleware/authQuotation';
 import { validate } from '../middleware/validate';
@@ -394,7 +395,23 @@ router.post('/:visitId/upload', authenticate, authorizeVisitor, handleSingleVisi
 router.post('/:visitId/media-upload', authenticate, authorizeVisitor, handleSingleVisitUploadMultipart, uploadVisitMedia);
 router.post('/:visitId/complete/upload', authenticate, authorizeVisitor, handleSingleVisitUploadMultipart, uploadVisitMedia);
 
-router.patch('/:visitId', authenticate, validate(patchVisitSiteSchema), patchVisitSiteDimensions);
+router.patch('/:visitId/transfer', authenticate, authorizeDealer, transferVisit);
+router.patch('/:visitId/reassign', authenticate, authorizeDealer, transferVisit);
+
+router.patch(
+  '/:visitId',
+  authenticate,
+  (req, res, next) => {
+    const body = (req.body || {}) as Record<string, unknown>;
+    if (body.visitorId || body.visitor_id || (Array.isArray(body.visitors) && body.visitors.length)) {
+      void transferVisit(req, res);
+      return;
+    }
+    next();
+  },
+  validate(patchVisitSiteSchema),
+  patchVisitSiteDimensions
+);
 
 /**
  * @swagger

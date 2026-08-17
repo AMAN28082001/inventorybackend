@@ -3,6 +3,7 @@ import { Visit, VisitAssignment, Quotation, Customer, Dealer, Visitor } from '..
 import { Op } from 'sequelize';
 import { logError } from '../utils/loggerHelper';
 import { resolveBrowsableMediaUrl, resolveBrowsableMediaUrls } from '../utils/s3Service';
+import { assignmentVisitorIdsForRequest } from '../utils/assignableVisitors';
 
 const toSafeString = (value: unknown): string => {
   if (typeof value === 'string') return value;
@@ -118,7 +119,8 @@ const mapAssignmentDetails = (assignments: any[]) =>
 // Get assigned visits (visitor)
 export const getAssignedVisits = async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!req.visitor) {
+    const actorIds = assignmentVisitorIdsForRequest(req);
+    if (!actorIds.length) {
       res.status(401).json({
         success: false,
         error: { code: 'AUTH_003', message: 'User not authenticated' }
@@ -164,7 +166,7 @@ export const getAssignedVisits = async (req: Request, res: Response): Promise<vo
         {
           model: VisitAssignment,
           as: 'assignments',
-          where: { visitorId: req.visitor.id },
+          where: { visitorId: actorIds.length === 1 ? actorIds[0] : { [Op.in]: actorIds } },
           required: true,
           include: [
             {
@@ -296,7 +298,7 @@ export const getAssignedVisits = async (req: Request, res: Response): Promise<vo
         row_diagram_image: resolvedRowDiagramImage,
         meterImage: resolvedMeterImage,
         meter_image: resolvedMeterImage,
-        otherVisitors: mapAssignmentDetails(assignments.filter((a: any) => a.visitorId !== req.visitor!.id)),
+        otherVisitors: mapAssignmentDetails(assignments.filter((a: any) => !actorIds.includes(a.visitorId))),
         assignedVisitors: mapAssignmentDetails(assignments),
         visitors: mapAssignmentSummary(assignments)
       };
@@ -324,7 +326,8 @@ export const getAssignedVisits = async (req: Request, res: Response): Promise<vo
 // Get visitor statistics
 export const getVisitorStatistics = async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!req.visitor) {
+    const actorIds = assignmentVisitorIdsForRequest(req);
+    if (!actorIds.length) {
       res.status(401).json({
         success: false,
         error: { code: 'AUTH_003', message: 'User not authenticated' }
@@ -337,7 +340,7 @@ export const getVisitorStatistics = async (req: Request, res: Response): Promise
         {
           model: VisitAssignment,
           as: 'assignments',
-          where: { visitorId: req.visitor.id },
+          where: { visitorId: actorIds.length === 1 ? actorIds[0] : { [Op.in]: actorIds } },
           required: true
         },
         {

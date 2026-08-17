@@ -13,6 +13,15 @@ import {
 } from '../models';
 import { Dealer } from '../models/index-quotation';
 import { logError, logInfo } from '../utils/loggerHelper';
+import { listQuotationAssignable } from '../utils/assignableQuotation';
+import {
+  hasListAccess,
+  loadQuotationEligibleDealers,
+  paginateRows,
+  parseAccessQueryFromReq,
+  quotationEligibilityHttpError
+} from '../utils/accessLists';
+import { canAccessSection } from '../utils/userAccess';
 import { emitRealtime, realtimeEvents } from '../utils/realtime';
 import {
   classifyCallingActionSummaryBucket,
@@ -2542,20 +2551,15 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
       return;
     }
 
-    // 1) Validate dealer ids exist before insert/assign → 400 VAL_002 if unknown
-    const dealers = await Dealer.findAll({
-      where: { id: { [Op.in]: dealerIds }, role: 'dealer', isActive: true },
-      attributes: ['id']
-    });
-    if (dealers.length !== dealerIds.length) {
-      const validIds = new Set(dealers.map((dealer) => dealer.id));
-      const invalidIds = dealerIds.filter((id) => !validIds.has(id));
-      res.status(400).json({
-        success: false,
+    // 1) Validate dealer ids exist and have Quotation access
+    const uploadDealerCheck = await loadQuotationEligibleDealers(dealerIds);
+    const uploadDealerError = quotationEligibilityHttpError(uploadDealerCheck);
+    if (uploadDealerError) {
+      res.status(uploadDealerError.status).json({
+        ...uploadDealerError.body,
         error: {
-          code: 'VAL_002',
-          message: 'Unknown or inactive dealerIds',
-          details: invalidIds.map((id) => ({ field: 'dealerIds', message: `Invalid dealer id: ${id}` }))
+          ...uploadDealerError.body.error,
+          code: uploadDealerCheck.missing.length ? 'VAL_002' : 'VAL_001'
         }
       });
       return;
@@ -3790,6 +3794,18 @@ const applyNoCacheHeaders = (res: Response) => {
 };
 
 const resolveDealerIdForQueue = async (req: Request): Promise<string | null> => {
+  // L6: calling queue is by assignee entity id (JWT sub), even when role is visitor.
+  if (req.user?.id && canAccessSection(
+    {
+      role: req.user.role,
+      access: (req.user as any).access,
+      permissions: (req.user as any).permissions,
+      username: req.user.username
+    },
+    'quotation'
+  )) {
+    return req.user.id;
+  }
   if (req.dealer?.id) return req.dealer.id;
 
   const username = (req.user as any)?.username;
@@ -4430,33 +4446,64 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
 
 export const getHrDealersForAssignment = async (req: Request, res: Response): Promise<void> => {
   try {
-    const includeInactive = String(req.query.includeInactive || 'true').toLowerCase() === 'true';
-    const where: any = { role: 'dealer' };
-    if (!includeInactive) {
-      where[Op.or] = [{ isActive: true }, { emailVerified: true }];
-    }
+    const includeInactive = String(req.query.includeInactive || '').toLowerCase() === 'true';
+    const isActiveRaw = req.query.isActive as string | undefined;
+    const isActive =
+      isActiveRaw !== undefined
+        ? isActiveRaw === 'true' || isActiveRaw === '1'
+        : includeInactive
+          ? undefined
+          : true;
+    const search = String(req.query.search || '').trim();
 
-    const dealers = await Dealer.findAll({
-      where,
-      attributes: ['id', 'firstName', 'lastName', 'mobile', 'email', 'isActive', 'emailVerified'],
-      order: [['firstName', 'ASC'], ['lastName', 'ASC']]
+    const union = await listQuotationAssignable({
+      search: search || undefined,
+      isActive
     });
+    const accessKey = parseAccessQueryFromReq(req) || 'quotation';
+    const eligible = accessKey === 'quotation'
+      ? union
+      : union.filter((row) => hasListAccess(row, accessKey, { allowInactive: includeInactive }));
+
+    const dealers = eligible.map((row) => ({
+      id: row.id,
+      username: row.username,
+      firstName: row.firstName,
+      lastName: row.lastName,
+      fullName: row.fullName,
+      mobile: row.mobile,
+      email: row.email,
+      isActive: row.isActive,
+      emailVerified: row.emailVerified ?? row.isActive,
+      isApproved: row.isActive || row.emailVerified,
+      role: row.role,
+      access: row.access,
+      permissions: row.permissions
+    }));
+
+    const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
+    const limitRaw = parseInt(String(req.query.limit || ''), 10);
+    const limit =
+      Number.isFinite(limitRaw) && limitRaw > 0
+        ? Math.min(1000, limitRaw)
+        : Math.max(dealers.length, 1);
+    const paged = paginateRows(dealers, page, limit);
+    const pagination = {
+      page: paged.page,
+      limit: paged.limit,
+      total: paged.total,
+      totalPages: paged.totalPages
+    };
 
     res.json({
       success: true,
+      pagination,
       data: {
-        dealers: dealers.map((dealer) => ({
-          id: dealer.id,
-          firstName: dealer.firstName,
-          lastName: dealer.lastName,
-          fullName: `${dealer.firstName} ${dealer.lastName}`.trim(),
-          mobile: dealer.mobile,
-          email: dealer.email,
-          isActive: dealer.isActive,
-          emailVerified: dealer.emailVerified,
-          isApproved: dealer.isActive || dealer.emailVerified
-        })),
-        total: dealers.length
+        dealers: paged.rows,
+        users: paged.rows,
+        items: paged.rows,
+        total: paged.total,
+        pagination
       }
     });
   } catch (error) {
@@ -4470,10 +4517,8 @@ export const getHrDealersForAssignment = async (req: Request, res: Response): Pr
 
 export const getHrDealerAssignmentStats = async (_req: Request, res: Response): Promise<void> => {
   try {
-    const dealers = await Dealer.findAll({
-      where: { role: 'dealer', isActive: true },
-      attributes: ['id', 'firstName', 'lastName']
-    });
+    const union = await listQuotationAssignable({ isActive: true });
+    const eligibleDealers = union;
 
     const counts = await DealerLeadAssignment.findAll({
       attributes: ['dealerId', 'status', [Sequelize.fn('COUNT', Sequelize.col('id')), 'count']],
@@ -4481,7 +4526,7 @@ export const getHrDealerAssignmentStats = async (_req: Request, res: Response): 
     });
 
     const statMap: Record<string, any> = {};
-    for (const dealer of dealers) {
+    for (const dealer of eligibleDealers) {
       statMap[dealer.id] = {
         dealerId: dealer.id,
         dealerName: `${dealer.firstName} ${dealer.lastName}`.trim(),
@@ -4564,23 +4609,13 @@ export const updateHrUploadDealerPool = async (req: Request, res: Response): Pro
       return;
     }
 
-    const dealers = await Dealer.findAll({
-      where: { id: { [Op.in]: incoming }, role: 'dealer', isActive: true },
-      attributes: ['id', 'firstName', 'lastName']
-    });
-    const foundIds = new Set(dealers.map((d) => d.id));
-    const missing = incoming.filter((id) => !foundIds.has(id));
-    if (missing.length > 0) {
-      res.status(400).json({
-        success: false,
-        error: {
-          code: 'VAL_003',
-          message: `Dealer not found or inactive: ${missing[0]}`,
-          details: missing.map((id) => ({ field: 'dealerIds', message: `Invalid dealer id: ${id}` }))
-        }
-      });
+    const check = await loadQuotationEligibleDealers(incoming);
+    const eligibilityError = quotationEligibilityHttpError(check);
+    if (eligibilityError) {
+      res.status(eligibilityError.status).json(eligibilityError.body);
       return;
     }
+    const dealers = check.dealers;
 
     const existing = extractDealerIdsFromBatchPool(batch.assignedDealers);
     const nextDealerIds =
@@ -4699,18 +4734,20 @@ export const assignHrUploadUnassigned = async (req: Request, res: Response): Pro
       return;
     }
 
-    const dealers = await Dealer.findAll({
-      where: { id: { [Op.in]: dealerIds }, role: 'dealer', isActive: true },
-      attributes: ['id']
-    });
-    if (!dealers.length) {
+    const dealers = await loadQuotationEligibleDealers(dealerIds);
+    const eligibilityError = quotationEligibilityHttpError(dealers);
+    if (bodyDealerIds.length && eligibilityError) {
+      res.status(eligibilityError.status).json(eligibilityError.body);
+      return;
+    }
+    if (!dealers.dealers.length) {
       res.status(400).json({
         success: false,
-        error: { code: 'LEAD_006', message: 'No valid active dealers in pool' }
+        error: { code: 'LEAD_006', message: 'No valid active dealers with Quotation access in pool' }
       });
       return;
     }
-    dealerIds = dealers.map((d) => d.id);
+    dealerIds = dealers.dealers.map((d) => d.id);
 
     const rawMode = String(
       req.body?.assignmentMode ?? req.body?.assignment_mode ?? req.body?.mode ?? 'active_cap'

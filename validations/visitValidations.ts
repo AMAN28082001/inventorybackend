@@ -124,11 +124,27 @@ export const createVisitSchema = z.object({
   location: z.string().min(1),
   locationLink: z.string().optional(),
   notes: z.string().optional(),
+  visitorId: z.string().min(1).optional(),
+  visitor_id: z.string().min(1).optional(),
   visitors: z.array(z.object({
-    visitorId: z.string().min(1)
+    visitorId: z.string().min(1).optional(),
+    visitor_id: z.string().min(1).optional(),
+    visitorName: z.string().optional(),
+    id: z.string().optional()
   })).optional()
 }).superRefine((data, ctx) => {
   normalizeVisitTimeFields(data, ctx, true);
+  const visitorId = String(data.visitorId || data.visitor_id || '').trim();
+  const fromArray = Array.isArray(data.visitors) && data.visitors.some((v) =>
+    String(v.visitorId || v.visitor_id || v.id || '').trim()
+  );
+  if (!visitorId && !fromArray) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['visitors'],
+      message: 'Exactly one visitor is required'
+    });
+  }
 }).transform((data, ctx) => {
   const normalized = normalizeVisitTimeFields(data, ctx, true);
   return normalized ? { ...data, ...normalized } : data;

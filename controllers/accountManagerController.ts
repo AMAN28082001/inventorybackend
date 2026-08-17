@@ -4,6 +4,21 @@ import bcrypt from 'bcryptjs';
 import { AccountManager, AccountManagerHistory } from '../models';
 import { Op } from 'sequelize';
 import { logError, logInfo } from '../utils/loggerHelper';
+import {
+  accessFromRole,
+  normalizeAccess,
+  parseAccessFromBody,
+  primaryRoleFromAccess,
+  publicAccountManagerForApi
+} from '../utils/userAccess';
+import { parseProfilePatchFromBody } from '../utils/userProfile';
+import { filterByListAccess, paginateRows, parseAccessQueryFromReq } from '../utils/accessLists';
+
+const toPublicAccountManager = (am: AccountManager) => {
+  const json = am.toJSON() as Record<string, unknown>;
+  delete json.password;
+  return publicAccountManagerForApi(json);
+};
 
 // Helper function to log account manager activity
 const logAccountManagerActivity = async (
@@ -33,12 +48,12 @@ export const getAllAccountManagers = async (req: Request, res: Response): Promis
     // Authorization is handled by middleware (authorizeAdmin)
 
     const page = parseInt(req.query.page as string) || 1;
-    const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
-    const offset = (page - 1) * limit;
+    const limit = Math.min(parseInt(req.query.limit as string) || 1000, 1000);
     const search = req.query.search as string;
     const isActive = req.query.isActive as string;
     const sortBy = (req.query.sortBy as string) || 'createdAt';
     const sortOrder = (req.query.sortOrder as string) || 'desc';
+    const accessKey = parseAccessQueryFromReq(req);
 
     const where: any = {};
 
@@ -56,38 +71,27 @@ export const getAllAccountManagers = async (req: Request, res: Response): Promis
       ];
     }
 
-    const accountManagers = await AccountManager.findAndCountAll({
+    const accountManagers = await AccountManager.findAll({
       where,
       attributes: { exclude: ['password'] },
-      limit,
-      offset,
       order: [[sortBy, sortOrder.toUpperCase()]]
     });
+
+    const mapped = accountManagers.map((am) => toPublicAccountManager(am));
+    const filtered = filterByListAccess(mapped, accessKey);
+    const paged = paginateRows(filtered, page, limit);
 
     res.json({
       success: true,
       data: {
-        accountManagers: accountManagers.rows.map(am => ({
-          id: am.id,
-          username: am.username,
-          firstName: am.firstName,
-          lastName: am.lastName,
-          email: am.email,
-          mobile: am.mobile,
-          role: am.role,
-          isActive: am.isActive,
-          emailVerified: am.emailVerified,
-          loginCount: am.loginCount,
-          lastLogin: am.lastLogin,
-          createdAt: am.createdAt
-        })),
+        accountManagers: paged.rows,
         pagination: {
-          page,
-          limit,
-          total: accountManagers.count,
-          totalPages: Math.ceil(accountManagers.count / limit),
-          hasNext: page < Math.ceil(accountManagers.count / limit),
-          hasPrev: page > 1
+          page: paged.page,
+          limit: paged.limit,
+          total: paged.total,
+          totalPages: paged.totalPages,
+          hasNext: paged.hasNext,
+          hasPrev: paged.hasPrev
         }
       }
     });
@@ -119,21 +123,7 @@ export const getAccountManagerById = async (req: Request, res: Response): Promis
 
     res.json({
       success: true,
-      data: {
-        id: accountManager.id,
-        username: accountManager.username,
-        firstName: accountManager.firstName,
-        lastName: accountManager.lastName,
-        email: accountManager.email,
-        mobile: accountManager.mobile,
-        role: accountManager.role,
-        isActive: accountManager.isActive,
-        emailVerified: accountManager.emailVerified,
-        loginCount: accountManager.loginCount,
-        lastLogin: accountManager.lastLogin,
-        createdAt: accountManager.createdAt,
-        updatedAt: accountManager.updatedAt
-      }
+      data: toPublicAccountManager(accountManager)
     });
   } catch (error) {
     logError('Get account manager by ID error', error, { accountManagerId: req.params.accountManagerId });
@@ -148,15 +138,48 @@ export const getAccountManagerById = async (req: Request, res: Response): Promis
 export const createAccountManager = async (req: Request, res: Response): Promise<void> => {
   try {
     // Authorization is handled by middleware (authorizeAdmin)
-    const { username, password, firstName, lastName, email, mobile, role } = req.body;
+    const { username, password, firstName, lastName, email, mobile } = req.body;
+    const accessParse = parseAccessFromBody(req.body || {});
+    if (accessParse.error) {
+      res.status(400).json({
+        success: false,
+        error: { code: 'VAL_001', message: accessParse.error }
+      });
+      return;
+    }
 
-    if (!role || !['account-management', 'installer', 'baldev', 'hr', 'metering'].includes(role)) {
+    const bodyRole = req.body.role ? String(req.body.role).trim() : '';
+    const access =
+      accessParse.access && accessParse.access.length
+        ? accessParse.access
+        : bodyRole
+          ? accessFromRole(bodyRole)
+          : [];
+    const role =
+      (bodyRole === 'confirmation' ? 'baldev' : bodyRole) ||
+      (access.length ? primaryRoleFromAccess(access) : 'account-management');
+    const finalAccess = access.length ? access : accessFromRole(role);
+
+    if (!finalAccess.length) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VAL_001',
+          message: 'Select at least one dashboard access.',
+          details: [{ field: 'access', message: 'access is required' }]
+        }
+      });
+      return;
+    }
+
+    const allowedRoles = ['account-management', 'installer', 'baldev', 'hr', 'metering', 'admin'];
+    if (!allowedRoles.includes(role)) {
       res.status(400).json({
         success: false,
         error: {
           code: 'VAL_001',
           message: 'Validation error',
-          details: [{ field: 'role', message: 'Role must be one of: account-management, installer, baldev, hr, metering' }]
+          details: [{ field: 'role', message: 'Role must be one of: account-management, installer, baldev, hr, metering, admin' }]
         }
       });
       return;
@@ -193,6 +216,7 @@ export const createAccountManager = async (req: Request, res: Response): Promise
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
+    const profile = parseProfilePatchFromBody(req.body || {});
     const accountManager = await AccountManager.create({
       id: uuidv4(),
       username,
@@ -202,11 +226,13 @@ export const createAccountManager = async (req: Request, res: Response): Promise
       email,
       mobile,
       role,
+      access: finalAccess,
       isActive: true,
       emailVerified: false,
       loginCount: 0,
       lastLogin: null,
-      createdBy: req.user?.id || null
+      createdBy: req.user?.id || null,
+      ...profile
     });
 
     // Log activity
@@ -216,20 +242,7 @@ export const createAccountManager = async (req: Request, res: Response): Promise
 
     res.status(201).json({
       success: true,
-      data: {
-        id: accountManager.id,
-        username: accountManager.username,
-        firstName: accountManager.firstName,
-        lastName: accountManager.lastName,
-        email: accountManager.email,
-        mobile: accountManager.mobile,
-        role: accountManager.role,
-        isActive: accountManager.isActive,
-        emailVerified: accountManager.emailVerified,
-        loginCount: accountManager.loginCount,
-        lastLogin: accountManager.lastLogin,
-        createdAt: accountManager.createdAt
-      },
+      data: toPublicAccountManager(accountManager),
       message: 'Account manager created successfully'
     });
   } catch (error) {
@@ -282,9 +295,29 @@ export const updateAccountManager = async (req: Request, res: Response): Promise
     if (lastName !== undefined) updateData.lastName = lastName;
     if (email !== undefined) updateData.email = email;
     if (mobile !== undefined) updateData.mobile = mobile;
-    if (role !== undefined) updateData.role = role;
     if (isActive !== undefined) updateData.isActive = isActive;
     if (emailVerified !== undefined) updateData.emailVerified = emailVerified;
+    Object.assign(updateData, parseProfilePatchFromBody(req.body || {}));
+
+    const accessParse = parseAccessFromBody(req.body || {});
+    if (accessParse.error) {
+      res.status(400).json({
+        success: false,
+        error: { code: 'VAL_001', message: accessParse.error }
+      });
+      return;
+    }
+    if (accessParse.access) {
+      updateData.access = accessParse.access;
+      if (role !== undefined) updateData.role = role;
+      else updateData.role = primaryRoleFromAccess(accessParse.access);
+    } else if (role !== undefined) {
+      updateData.role = role;
+      const existingAccess = normalizeAccess((accountManager as any).access);
+      if (!existingAccess.length) {
+        updateData.access = accessFromRole(role);
+      }
+    }
     
     // Handle password update: if provided and not empty, hash and update it
     // If empty string or not provided, keep current password
@@ -306,19 +339,7 @@ export const updateAccountManager = async (req: Request, res: Response): Promise
 
     res.json({
       success: true,
-      data: {
-        id: updatedAccountManager!.id,
-        username: updatedAccountManager!.username,
-        firstName: updatedAccountManager!.firstName,
-        lastName: updatedAccountManager!.lastName,
-        email: updatedAccountManager!.email,
-        mobile: updatedAccountManager!.mobile,
-        role: updatedAccountManager!.role,
-        isActive: updatedAccountManager!.isActive,
-        emailVerified: updatedAccountManager!.emailVerified,
-        createdAt: updatedAccountManager!.createdAt,
-        updatedAt: updatedAccountManager!.updatedAt
-      },
+      data: toPublicAccountManager(updatedAccountManager!),
       message: 'Account manager updated successfully'
     });
   } catch (error) {

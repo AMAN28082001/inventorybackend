@@ -1,0 +1,21 @@
+{
+  "watch": [
+    "server.ts",
+    "config",
+    "controllers",
+    "middleware",
+    "models",
+    "routes",
+    "utils",
+    "validations",
+    "types"
+  ],
+  "ext": "ts,json",
+  "ignore": [
+    "*.md",
+    "dist",
+    "database",
+    "node_modules",
+    "node_modules*"
+  ]
+}

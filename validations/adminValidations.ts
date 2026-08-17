@@ -162,7 +162,25 @@ export const createVisitorSchema = z.object({
   lastName: z.string().min(1, 'Last name is required').max(100),
   email: z.string().email('Invalid email format'),
   mobile: z.string().regex(/^\d{10}$/, 'Mobile must be 10 digits'),
-  employeeId: z.string().optional()
+  employeeId: z.string().optional().nullable(),
+  gender: z.enum(['Male', 'Female', 'Other']).optional(),
+  dateOfBirth: z.string().optional(),
+  fatherName: z.string().optional(),
+  fatherContact: z.string().optional(),
+  governmentIdType: z.string().optional(),
+  governmentIdNumber: z.string().optional(),
+  address: z
+    .object({
+      street: z.string().optional(),
+      city: z.string().optional(),
+      state: z.string().optional(),
+      pincode: z.string().optional()
+    })
+    .optional(),
+  access: z.array(z.string()).optional(),
+  permissions: z.array(z.string()).optional(),
+  isActive: z.boolean().optional(),
+  emailVerified: z.boolean().optional()
 });
 
 export const updateVisitorSchema = z.object({
@@ -170,8 +188,26 @@ export const updateVisitorSchema = z.object({
   lastName: z.string().min(1).max(100).optional(),
   email: z.string().email().optional(),
   mobile: z.string().regex(/^\d{10}$/).optional(),
-  employeeId: z.string().optional(),
-  isActive: z.boolean().optional()
+  employeeId: z.string().optional().nullable(),
+  gender: z.enum(['Male', 'Female', 'Other']).optional(),
+  dateOfBirth: z.string().optional(),
+  fatherName: z.string().optional(),
+  fatherContact: z.string().optional(),
+  governmentIdType: z.string().optional(),
+  governmentIdNumber: z.string().optional(),
+  address: z
+    .object({
+      street: z.string().optional(),
+      city: z.string().optional(),
+      state: z.string().optional(),
+      pincode: z.string().optional()
+    })
+    .optional(),
+  access: z.array(z.string()).optional(),
+  permissions: z.array(z.string()).optional(),
+  password: z.union([z.string().min(6), z.literal('')]).optional(),
+  isActive: z.boolean().optional(),
+  emailVerified: z.boolean().optional()
 }).refine((data) => Object.keys(data).length > 0, {
   message: 'At least one field must be provided for update'
 });

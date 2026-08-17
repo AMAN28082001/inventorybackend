@@ -13,6 +13,7 @@ import {
   quotationProposalDateApiFields
 } from '../utils/quotationApiJson';
 import { emitRealtime, realtimeEvents } from '../utils/realtime';
+import { parseCityFilter, cityInFilterWhere } from '../utils/serviceCities';
 import {
   buildReleasedToInstallerWhere,
   INSTALLER_RELEASE_STATUSES,
@@ -28,6 +29,12 @@ import {
   getLatestMeterDocMeta,
   resolveMeterStoredRef
 } from '../utils/meteringMediaApi';
+import {
+  hasAdminPanelAccess,
+  parseAccessFromBody,
+  resolveAccess
+} from '../utils/userAccess';
+import { filterByListAccess, paginateRows, parseAccessQueryFromReq } from '../utils/accessLists';
 import {
   METER_INSTALLATION_PENDING_STATUS,
   meteringWorkflowApiFields,
@@ -380,6 +387,8 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
       ];
     }
 
+    const cities = parseCityFilter(req.query as Record<string, unknown>);
+
     const quotations = await Quotation.findAndCountAll({
       where,
       include: [
@@ -391,6 +400,7 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
         {
           model: Customer,
           as: 'customer',
+          required: cities.length > 0,
           attributes: [
             'id',
             'firstName',
@@ -401,7 +411,8 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
             'city',
             'state',
             'pincode'
-          ]
+          ],
+          ...(cities.length ? { where: cityInFilterWhere(cities, 'city') } : {})
         },
         {
           model: QuotationProduct,
@@ -1713,7 +1724,7 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
         {
           model: Customer,
           as: 'customer',
-          attributes: ['id', 'firstName', 'lastName', 'mobile', 'email']
+          attributes: ['id', 'firstName', 'lastName', 'mobile', 'email', 'streetAddress', 'city', 'state', 'pincode']
         },
         {
           model: QuotationProduct,
@@ -1894,7 +1905,7 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
 // Get all dealers (admin)
 export const getAllDealers = async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!req.dealer || req.dealer.role !== 'admin') {
+    if (!hasAdminPanelAccess(req) && (!req.dealer || req.dealer.role !== 'admin')) {
       res.status(403).json({
         success: false,
         error: { code: 'AUTH_004', message: 'Insufficient permissions' }
@@ -1903,8 +1914,7 @@ export const getAllDealers = async (req: Request, res: Response): Promise<void> 
     }
 
     const page = parseInt(req.query.page as string) || 1;
-    const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
-    const offset = (page - 1) * limit;
+    const limit = Math.min(parseInt(req.query.limit as string) || 1000, 1000);
     const search = req.query.search as string;
     const isActive = req.query.isActive as string;
     const includeInactiveRaw = String(req.query.includeInactive ?? '').trim().toLowerCase();
@@ -1929,50 +1939,63 @@ export const getAllDealers = async (req: Request, res: Response): Promise<void> 
       ];
     }
 
-    const dealers = await Dealer.findAndCountAll({
+    const accessKey = parseAccessQueryFromReq(req);
+    const dealers = await Dealer.findAll({
       where,
       attributes: { exclude: ['password'] },
-      limit,
-      offset,
       order: [['createdAt', 'DESC']]
     });
 
-    // Get statistics for each dealer and format response
-    const dealersWithStats = await Promise.all(
-      dealers.rows.map(async (dealer) => {
-        const quotationCount = await Quotation.count({ where: { dealerId: dealer.id } });
-        const totalRevenue = await Quotation.sum('finalAmount', { where: { dealerId: dealer.id } }) || 0;
+    const mappedDealers = dealers.map((dealer) => {
+      const dealerData = dealer.toJSON() as any;
+      const access = resolveAccess({
+        role: dealerData.role || 'dealer',
+        access: dealerData.access,
+        username: dealerData.username
+      });
+      return {
+        id: dealerData.id,
+        username: dealerData.username,
+        firstName: dealerData.firstName,
+        lastName: dealerData.lastName,
+        email: dealerData.email,
+        mobile: dealerData.mobile,
+        gender: dealerData.gender,
+        dateOfBirth: dealerData.dateOfBirth,
+        fatherName: dealerData.fatherName,
+        fatherContact: dealerData.fatherContact,
+        governmentIdType: dealerData.governmentIdType,
+        governmentIdNumber: dealerData.governmentIdNumber,
+        governmentIdImage: dealerData.governmentIdImage,
+        address: {
+          street: dealerData.addressStreet,
+          city: dealerData.addressCity,
+          state: dealerData.addressState,
+          pincode: dealerData.addressPincode
+        },
+        company: dealerData.company,
+        role: dealerData.role || 'dealer',
+        access,
+        permissions: access,
+        isActive: dealerData.isActive,
+        emailVerified: dealerData.emailVerified,
+        createdAt: dealerData.createdAt,
+        updatedAt: dealerData.updatedAt
+      };
+    });
 
-        const dealerData = dealer.toJSON() as any;
-        
-        // Format response with address object
+    const eligible = filterByListAccess(mappedDealers, accessKey);
+    const paged = paginateRows(eligible, page, limit);
+
+    const dealersWithStats = await Promise.all(
+      paged.rows.map(async (dealerData) => {
+        const quotationCount = await Quotation.count({ where: { dealerId: dealerData.id } });
+        const totalRevenue = await Quotation.sum('finalAmount', { where: { dealerId: dealerData.id } }) || 0;
+
         return {
-          id: dealerData.id,
-          username: dealerData.username,
-          firstName: dealerData.firstName,
-          lastName: dealerData.lastName,
-          email: dealerData.email,
-          mobile: dealerData.mobile,
-          gender: dealerData.gender,
-          dateOfBirth: dealerData.dateOfBirth,
-          fatherName: dealerData.fatherName,
-          fatherContact: dealerData.fatherContact,
-          governmentIdType: dealerData.governmentIdType,
-          governmentIdNumber: dealerData.governmentIdNumber,
-          governmentIdImage: dealerData.governmentIdImage,
-          address: {
-            street: dealerData.addressStreet,
-            city: dealerData.addressCity,
-            state: dealerData.addressState,
-            pincode: dealerData.addressPincode
-          },
-          company: dealerData.company,
-          isActive: dealerData.isActive,
-          emailVerified: dealerData.emailVerified,
+          ...dealerData,
           quotationCount,
-          totalRevenue: Number(totalRevenue),
-          createdAt: dealerData.createdAt,
-          updatedAt: dealerData.updatedAt
+          totalRevenue: Number(totalRevenue)
         };
       })
     );
@@ -1982,10 +2005,10 @@ export const getAllDealers = async (req: Request, res: Response): Promise<void> 
       data: {
         dealers: dealersWithStats,
         pagination: {
-          page,
-          limit,
-          total: dealers.count,
-          totalPages: Math.max(1, Math.ceil(dealers.count / limit))
+          page: paged.page,
+          limit: paged.limit,
+          total: paged.total,
+          totalPages: paged.totalPages
         }
       }
     });
@@ -2001,7 +2024,7 @@ export const getAllDealers = async (req: Request, res: Response): Promise<void> 
 // Update dealer (admin)
 export const updateDealer = async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!req.dealer || req.dealer.role !== 'admin') {
+    if (!hasAdminPanelAccess(req) && (!req.dealer || req.dealer.role !== 'admin')) {
       res.status(403).json({
         success: false,
         error: { code: 'AUTH_004', message: 'Insufficient permissions' }
@@ -2071,6 +2094,18 @@ export const updateDealer = async (req: Request, res: Response): Promise<void> =
     if (req.body.isActive !== undefined) updateData.isActive = req.body.isActive;
     if (req.body.emailVerified !== undefined) updateData.emailVerified = req.body.emailVerified;
 
+    const accessParse = parseAccessFromBody(req.body || {});
+    if (accessParse.error) {
+      res.status(400).json({
+        success: false,
+        error: { code: 'VAL_001', message: accessParse.error }
+      });
+      return;
+    }
+    if (accessParse.access) {
+      updateData.access = accessParse.access;
+    }
+
     // Update address fields if provided
     if (req.body.address) {
       if (req.body.address.street) updateData.addressStreet = req.body.address.street;
@@ -2086,8 +2121,16 @@ export const updateDealer = async (req: Request, res: Response): Promise<void> =
     });
 
     const dealerData = updatedDealer?.toJSON() as any;
-    const responseData = {
+    const access = resolveAccess({
+      role: dealerData.role || 'dealer',
+      access: dealerData.access,
+      username: dealerData.username
+    });
+    const responseData: any = {
       ...dealerData,
+      role: dealerData.role || 'dealer',
+      access,
+      permissions: access,
       address: {
         street: dealerData.addressStreet,
         city: dealerData.addressCity,
@@ -2104,7 +2147,8 @@ export const updateDealer = async (req: Request, res: Response): Promise<void> =
 
     res.json({
       success: true,
-      data: responseData
+      data: responseData,
+      message: 'Dealer updated successfully'
     });
 
     if (updateData.isActive !== undefined || updateData.emailVerified !== undefined) {
@@ -2127,7 +2171,7 @@ export const updateDealer = async (req: Request, res: Response): Promise<void> =
 // Activate dealer (admin)
 export const activateDealer = async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!req.dealer || req.dealer.role !== 'admin') {
+    if (!hasAdminPanelAccess(req) && (!req.dealer || req.dealer.role !== 'admin')) {
       res.status(403).json({
         success: false,
         error: { code: 'AUTH_004', message: 'Insufficient permissions' }

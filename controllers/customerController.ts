@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { Customer, Quotation } from '../models/index-quotation';
 import { Op } from 'sequelize';
 import { logError, logInfo } from '../utils/loggerHelper';
+import { parseCityFilter, cityInFilterWhere } from '../utils/serviceCities';
 
 const isMissingNotesColumnError = (error: unknown): boolean => {
   const message = String((error as any)?.parent?.message || (error as any)?.original?.message || (error as Error)?.message || '');
@@ -137,6 +138,14 @@ export const getCustomers = async (req: Request, res: Response): Promise<void> =
         { lastName: { [Op.iLike]: `%${search}%` } },
         { mobile: { [Op.iLike]: `%${search}%` } },
         { email: { [Op.iLike]: `%${search}%` } }
+      ];
+    }
+
+    const cities = parseCityFilter(req.query as Record<string, unknown>);
+    if (cities.length) {
+      where[Op.and] = [
+        ...(Array.isArray(where[Op.and]) ? where[Op.and] : []),
+        cityInFilterWhere(cities, 'city')
       ];
     }
 

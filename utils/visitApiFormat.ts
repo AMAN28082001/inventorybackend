@@ -173,6 +173,7 @@ export const formatVisitCompletionPayload = async (visit: any): Promise<Record<s
         `${toSafeVisitString(visitor.firstName)} ${toSafeVisitString(visitor.lastName)}`.trim() ||
         toSafeVisitString(a.visitorName);
       return {
+        id: visitor.id,
         visitorId: visitor.id,
         visitorName,
         username: visitor.username,
@@ -186,6 +187,7 @@ export const formatVisitCompletionPayload = async (visit: any): Promise<Record<s
       };
     }
     return {
+      id: a.visitorId,
       visitorId: a.visitorId,
       visitorName: toSafeVisitString(a.visitorName),
       fullName: toSafeVisitString(a.visitorName)

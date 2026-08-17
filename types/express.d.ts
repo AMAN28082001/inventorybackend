@@ -38,6 +38,8 @@ interface QuotationUserAttributes {
   teamName?: string;
   firstName?: string;
   lastName?: string;
+  access?: string[];
+  permissions?: string[];
 }
 
 declare global {
@@ -50,6 +52,7 @@ declare global {
         id: string;
         username: string;
         role: 'dealer' | 'admin';
+        access?: string[];
       };
       visitor?: {
         id: string;

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ACCESS_KEYS } from '../utils/userAccess';
 
 const addressSchema = z.object({
   street: z.string().min(1, 'Street is required'),
@@ -93,7 +94,9 @@ export const adminUpdateDealerSchema = z.object({
   address: addressSchema.optional(),
   company: z.string().max(255).optional(),
   isActive: z.boolean().optional(),
-  emailVerified: z.boolean().optional()
+  emailVerified: z.boolean().optional(),
+  access: z.array(z.enum(ACCESS_KEYS)).min(1).optional(),
+  permissions: z.array(z.enum(ACCESS_KEYS)).min(1).optional()
 }).refine((data) => Object.keys(data).length > 0, {
   message: 'At least one field must be provided for update'
 });

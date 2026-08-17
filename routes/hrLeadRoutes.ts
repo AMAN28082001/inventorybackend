@@ -20,6 +20,7 @@ import {
   assignUnassignedLeadsSchema,
   updateUploadDealerPoolSchema
 } from '../validations/callingLeadValidations';
+import { canAccessSection, hasAdminPanelAccess } from '../utils/userAccess';
 
 const router: Router = express.Router();
 
@@ -29,8 +30,22 @@ const upload = multer({
 });
 
 const authorizeHrLeadAccess = (req: Request, res: Response, next: NextFunction): void => {
-  const role = req.user?.role;
-  const allowed = role === 'hr' || role === 'admin' || role === 'super-admin' || role === 'super-admin-manager';
+  const role = String(req.user?.role || req.dealer?.role || '').toLowerCase();
+  const allowed =
+    role === 'hr' ||
+    role === 'human_resources' ||
+    role === 'admin' ||
+    role === 'super-admin' ||
+    role === 'super-admin-manager' ||
+    canAccessSection(
+      {
+        role: req.user?.role ?? req.dealer?.role,
+        access: (req.user as any)?.access ?? req.dealer?.access,
+        username: req.user?.username ?? req.dealer?.username
+      },
+      'hr'
+    ) ||
+    hasAdminPanelAccess(req);
   if (!allowed) {
     res.status(403).json({
       success: false,
@@ -45,6 +60,9 @@ router.use(authenticate);
 router.use(authorizeHrLeadAccess);
 
 router.get('/dealers', getHrDealersForAssignment);
+router.get('/assignable-dealers', getHrDealersForAssignment);
+router.get('/dealer-pool', getHrDealersForAssignment);
+router.get('/assignment/dealers', getHrDealersForAssignment);
 router.get('/dealers/assignment-stats', getHrDealerAssignmentStats);
 router.get('/calling-actions/summary', getHrCallingActionsSummary);
 router.get('/calling-actions', getHrCallingActions);

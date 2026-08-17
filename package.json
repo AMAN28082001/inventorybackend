@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/server.js",
-    "dev": "nodemon --exec ts-node server.ts",
+    "dev": "nodemon --exec ts-node --transpile-only server.ts",
     "type-check": "tsc --noEmit",
     "migrate": "sequelize-cli db:migrate",
     "migrate:undo": "sequelize-cli db:migrate:undo",

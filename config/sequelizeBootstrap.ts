@@ -73,6 +73,58 @@ const ensureInstallationTeamsSchema = async (): Promise<void> => {
   }
 };
 
+/** Idempotent: Admin Users tab dashboard access JSONB. */
+const ensureUserAccessColumns = async (): Promise<void> => {
+  try {
+    await sequelize.query(
+      "ALTER TABLE dealers ADD COLUMN IF NOT EXISTS access JSONB NOT NULL DEFAULT '[]'::jsonb;"
+    );
+    await sequelize.query(
+      "ALTER TABLE account_managers ADD COLUMN IF NOT EXISTS access JSONB NOT NULL DEFAULT '[]'::jsonb;"
+    );
+    await sequelize.query(
+      "ALTER TABLE visitors ADD COLUMN IF NOT EXISTS access JSONB NOT NULL DEFAULT '[]'::jsonb;"
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.warn('Could not ensure user access columns', { message });
+  }
+};
+
+const PROFILE_COLUMNS_SQL: Array<[string, string]> = [
+  ['gender', 'VARCHAR(20)'],
+  ['dateOfBirth', 'DATE'],
+  ['fatherName', 'VARCHAR(100)'],
+  ['fatherContact', 'VARCHAR(15)'],
+  ['governmentIdType', 'VARCHAR(50)'],
+  ['governmentIdNumber', 'VARCHAR(50)'],
+  ['employeeId', 'VARCHAR(50)'],
+  ['addressStreet', 'TEXT'],
+  ['addressCity', 'VARCHAR(100)'],
+  ['addressState', 'VARCHAR(100)'],
+  ['addressPincode', 'VARCHAR(6)']
+];
+
+/** Idempotent: unified Users create/edit profile fields on ops + visitors. */
+const ensureUnifiedUserProfileColumns = async (): Promise<void> => {
+  try {
+    for (const [name, type] of PROFILE_COLUMNS_SQL) {
+      await sequelize.query(
+        `ALTER TABLE account_managers ADD COLUMN IF NOT EXISTS "${name}" ${type};`
+      );
+      if (name !== 'employeeId') {
+        await sequelize.query(`ALTER TABLE visitors ADD COLUMN IF NOT EXISTS "${name}" ${type};`);
+      }
+    }
+    await sequelize.query(
+      'ALTER TABLE visitors ADD COLUMN IF NOT EXISTS "emailVerified" BOOLEAN NOT NULL DEFAULT false;'
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.warn('Could not ensure unified user profile columns', { message });
+  }
+};
+
 /**
  * Resolves after DB auth + lightweight schema fixes. Server should await this before binding the port
  * so the first request never hits a missing-column error.
@@ -85,6 +137,8 @@ export const sequelizeBootstrap = (async (): Promise<void> => {
     await ensureInstallationScheduledAtColumn();
     await ensureSystemKwColumn();
     await ensureInstallationTeamsSchema();
+    await ensureUserAccessColumns();
+    await ensureUnifiedUserProfileColumns();
     logger.info('PostgreSQL database connected successfully');
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';

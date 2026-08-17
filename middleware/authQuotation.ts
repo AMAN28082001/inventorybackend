@@ -9,6 +9,41 @@ import {
   isInventoryUserJwtRole,
   normalizeInventoryRole
 } from '../utils/inventoryRole';
+import {
+  canAccessSection,
+  hasAdminPanelAccess,
+  resolveAccess,
+  type AccessKey
+} from '../utils/userAccess';
+import { attachMultiAccessActors } from '../utils/multiAccessActors';
+import { cachedLookup } from '../utils/ttlCache';
+
+const userAccessFromReq = (req: Request) => ({
+  role: req.user?.role ?? req.dealer?.role,
+  access: (req.user as any)?.access ?? (req.dealer as any)?.access,
+  permissions: (req.user as any)?.permissions,
+  username: req.user?.username ?? req.dealer?.username
+});
+
+const allowByAccess = (req: Request, key: AccessKey): boolean =>
+  canAccessSection(userAccessFromReq(req), key);
+
+const AUTH_IDENTITY_TTL_MS = 15_000;
+
+const loadDealerById = (id: string) =>
+  cachedLookup(`auth-dealer:${id}`, () => Dealer.findByPk(id), AUTH_IDENTITY_TTL_MS);
+
+const loadVisitorById = (id: string) =>
+  cachedLookup(`auth-visitor:${id}`, () => Visitor.findByPk(id), AUTH_IDENTITY_TTL_MS);
+
+const loadAccountManagerById = (id: string) =>
+  cachedLookup(`auth-am:${id}`, () => AccountManager.findByPk(id), AUTH_IDENTITY_TTL_MS);
+
+const loadInventoryUserById = (id: string) =>
+  cachedLookup(`auth-user:${id}`, () => User.findByPk(id), AUTH_IDENTITY_TTL_MS);
+
+const loadInstallationTeamById = (id: string) =>
+  cachedLookup(`auth-team:${id}`, () => InstallationTeam.findByPk(id), AUTH_IDENTITY_TTL_MS);
 
 // Authenticate dealer or admin
 export const authenticate = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -41,11 +76,16 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
     }
 
     try {
-      const decoded = jwt.verify(token, jwtSecret) as { id: string; role?: string; type?: string };
+      const decoded = jwt.verify(token, jwtSecret) as {
+        id: string;
+        role?: string;
+        type?: string;
+        access?: string[];
+      };
 
       // Check if it's a dealer/admin
       if (decoded.role === 'dealer' || decoded.role === 'admin') {
-        const dealer = await Dealer.findByPk(decoded.id);
+        const dealer = await loadDealerById(decoded.id);
         if (!dealer || !dealer.isActive) {
           res.status(401).json({
             success: false,
@@ -60,20 +100,27 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
         req.dealer = {
           id: dealer.id,
           username: dealer.username,
-          role: dealer.role
+          role: dealer.role,
+          access: resolveAccess({
+            role: dealer.role,
+            access: (dealer as any).access,
+            username: dealer.username
+          })
         };
         req.user = {
           id: dealer.id,
           username: dealer.username,
-          role: dealer.role
+          role: dealer.role,
+          access: req.dealer.access
         };
+        await attachMultiAccessActors(req);
         next();
         return;
       }
 
       // Check if it's a visitor
       if (decoded.role === 'visitor' || decoded.type === 'visitor') {
-        const visitor = await Visitor.findByPk(decoded.id);
+        const visitor = await loadVisitorById(decoded.id);
         if (!visitor || !visitor.isActive) {
           res.status(401).json({
             success: false,
@@ -92,8 +139,16 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
         req.user = {
           id: visitor.id,
           username: visitor.username,
-          role: 'visitor'
+          role: 'visitor',
+          access: resolveAccess({
+            role: 'visitor',
+            access: (visitor as any).access ?? decoded.access,
+            username: visitor.username
+          })
         };
+        (req.user as any).email = (visitor as any).email;
+        (req.user as any).mobile = (visitor as any).mobile;
+        await attachMultiAccessActors(req);
         next();
         return;
       }
@@ -102,7 +157,7 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
       if (isInstallationTeamJwtRole(decoded.role)) {
         const payload = decoded as { id: string; installationTeamId?: string };
         const teamId = (payload.installationTeamId || payload.id || '').trim();
-        const team = teamId ? await InstallationTeam.findByPk(teamId) : null;
+        const team = teamId ? await loadInstallationTeamById(teamId) : null;
         if (!team || !team.isActive) {
           res.status(401).json({
             success: false,
@@ -121,13 +176,18 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
           installationTeamId: team.id,
           teamName: team.name,
           firstName: team.name,
-          lastName: ''
+          lastName: '',
+          access: resolveAccess({
+            role: 'installation-team',
+            access: decoded.access
+          })
         } as any;
         next();
         return;
       }
 
-      // Check if it's an account manager
+      // Account-manager JWT (hr, installer, …). If the row is missing, fall through
+      // so inventory `users` with role hr still authenticate.
       if (
         decoded.role === 'account-management' ||
         decoded.role === 'installer' ||
@@ -139,8 +199,8 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
         decoded.role === 'metering-team' ||
         decoded.role === 'mco'
       ) {
-        const accountManager = await AccountManager.findByPk(decoded.id);
-        if (!accountManager || !accountManager.isActive) {
+        const accountManager = await loadAccountManagerById(decoded.id);
+        if (accountManager && !accountManager.isActive) {
           res.status(401).json({
             success: false,
             error: {
@@ -150,20 +210,31 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
           });
           return;
         }
-
-        req.user = {
-          id: accountManager.id,
-          username: accountManager.username,
-          role: accountManager.role as any
-        };
-        next();
-        return;
+        if (accountManager) {
+          req.user = {
+            id: accountManager.id,
+            username: accountManager.username,
+            role: accountManager.role as any,
+            firstName: accountManager.firstName,
+            lastName: accountManager.lastName,
+            access: resolveAccess({
+              role: accountManager.role,
+              access: (accountManager as any).access ?? decoded.access,
+              username: accountManager.username
+            })
+          };
+          (req.user as any).email = accountManager.email;
+          (req.user as any).mobile = accountManager.mobile;
+          await attachMultiAccessActors(req);
+          next();
+          return;
+        }
       }
 
       // Check if it's an Inventory System user (super-admin, admin, agent, account)
       const decodedRole = normalizeInventoryRole(decoded.role) || decoded.role;
       if (isInventoryUserJwtRole(decoded.role) || isInventoryUserJwtRole(decodedRole)) {
-        const user = await User.findByPk(decoded.id);
+        const user = await loadInventoryUserById(decoded.id);
         if (!user || !user.is_active) {
           res.status(401).json({
             success: false,
@@ -178,8 +249,14 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
         req.user = {
           id: user.id,
           username: user.username,
-          role: (normalizeInventoryRole(user.role) || user.role) as any
+          role: (normalizeInventoryRole(user.role) || user.role) as any,
+          access: resolveAccess({
+            role: normalizeInventoryRole(user.role) || user.role,
+            access: decoded.access,
+            username: user.username
+          })
         } as any; // Type assertion needed due to union type differences
+        await attachMultiAccessActors(req);
         next();
         return;
       }
@@ -257,7 +334,7 @@ export const authorizeQuotationCustomerByPhone = (req: Request, res: Response, n
 
 // Authorize dealer only
 export const authorizeDealer = (req: Request, res: Response, next: NextFunction): void => {
-  if (req.user && (req.user.role === 'account-management' || req.user.role === 'hr')) {
+  if (req.user && (req.user.role === 'account-management' || req.user.role === 'hr') && !allowByAccess(req, 'quotation')) {
     res.status(403).json({
       success: false,
       error: {
@@ -267,22 +344,42 @@ export const authorizeDealer = (req: Request, res: Response, next: NextFunction)
     });
     return;
   }
-  if (!req.dealer) {
-    res.status(401).json({
-      success: false,
-      error: {
-        code: 'AUTH_004',
-        message: 'Insufficient permissions'
-      }
-    });
+  if (req.dealer || allowByAccess(req, 'quotation')) {
+    if (!req.dealer && req.user?.id) {
+      req.dealer = {
+        id: req.user.id,
+        username: req.user.username,
+        role: 'dealer',
+        access: (req.user as { access?: string[] }).access
+      };
+    }
+    next();
     return;
   }
-  next();
+  res.status(401).json({
+    success: false,
+    error: {
+      code: 'AUTH_004',
+      message: 'Insufficient permissions'
+    }
+  });
 };
 
 // Authorize dealer or admin (both can access)
 export const authorizeDealerOrAdmin = (req: Request, res: Response, next: NextFunction): void => {
-  if (req.user && (req.user.role === 'account-management' || req.user.role === 'hr')) {
+  if (req.dealer || allowByAccess(req, 'quotation') || hasAdminPanelAccess(req)) {
+    if (!req.dealer && allowByAccess(req, 'quotation') && req.user?.id) {
+      req.dealer = {
+        id: req.user.id,
+        username: req.user.username,
+        role: 'dealer',
+        access: (req.user as { access?: string[] }).access
+      };
+    }
+    next();
+    return;
+  }
+  if (req.user && (req.user.role === 'account-management' || req.user.role === 'hr') && !allowByAccess(req, 'quotation')) {
     res.status(403).json({
       success: false,
       error: {
@@ -292,63 +389,59 @@ export const authorizeDealerOrAdmin = (req: Request, res: Response, next: NextFu
     });
     return;
   }
-  if (!req.dealer) {
-    res.status(401).json({
-      success: false,
-      error: {
-        code: 'AUTH_004',
-        message: 'Insufficient permissions'
-      }
-    });
-    return;
-  }
-  // Both dealers and admins are stored in Dealer model, so req.dealer exists for both
-  next();
+  res.status(401).json({
+    success: false,
+    error: {
+      code: 'AUTH_004',
+      message: 'Insufficient permissions'
+    }
+  });
 };
 
-// Authorize admin only (Quotation System admin OR Inventory System admin/super-admin)
+// Authorize admin only (Quotation System admin OR Inventory System admin/super-admin OR access.admin)
 export const authorizeAdmin = (req: Request, res: Response, next: NextFunction): void => {
-  // Check Quotation System admin (dealer with role 'admin')
-  const isQuotationAdmin = req.dealer && req.dealer.role === 'admin';
-  
-  // Check Inventory System admin/super-admin (any username — not limited to "admin")
-  const isInventoryAdmin = req.user && isInventoryAdminLikeRole(req.user.role);
-  
-  if (!isQuotationAdmin && !isInventoryAdmin) {
-    res.status(403).json({
-      success: false,
-      error: {
-        code: 'AUTH_004',
-        message: 'Insufficient permissions. Admin access required.'
-      }
-    });
+  if (hasAdminPanelAccess(req)) {
+    next();
     return;
   }
-  next();
+  res.status(403).json({
+    success: false,
+    error: {
+      code: 'AUTH_004',
+      message: 'Insufficient permissions. Admin access required.'
+    }
+  });
 };
 
 // Authorize visitor only
 export const authorizeVisitor = (req: Request, res: Response, next: NextFunction): void => {
-  if (!req.visitor) {
-    res.status(401).json({
-      success: false,
-      error: {
-        code: 'AUTH_003',
-        message: 'User not authenticated'
-      }
-    });
+  if (req.visitor || allowByAccess(req, 'visitor')) {
+    if (!req.visitor && req.user?.id) {
+      req.visitor = { id: req.user.id, username: req.user.username };
+    }
+    next();
     return;
   }
-  next();
+  res.status(401).json({
+    success: false,
+    error: {
+      code: 'AUTH_003',
+      message: 'User not authenticated'
+    }
+  });
 };
 
 /** Visitor JWT or quotation-system dealer/admin (for visit reschedule from dealer dashboard). */
 export const authorizeVisitorOrQuotationsDealer = (req: Request, res: Response, next: NextFunction): void => {
-  if (req.visitor) {
+  if (req.visitor || allowByAccess(req, 'visitor')) {
     next();
     return;
   }
   if (req.dealer && (req.dealer.role === 'dealer' || req.dealer.role === 'admin')) {
+    next();
+    return;
+  }
+  if (allowByAccess(req, 'quotation') || hasAdminPanelAccess(req)) {
     next();
     return;
   }
@@ -369,9 +462,11 @@ export const authorizeVisitorOrQuotationsDealer = (req: Request, res: Response, 
 // Authorize dealer, admin, visitor, or account manager (for read operations)
 export const authorizeDealerAdminOrVisitor = (req: Request, res: Response, next: NextFunction): void => {
   // Allow dealers/admins, visitors, or account managers
-  const isDealerOrAdmin = req.dealer !== undefined;
-  const isVisitor = req.visitor !== undefined;
-  const isAccountManager = req.user && (req.user.role === 'account-management' || req.user.role === 'hr');
+  const isDealerOrAdmin = req.dealer !== undefined || allowByAccess(req, 'quotation');
+  const isVisitor = req.visitor !== undefined || allowByAccess(req, 'visitor');
+  const isAccountManager =
+    (req.user && req.user.role === 'account-management') ||
+    allowByAccess(req, 'accounts');
   const isInventoryUser = req.user && (
     req.user.role === 'agent' ||
     req.user.role === 'admin' ||
@@ -381,12 +476,23 @@ export const authorizeDealerAdminOrVisitor = (req: Request, res: Response, next:
     req.user.role === 'installer' ||
     req.user.role === 'baldev' ||
     req.user.role === 'confirmation' ||
-    req.user.role === 'hr' ||
     req.user.role === 'metering' ||
     req.user.role === 'meter' ||
     req.user.role === 'metering-team' ||
     req.user.role === 'mco'
   );
+
+  if (isDealerOrAdmin && !req.dealer && allowByAccess(req, 'quotation') && req.user?.id) {
+    req.dealer = {
+      id: req.user.id,
+      username: req.user.username,
+      role: 'dealer',
+      access: (req.user as { access?: string[] }).access
+    };
+  }
+  if (isVisitor && !req.visitor && req.user?.id) {
+    req.visitor = { id: req.user.id, username: req.user.username };
+  }
   
   if (!isDealerOrAdmin && !isVisitor && !isAccountManager && !isInventoryUser) {
     res.status(401).json({
@@ -403,7 +509,10 @@ export const authorizeDealerAdminOrVisitor = (req: Request, res: Response, next:
 
 /** Account-manager installer or installation field team (not dealer admin). */
 export const authorizeInstallerOrInstallationTeam = (req: Request, res: Response, next: NextFunction): void => {
-  if (req.user && (req.user.role === 'installer' || isInstallationTeamJwtRole(req.user.role))) {
+  if (
+    (req.user && (req.user.role === 'installer' || isInstallationTeamJwtRole(req.user.role))) ||
+    allowByAccess(req, 'installation')
+  ) {
     next();
     return;
   }
@@ -418,7 +527,7 @@ export const authorizeInstaller = authorizeInstallerOrInstallationTeam;
 
 export const authorizeInstallerOrAdmin = (req: Request, res: Response, next: NextFunction): void => {
   // Quotation-system admin lives on `req.dealer` (Dealer row with role `admin`).
-  if (req.dealer?.role === 'admin') {
+  if (req.dealer?.role === 'admin' || hasAdminPanelAccess(req) || allowByAccess(req, 'installation')) {
     next();
     return;
   }
@@ -440,7 +549,10 @@ export const authorizeInstallerOrAdmin = (req: Request, res: Response, next: Nex
 };
 
 export const authorizeBaldev = (req: Request, res: Response, next: NextFunction): void => {
-  if (req.user && (req.user.role === 'baldev' || req.user.role === 'confirmation')) {
+  if (
+    (req.user && (req.user.role === 'baldev' || req.user.role === 'confirmation')) ||
+    allowByAccess(req, 'final_confirmation')
+  ) {
     next();
     return;
   }
@@ -451,7 +563,7 @@ export const authorizeBaldev = (req: Request, res: Response, next: NextFunction)
 };
 
 export const authorizeMetering = (req: Request, res: Response, next: NextFunction): void => {
-  if (req.dealer?.role === 'admin') {
+  if (req.dealer?.role === 'admin' || hasAdminPanelAccess(req) || allowByAccess(req, 'metering')) {
     next();
     return;
   }
@@ -478,7 +590,7 @@ export const authorizeMetering = (req: Request, res: Response, next: NextFunctio
 
 /** Metering workflow updates from quotation-scoped fallback routes (metering team, admin, or installer). */
 export const authorizeMeteringOrAdmin = (req: Request, res: Response, next: NextFunction): void => {
-  if (req.dealer?.role === 'admin') {
+  if (req.dealer?.role === 'admin' || hasAdminPanelAccess(req) || allowByAccess(req, 'metering')) {
     next();
     return;
   }
@@ -512,7 +624,11 @@ export const authorizeDealerOrAccountManager = (req: Request, res: Response, nex
     next();
     return;
   }
-  if (req.user && (req.user.role === 'account-management' || req.user.role === 'hr')) {
+  if (
+    (req.user && (req.user.role === 'account-management' || req.user.role === 'hr')) ||
+    allowByAccess(req, 'accounts') ||
+    allowByAccess(req, 'quotation')
+  ) {
     next();
     return;
   }
@@ -536,14 +652,16 @@ export const authorizeFinalConfirmationUploader = (
   next: NextFunction
 ): void => {
   if (
-    req.user &&
-    (
-      req.user.role === 'baldev' ||
-      req.user.role === 'confirmation' ||
-      req.user.role === 'admin' ||
-      req.user.role === 'super-admin' ||
-      req.user.role === 'super-admin-manager'
-    )
+    (req.user &&
+      (
+        req.user.role === 'baldev' ||
+        req.user.role === 'confirmation' ||
+        req.user.role === 'admin' ||
+        req.user.role === 'super-admin' ||
+        req.user.role === 'super-admin-manager'
+      )) ||
+    allowByAccess(req, 'final_confirmation') ||
+    hasAdminPanelAccess(req)
   ) {
     next();
     return;
@@ -589,7 +707,12 @@ export const authorizeQuotationDocumentsEditor = (req: Request, res: Response, n
 
 // Reject account managers (used to hard-block read endpoints beyond approved list)
 export const rejectAccountManager = (req: Request, res: Response, next: NextFunction): void => {
-  if (req.user && (req.user.role === 'account-management' || req.user.role === 'hr')) {
+  if (
+    req.user &&
+    (req.user.role === 'account-management' || req.user.role === 'hr') &&
+    !allowByAccess(req, 'quotation') &&
+    !hasAdminPanelAccess(req)
+  ) {
     res.status(403).json({
       success: false,
       error: {
@@ -635,7 +758,13 @@ export const authorizeAccountManagerOrAdminPayment = (
     !!(req.user && (req.user.role === 'account-management' || req.user.role === 'hr'));
   const isInventoryAdmin = !!(req.user && isInventorySystemAdminRole(req.user.role));
 
-  if (isQuotationAdmin || isAccountManager || isInventoryAdmin) {
+  if (
+    isQuotationAdmin ||
+    isAccountManager ||
+    isInventoryAdmin ||
+    allowByAccess(req, 'accounts') ||
+    hasAdminPanelAccess(req)
+  ) {
     next();
     return;
   }

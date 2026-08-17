@@ -7,7 +7,7 @@ import {
   getDealerDashboardStats,
   getVisitors
 } from '../controllers/dealerController';
-import { rescheduleVisit } from '../controllers/visitController';
+import { rescheduleVisit, transferVisit } from '../controllers/visitController';
 import {
   getDealerCallingQueueCurrent,
   getDealerCallingQueueNext,
@@ -303,6 +303,9 @@ router.get('/me/dashboard-stats', getDealerDashboardStats);
  *         description: Unauthorized
  */
 router.get('/visitors', getVisitors);
+router.get('/me/visitors', getVisitors);
+router.patch('/visits/:visitId/transfer', transferVisit);
+router.patch('/me/visits/:visitId/transfer', transferVisit);
 
 router.get('/me/calling-queue/next', getDealerCallingQueueNext);
 router.get('/me/calling-queue/current', getDealerCallingQueueCurrent);

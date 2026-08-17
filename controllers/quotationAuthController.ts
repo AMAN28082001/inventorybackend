@@ -6,6 +6,7 @@ import { User, AccountManager, AccountManagerHistory } from '../models';
 import { logError, logInfo } from '../utils/loggerHelper';
 import { v4 as uuidv4 } from 'uuid';
 import { normalizeInventoryRole } from '../utils/inventoryRole';
+import { resolveAccess } from '../utils/userAccess';
 
 // Login - for dealers and visitors
 export const login = async (req: Request, res: Response): Promise<void> => {
@@ -63,16 +64,26 @@ export const login = async (req: Request, res: Response): Promise<void> => {
         return;
       }
 
+      const access = resolveAccess({
+        role: dealer.role,
+        access: (dealer as any).access,
+        username: dealer.username
+      });
+      // Persist derived access for legacy empty rows (one-time fill)
+      if ((!Array.isArray((dealer as any).access) || !(dealer as any).access.length) && access.length) {
+        await dealer.update({ access }).catch(() => undefined);
+      }
+
       const expiresIn: string = process.env.JWT_EXPIRE || '7d';
       const token = jwt.sign(
-        { id: dealer.id, role: dealer.role },
+        { id: dealer.id, role: dealer.role, access },
         jwtSecret,
         { expiresIn } as SignOptions
       );
 
       // Generate refresh token
       const refreshToken = jwt.sign(
-        { id: dealer.id, role: dealer.role, type: 'refresh' },
+        { id: dealer.id, role: dealer.role, access, type: 'refresh' },
         jwtSecret,
         { expiresIn: '30d' } as SignOptions
       );
@@ -89,8 +100,11 @@ export const login = async (req: Request, res: Response): Promise<void> => {
             lastName: dealer.lastName,
             email: dealer.email,
             role: dealer.role,
+            access,
+            permissions: access,
+            isActive: dealer.isActive,
             // Quotation Admin may open Inventory with this same token (no second login)
-            ...(dealer.role === 'admin'
+            ...(dealer.role === 'admin' || access.includes('admin')
               ? {
                   inventoryAccess: true,
                   inventory_access: true,
@@ -133,15 +147,23 @@ export const login = async (req: Request, res: Response): Promise<void> => {
         return;
       }
 
+      const access = resolveAccess({
+        role: 'visitor',
+        access: (visitor as any).access,
+        username: visitor.username
+      });
+      if ((!Array.isArray((visitor as any).access) || !(visitor as any).access.length) && access.length) {
+        await visitor.update({ access: access as any }).catch(() => undefined);
+      }
       const expiresIn: string = process.env.JWT_EXPIRE || '7d';
       const token = jwt.sign(
-        { id: visitor.id, role: 'visitor', type: 'visitor' },
+        { id: visitor.id, role: 'visitor', type: 'visitor', access },
         jwtSecret,
         { expiresIn } as SignOptions
       );
 
       const refreshToken = jwt.sign(
-        { id: visitor.id, role: 'visitor', type: 'refresh' },
+        { id: visitor.id, role: 'visitor', access, type: 'refresh' },
         jwtSecret,
         { expiresIn: '30d' } as SignOptions
       );
@@ -157,7 +179,9 @@ export const login = async (req: Request, res: Response): Promise<void> => {
             firstName: visitor.firstName,
             lastName: visitor.lastName,
             email: visitor.email,
-            role: 'visitor'
+            role: 'visitor',
+            access,
+            permissions: access
           },
           expiresIn: 3600
         }
@@ -192,12 +216,14 @@ export const login = async (req: Request, res: Response): Promise<void> => {
         return;
       }
 
+      const access = resolveAccess({ role: 'installation-team' });
       const expiresIn: string = process.env.JWT_EXPIRE || '7d';
       const token = jwt.sign(
         {
           id: installationTeam.id,
           role: 'installation-team',
-          installationTeamId: installationTeam.id
+          installationTeamId: installationTeam.id,
+          access
         },
         jwtSecret,
         { expiresIn } as SignOptions
@@ -208,6 +234,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
           id: installationTeam.id,
           role: 'installation-team',
           installationTeamId: installationTeam.id,
+          access,
           type: 'refresh'
         },
         jwtSecret,
@@ -227,7 +254,9 @@ export const login = async (req: Request, res: Response): Promise<void> => {
             teamName: installationTeam.name,
             firstName: installationTeam.name,
             lastName: '',
-            isActive: installationTeam.isActive
+            isActive: installationTeam.isActive,
+            access,
+            permissions: access
           },
           expiresIn: 3600
         }
@@ -290,15 +319,24 @@ export const login = async (req: Request, res: Response): Promise<void> => {
         logError('Failed to log account manager login history', historyError, { accountManagerId: accountManager.id });
       }
 
+      const access = resolveAccess({
+        role: accountManager.role,
+        access: (accountManager as any).access,
+        username: accountManager.username
+      });
+      if ((!Array.isArray((accountManager as any).access) || !(accountManager as any).access.length) && access.length) {
+        await accountManager.update({ access }).catch(() => undefined);
+      }
+
       const expiresIn: string = process.env.JWT_EXPIRE || '7d';
       const token = jwt.sign(
-        { id: accountManager.id, role: accountManager.role },
+        { id: accountManager.id, role: accountManager.role, access },
         jwtSecret,
         { expiresIn } as SignOptions
       );
 
       const refreshToken = jwt.sign(
-        { id: accountManager.id, role: accountManager.role, type: 'refresh' },
+        { id: accountManager.id, role: accountManager.role, access, type: 'refresh' },
         jwtSecret,
         { expiresIn: '30d' } as SignOptions
       );
@@ -321,6 +359,8 @@ export const login = async (req: Request, res: Response): Promise<void> => {
             email: updatedAccountManager!.email,
             mobile: updatedAccountManager!.mobile || '',
             role: updatedAccountManager!.role,
+            access,
+            permissions: access,
             isActive: updatedAccountManager!.isActive,
             emailVerified: updatedAccountManager!.emailVerified || false,
             loginCount: updatedAccountManager!.loginCount,
@@ -363,14 +403,15 @@ export const login = async (req: Request, res: Response): Promise<void> => {
 
       const expiresIn: string = process.env.JWT_EXPIRE || '7d';
       const canonicalRole = normalizeInventoryRole(user.role) || user.role;
+      const access = resolveAccess({ role: canonicalRole, username: user.username });
       const token = jwt.sign(
-        { id: user.id, role: canonicalRole },
+        { id: user.id, role: canonicalRole, access },
         jwtSecret,
         { expiresIn } as SignOptions
       );
 
       const refreshToken = jwt.sign(
-        { id: user.id, role: canonicalRole, type: 'refresh' },
+        { id: user.id, role: canonicalRole, access, type: 'refresh' },
         jwtSecret,
         { expiresIn: '30d' } as SignOptions
       );
@@ -386,7 +427,9 @@ export const login = async (req: Request, res: Response): Promise<void> => {
             firstName: user.name.split(' ')[0] || user.name,
             lastName: user.name.split(' ').slice(1).join(' ') || '',
             name: user.name,
-            role: canonicalRole
+            role: canonicalRole,
+            access,
+            permissions: access
           },
           expiresIn: 3600
         }
@@ -454,6 +497,7 @@ export const refreshToken = async (req: Request, res: Response): Promise<void> =
         role?: string;
         type?: string;
         installationTeamId?: string;
+        access?: string[];
       };
 
       if (decoded.type !== 'refresh') {
@@ -468,9 +512,12 @@ export const refreshToken = async (req: Request, res: Response): Promise<void> =
       }
 
       const expiresIn: string = process.env.JWT_EXPIRE || '7d';
-      const accessPayload: Record<string, string> = {
+      const role = normalizeInventoryRole(decoded.role) || decoded.role || '';
+      const access = resolveAccess({ role, access: decoded.access });
+      const accessPayload: Record<string, unknown> = {
         id: decoded.id,
-        role: normalizeInventoryRole(decoded.role) || decoded.role || ''
+        role,
+        access
       };
       if (decoded.installationTeamId) {
         accessPayload.installationTeamId = decoded.installationTeamId;

@@ -1,10 +1,13 @@
 import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
-import { Dealer, Quotation, Visitor } from '../models/index-quotation';
+import { Dealer, Quotation } from '../models/index-quotation';
 import { Op, Sequelize } from 'sequelize';
 import { approvedQuotationValueFromRow } from '../utils/quotationApiJson';
 import { logError, logInfo } from '../utils/loggerHelper';
+import { resolveAccess } from '../utils/userAccess';
+import { listAssignableVisitors } from '../utils/assignableVisitors';
+import { filterByListAccess, parseAccessQueryFromReq } from '../utils/accessLists';
 
 // Register new dealer (PUBLIC)
 export const registerDealer = async (req: Request, res: Response): Promise<void> => {
@@ -93,6 +96,7 @@ export const registerDealer = async (req: Request, res: Response): Promise<void>
       addressState: address.state,
       addressPincode: address.pincode,
       role: 'dealer',
+      access: resolveAccess({ role: 'dealer' }),
       isActive: false, // New dealers are inactive by default, require admin approval
       emailVerified: false
     });
@@ -103,8 +107,15 @@ export const registerDealer = async (req: Request, res: Response): Promise<void>
     });
 
     const dealerData = dealerResponse?.toJSON() as any;
+    const access = resolveAccess({
+      role: dealerData.role || 'dealer',
+      access: dealerData.access,
+      username: dealerData.username
+    });
     const responseData = {
       ...dealerData,
+      access,
+      permissions: access,
       address: {
         street: dealerData.addressStreet,
         city: dealerData.addressCity,
@@ -149,9 +160,28 @@ export const getDealerProfile = async (req: Request, res: Response): Promise<voi
     });
 
     if (!dealer) {
-      res.status(404).json({
-        success: false,
-        error: { code: 'RES_001', message: 'Dealer not found' }
+      // §G — ops user with quotation access may have no dealers row; still return 200 profile.
+      const user = req.user as { firstName?: string; lastName?: string; email?: string; mobile?: string; access?: unknown; role?: string; username?: string } | undefined;
+      const access = resolveAccess({
+        role: user?.role ?? req.dealer.role,
+        access: user?.access ?? req.dealer.access,
+        username: user?.username ?? req.dealer.username
+      });
+      res.json({
+        success: true,
+        data: {
+          id: req.dealer.id,
+          username: req.dealer.username,
+          firstName: user?.firstName || req.dealer.username,
+          lastName: user?.lastName || '',
+          email: user?.email || '',
+          mobile: user?.mobile || '',
+          role: 'dealer',
+          access,
+          permissions: access,
+          isActive: true,
+          emailVerified: true
+        }
       });
       return;
     }
@@ -379,53 +409,23 @@ export const getVisitors = async (req: Request, res: Response): Promise<void> =>
     }
 
     const search = req.query.search as string;
-    const isActive = req.query.isActive as string;
+    const isActiveRaw = req.query.isActive as string | undefined;
+    const isActive =
+      isActiveRaw === undefined ? true : isActiveRaw === 'true' || isActiveRaw === '1';
 
-    const where: any = {};
-
-    // Filter by active status if specified, otherwise show all visitors
-    // (Dealers need to see all visitors to assign them, not just active ones)
-    if (isActive !== undefined) {
-      where.isActive = isActive === 'true';
-    }
-    // If isActive is not specified, don't filter - show all visitors
-
-    // Search by name, email, mobile, employeeId
-    if (search) {
-      where[Op.or] = [
-        { firstName: { [Op.iLike]: `%${search}%` } },
-        { lastName: { [Op.iLike]: `%${search}%` } },
-        { email: { [Op.iLike]: `%${search}%` } },
-        { mobile: { [Op.iLike]: `%${search}%` } },
-        { employeeId: { [Op.iLike]: `%${search}%` } }
-      ];
-    }
-
-    const visitors = await Visitor.findAll({
-      where,
-      attributes: { exclude: ['password'] },
-      order: [['firstName', 'ASC'], ['lastName', 'ASC']]
+    const visitors = await listAssignableVisitors({
+      search,
+      isActive
     });
+    const accessKey = parseAccessQueryFromReq(req);
+    const filtered = filterByListAccess(visitors, accessKey);
 
-    logInfo('Get visitors', { dealerId: req.dealer.id, count: visitors.length });
-
-    const formattedVisitors = visitors.map(v => ({
-      id: v.id,
-      username: v.username,
-      firstName: v.firstName,
-      lastName: v.lastName,
-      email: v.email,
-      mobile: v.mobile,
-      employeeId: v.employeeId,
-      isActive: v.isActive,
-      fullName: `${v.firstName} ${v.lastName}`,
-      createdAt: v.createdAt
-    }));
+    logInfo('Get visitors', { dealerId: req.dealer.id, count: filtered.length });
 
     res.json({
       success: true,
       data: {
-        visitors: formattedVisitors
+        visitors: filtered
       }
     });
   } catch (error) {

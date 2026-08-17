@@ -22,13 +22,18 @@ interface DealerAttributes {
   addressState: string;
   addressPincode: string;
   role: 'dealer' | 'admin';
+  /** Dashboard section keys (BACKEND_USER_ACCESS.md) */
+  access?: string[] | null;
   isActive: boolean;
   emailVerified: boolean;
   createdAt?: Date;
   updatedAt?: Date;
 }
 
-interface DealerCreationAttributes extends Optional<DealerAttributes, 'id' | 'company' | 'governmentIdImage' | 'isActive' | 'emailVerified' | 'createdAt' | 'updatedAt'> {}
+interface DealerCreationAttributes extends Optional<
+  DealerAttributes,
+  'id' | 'company' | 'governmentIdImage' | 'access' | 'isActive' | 'emailVerified' | 'createdAt' | 'updatedAt'
+> {}
 
 class Dealer extends Model<DealerAttributes, DealerCreationAttributes> implements DealerAttributes {
   public id!: string;
@@ -51,6 +56,7 @@ class Dealer extends Model<DealerAttributes, DealerCreationAttributes> implement
   public addressState!: string;
   public addressPincode!: string;
   public role!: 'dealer' | 'admin';
+  public access!: string[] | null;
   public isActive!: boolean;
   public emailVerified!: boolean;
   public readonly createdAt!: Date;
@@ -141,6 +147,11 @@ Dealer.init(
     role: {
       type: DataTypes.ENUM('dealer', 'admin'),
       allowNull: false
+    },
+    access: {
+      type: DataTypes.JSONB,
+      allowNull: false,
+      defaultValue: []
     },
     isActive: {
       type: DataTypes.BOOLEAN,

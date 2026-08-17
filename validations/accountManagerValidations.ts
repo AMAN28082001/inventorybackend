@@ -1,4 +1,38 @@
 import { z } from 'zod';
+import { ACCESS_KEYS } from '../utils/userAccess';
+
+const accessArraySchema = z
+  .array(z.enum(ACCESS_KEYS))
+  .min(1, 'Select at least one dashboard access')
+  .optional();
+
+const optionalProfileFields = {
+  gender: z.enum(['Male', 'Female', 'Other']).optional(),
+  dateOfBirth: z.string().optional(),
+  fatherName: z.string().optional(),
+  fatherContact: z.string().optional(),
+  governmentIdType: z.string().optional(),
+  governmentIdNumber: z.string().optional(),
+  employeeId: z.string().optional().nullable(),
+  address: z
+    .object({
+      street: z.string().optional(),
+      city: z.string().optional(),
+      state: z.string().optional(),
+      pincode: z.string().optional()
+    })
+    .optional()
+};
+
+const opsRoleEnum = z.enum([
+  'account-management',
+  'installer',
+  'baldev',
+  'hr',
+  'metering',
+  'admin',
+  'confirmation'
+]);
 
 export const createAccountManagerSchema = z.object({
   username: z.string()
@@ -17,9 +51,12 @@ export const createAccountManagerSchema = z.object({
     .email('Invalid email format'),
   mobile: z.string()
     .regex(/^\d{10}$/, 'Mobile must be exactly 10 digits'),
-  role: z.enum(['account-management', 'installer', 'baldev', 'hr', 'metering'], {
-    message: 'Role must be one of: account-management, installer, baldev, hr, metering'
-  })
+  role: opsRoleEnum.optional(),
+  access: accessArraySchema,
+  permissions: accessArraySchema,
+  ...optionalProfileFields
+}).refine((data) => data.role || (data.access && data.access.length) || (data.permissions && data.permissions.length), {
+  message: 'role or access is required'
 });
 
 export const updateAccountManagerSchema = z.object({
@@ -41,9 +78,12 @@ export const updateAccountManagerSchema = z.object({
     z.string().min(8, 'Password must be at least 8 characters'),
     z.literal('') // Allow empty string (frontend sends empty to keep current)
   ]).optional(),
-  role: z.enum(['account-management', 'installer', 'baldev', 'hr', 'metering']).optional(),
+  role: opsRoleEnum.optional(),
+  access: accessArraySchema,
+  permissions: accessArraySchema,
   isActive: z.boolean().optional(),
-  emailVerified: z.boolean().optional()
+  emailVerified: z.boolean().optional(),
+  ...optionalProfileFields
 }).refine((data) => {
   // Filter out password if it's empty string - don't count it as a field
   const fieldsWithoutEmptyPassword = { ...data };

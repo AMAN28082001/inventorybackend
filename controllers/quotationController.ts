@@ -77,6 +77,8 @@ import {
   isReleasedToInstallerListQuery
 } from '../constants/workflowQueues';
 import { extractS3KeyOrStoredPath } from '../utils/s3Service';
+import { isOpsAccountManagerView } from '../utils/userAccess';
+import { parseCityFilter, cityInFilterWhere } from '../utils/serviceCities';
 import {
   buildQuotationProductPdfPersistFields,
   buildQuotationProductPdfPersistFieldsForUpdate,
@@ -1469,10 +1471,8 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
     const limitParam = req.query.limit as string | undefined;
     const wantsReleasedInstallerList = isReleasedToInstallerListQuery(req.query as Record<string, unknown>);
     const limit = limitParam
-      ? Math.min(parseInt(limitParam) || 20, 1000)
-      : wantsReleasedInstallerList
-        ? 1000
-        : undefined;
+      ? Math.min(Math.max(parseInt(limitParam, 10) || 20, 1), 1000)
+      : 1000;
     const offset = limit ? (page - 1) * limit : undefined;
     const status = req.query.status as string;
     const search = req.query.search as string;
@@ -1485,8 +1485,8 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
     const sortDirRaw = ((req.query.sortOrder as string) || 'desc').toUpperCase();
     const sortOrder = sortDirRaw === 'ASC' ? 'ASC' : 'DESC';
 
-    // Check if user is account manager
-    const isAccountManager = req.user && (req.user.role === 'account-management' || req.user.role === 'hr');
+    // Account-management approved list — not the dealer quotation dashboard (§G).
+    const isAccountManager = isOpsAccountManagerView(req);
     if (isAccountManager && status && status !== 'approved') {
       res.status(403).json({
         success: false,
@@ -1504,6 +1504,9 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
     if (isAccountManager) {
       // Account managers can only see approved quotations
       where.status = 'approved';
+    } else if (req.dealer && req.dealer.role !== 'admin') {
+      // Prefer dealer scope when access includes quotation (even if visitor is also attached).
+      where = { dealerId: req.dealer.id };
     } else if (req.visitor) {
       // Visitors can only see quotations from their assigned visits
       const visitorAssignments = await VisitAssignment.findAll({
@@ -1617,6 +1620,40 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         ? [['installationReleasedAt', 'DESC'], ['createdAt', 'DESC']]
         : [[safeSortBy, sortOrder]];
 
+    const cities = parseCityFilter(req.query as Record<string, unknown>);
+
+    const listIncludes = [
+      {
+        model: Customer,
+        as: 'customer',
+        attributes: ['id', 'firstName', 'lastName', 'mobile', 'email', 'streetAddress', 'city', 'state', 'pincode'],
+        required: cities.length > 0,
+        ...(cities.length ? { where: cityInFilterWhere(cities, 'city') } : {})
+      },
+      {
+        model: QuotationProduct,
+        as: 'products',
+        required: false
+      },
+      {
+        model: CustomPanel,
+        as: 'customPanels',
+        required: false,
+        separate: true
+      },
+      {
+        model: QuotationDocument,
+        as: 'documents',
+        required: false
+      },
+      {
+        model: Dealer,
+        as: 'dealer',
+        attributes: ['id', 'firstName', 'lastName', 'email', 'mobile', 'username', 'role'],
+        required: false
+      }
+    ];
+
     let quotations;
     if (search) {
       // Search by quotation ID or customer name/mobile
@@ -1636,100 +1673,35 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
       };
       quotations = await Quotation.findAndCountAll({
         where: whereWithSearch,
-        include: [
-          {
-            model: Customer,
-            as: 'customer',
-            required: false
-          },
-          {
-            model: QuotationProduct,
-            as: 'products',
-            required: false
-          },
-          {
-            model: CustomPanel,
-            as: 'customPanels',
-            required: false
-          },
-          {
-            model: QuotationDocument,
-            as: 'documents',
-            required: false
-          },
-          {
-            model: Dealer,
-            as: 'dealer',
-            attributes: ['id', 'firstName', 'lastName', 'email', 'mobile', 'username', 'role'],
-            required: false
-          }
-        ],
+        include: listIncludes,
         limit,
         offset,
-        order: listOrder
+        order: listOrder,
+        distinct: true,
+        subQuery: false
       });
     } else {
       quotations = await Quotation.findAndCountAll({
         where,
-        include: [
-          {
-            model: Customer,
-            as: 'customer',
-            attributes: ['firstName', 'lastName', 'mobile']
-          },
-          {
-            model: QuotationProduct,
-            as: 'products',
-            required: false
-          },
-          {
-            model: CustomPanel,
-            as: 'customPanels',
-            required: false
-          },
-          {
-            model: QuotationDocument,
-            as: 'documents',
-            required: false
-          },
-          {
-            model: Dealer,
-            as: 'dealer',
-            attributes: ['id', 'firstName', 'lastName', 'email', 'mobile', 'username', 'role'],
-            required: false
-          }
-        ],
+        include: listIncludes,
         limit,
         offset,
-        order: listOrder
+        order: listOrder,
+        distinct: true,
+        subQuery: false
       });
     }
 
     const quotationIds = quotations.rows.map((q: any) => String(q.id));
     const phaseMap = await fetchPaymentPhasesByQuotationIds(quotationIds);
 
-    // Avoid costly JOIN fan-out on list queries; load installation docs in one batched query.
-    const installationDocsByQuotationId = new Map<string, any[]>();
-    if (quotationIds.length > 0) {
-      const installationDocsRows = await QuotationInstallationDoc.findAll({
-        where: { quotationId: { [Op.in]: quotationIds } },
-        order: [['createdAt', 'ASC']]
-      });
-      for (const row of installationDocsRows as any[]) {
-        const qId = String(row.quotationId);
-        if (!installationDocsByQuotationId.has(qId)) installationDocsByQuotationId.set(qId, []);
-        installationDocsByQuotationId.get(qId)!.push(row);
-      }
-    }
-
     const formattedQuotations = await Promise.all(quotations.rows.map(async q => {
       const customer = (q as any).customer;
       const products = (q as any).products;
       const dealer = (q as any).dealer;
       const documents = (q as any).documents;
-      const installationDocs = installationDocsByQuotationId.get(String(q.id)) || [];
       const phaseRows = phaseMap.get(String(q.id)) || ((q as any).paymentPhases || []);
-      const resolvedDocuments = await resolveQuotationDocumentUrls(documents);
+      const resolvedDocuments = await resolveQuotationDocumentUrls(documents, { sign: false });
       
       // Calculate pricing if products exist
       const pricing = products 
@@ -1773,15 +1745,23 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         (row as any).customer_type ??
         null;
 
-      const rawInstallationDocs = installationDocs.map((doc: any) =>
-        typeof doc.toJSON === 'function' ? doc.toJSON() : doc
-      );
-      const installationPayload = await mapInstallationDocumentsForApi(rawInstallationDocs);
-      const latestMeterDoc = getLatestMeterDocMeta(rawInstallationDocs);
-      const meterDocumentFields = await buildMeterDocumentApiFields(
-        resolveMeterStoredRef((q as any).meterDocumentImageUrl, rawInstallationDocs),
-        latestMeterDoc.name
-      );
+      const installationPayload = {
+        documents: {},
+        installationDocuments: {},
+        installationFieldUrls: {},
+        installationPhotoUrls: [] as string[]
+      };
+      const meterRef = (q as any).meterDocumentImageUrl || null;
+      const meterDocumentFields = {
+        meterDocumentImageUrl: meterRef,
+        meterDocumentUrl: meterRef,
+        meterDocumentPublicUrl: meterRef,
+        meter_document_image_url: meterRef,
+        meter_document_url: meterRef,
+        meter_document_public_url: meterRef,
+        meterDocumentName: meterRef ? String(meterRef).split('?')[0].split('/').pop() || null : null,
+        meter_document_name: meterRef ? String(meterRef).split('?')[0].split('/').pop() || null : null
+      };
 
       const productListFields = quotationProductEnrichmentFields(
         products,
@@ -1806,9 +1786,20 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
           role: dealer.role
         } : null,
         customer: customer ? {
+          id: customer.id,
           firstName: customer.firstName,
           lastName: customer.lastName ?? '',
-          mobile: customer.mobile
+          mobile: customer.mobile,
+          email: customer.email ?? '',
+          city: customer.city || '',
+          customerCity: customer.city || '',
+          customer_city: customer.city || '',
+          address: {
+            street: customer.streetAddress || '',
+            city: customer.city || '',
+            state: customer.state || '',
+            pincode: customer.pincode || ''
+          }
         } : null,
         ...productListFields,
         systemType: q.systemType,
@@ -1860,7 +1851,6 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
           ...(resolvedDocuments || {}),
           ...installationPayload.documents
         },
-        ...(await buildFinalConfirmationApiFields(resolvedDocuments)),
         ...installationPayload.installationFieldUrls,
         phoneNumber: prefillPhoneNumber,
         phone_number: prefillPhoneNumber,
@@ -1929,11 +1919,33 @@ export const downloadQuotationsExcel = async (req: Request, res: Response): Prom
     const paymentType = (req.query.paymentType as string | undefined) || (req.query.paymentMode as string | undefined);
     const paymentStatus = req.query.paymentStatus as string | undefined;
 
-    const isAccountManager = req.user && (req.user.role === 'account-management' || req.user.role === 'hr');
+    const isAccountManager = isOpsAccountManagerView(req);
     const where: any = {};
 
     if (isAccountManager) {
       where.status = 'approved';
+    } else if (req.dealer && req.dealer.role !== 'admin') {
+      where.dealerId = req.dealer.id;
+    } else if (req.visitor) {
+      const visitorAssignments = await VisitAssignment.findAll({
+        where: { visitorId: req.visitor.id },
+        attributes: ['visitId']
+      });
+      const visitIds = visitorAssignments.map(a => a.visitId);
+      if (visitIds.length === 0) {
+        res.status(200).json({ success: true, data: { message: 'No data to export' } });
+        return;
+      }
+      const visits = await Visit.findAll({
+        where: { id: visitIds },
+        attributes: ['quotationId']
+      });
+      const quotationIds = visits.map(v => (v as any).quotationId).filter(Boolean);
+      if (quotationIds.length === 0) {
+        res.status(200).json({ success: true, data: { message: 'No data to export' } });
+        return;
+      }
+      where.id = quotationIds;
     } else if (req.dealer) {
       where.dealerId = req.dealer.role === 'admin' ? { [Op.ne]: null } : req.dealer.id;
       if (req.dealer.role === 'admin') delete where.dealerId;
@@ -2082,13 +2094,14 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
     const { quotationId } = req.params;
     const where: any = { id: quotationId };
     
-    // Check if user is account manager
-    const isAccountManager = req.user && (req.user.role === 'account-management' || req.user.role === 'hr');
+    const isAccountManager = isOpsAccountManagerView(req);
     
     // Check permissions
     if (isAccountManager) {
       // Account managers can only see approved quotations
       where.status = 'approved';
+    } else if (req.dealer && req.dealer.role !== 'admin') {
+      where.dealerId = req.dealer.id;
     } else if (req.visitor) {
       // Visitors can only see quotations from their assigned visits
       const visitorAssignments = await VisitAssignment.findAll({
@@ -4548,7 +4561,10 @@ const ensureQuotationDocumentUploadFieldIsValid = (
     : { valid: false, message: 'Only image or PDF uploads are allowed' };
 };
 
-const resolveQuotationDocumentUrls = async (documents: any) => {
+const resolveQuotationDocumentUrls = async (
+  documents: any,
+  options?: { sign?: boolean }
+) => {
   const json = documents
     ? (typeof documents.toJSON === 'function' ? documents.toJSON() : { ...documents })
     : buildEmptyResolvedQuotationDocuments();
@@ -4571,8 +4587,12 @@ const resolveQuotationDocumentUrls = async (documents: any) => {
     'workCompletionWarrantyFile'
   ];
 
-  for (const field of mediaFields) {
-    json[field] = await resolveDocumentImageUrl(json[field]);
+  if (options?.sign !== false) {
+    await Promise.all(
+      mediaFields.map(async (field) => {
+        json[field] = await resolveDocumentImageUrl(json[field]);
+      })
+    );
   }
 
   // Always expose consistent alias keys for frontend compatibility.

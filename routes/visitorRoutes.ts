@@ -1,8 +1,9 @@
 import express, { Router } from 'express';
 import multer, { MulterError } from 'multer';
 import { getAssignedVisits, getVisitorStatistics } from '../controllers/visitorController';
+import { getVisitors } from '../controllers/dealerController';
 import { completeVisit, uploadVisitMedia } from '../controllers/visitController';
-import { authenticate, authorizeVisitor } from '../middleware/authQuotation';
+import { authenticate, authorizeDealer, authorizeVisitor } from '../middleware/authQuotation';
 import { validate } from '../middleware/validate';
 import { completeVisitSchema } from '../validations/visitValidations';
 import { uploadToS3FromMemory } from '../middleware/upload';
@@ -101,7 +102,12 @@ const handleSingleVisitUploadMultipart = (
   });
 };
 
-// All routes require visitor authentication
+// Assignable visitors for Schedule / Transfer (dealer or access:quotation).
+// FE also tries these when GET /dealers/visitors is missing.
+router.get('/assignable', authenticate, authorizeDealer, getVisitors);
+router.get('/', authenticate, authorizeDealer, getVisitors);
+
+// Remaining visitor-app routes
 router.use(authenticate);
 router.use(authorizeVisitor);
 

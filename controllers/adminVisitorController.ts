@@ -4,6 +4,17 @@ import bcrypt from 'bcryptjs';
 import { Visitor, VisitAssignment, Visit } from '../models/index-quotation';
 import { Op } from 'sequelize';
 import { logError, logInfo } from '../utils/loggerHelper';
+import { parseAccessFromBody, resolveAccess } from '../utils/userAccess';
+import { parseProfilePatchFromBody, publicVisitorForApi } from '../utils/userProfile';
+import { listAssignableVisitors } from '../utils/assignableVisitors';
+import {
+  filterByListAccess,
+  includeAccessUsersFromReq,
+  paginateRows,
+  parseAccessQueryFromReq
+} from '../utils/accessLists';
+
+const visitorRecord = (row: Visitor) => row.toJSON() as unknown as Record<string, unknown>;
 
 // Create visitor (admin)
 export const createVisitor = async (req: Request, res: Response): Promise<void> => {
@@ -17,6 +28,19 @@ export const createVisitor = async (req: Request, res: Response): Promise<void> 
     }
 
     const { username, password, firstName, lastName, email, mobile, employeeId } = req.body;
+    const accessParse = parseAccessFromBody(req.body || {});
+    if (accessParse.error) {
+      res.status(400).json({
+        success: false,
+        error: { code: 'VAL_001', message: accessParse.error }
+      });
+      return;
+    }
+    const access =
+      accessParse.access && accessParse.access.length
+        ? accessParse.access
+        : resolveAccess({ role: 'visitor', access: req.body.access });
+    const profile = parseProfilePatchFromBody(req.body || {});
 
     // Check if username already exists
     const existingVisitor = await Visitor.findOne({ where: { username } });
@@ -59,26 +83,28 @@ export const createVisitor = async (req: Request, res: Response): Promise<void> 
       lastName,
       email,
       mobile,
-      employeeId: employeeId || null,
-      isActive: true
+      employeeId: employeeId || profile.employeeId || null,
+      access: access.length ? access : ['visitor'],
+      gender: profile.gender ?? null,
+      dateOfBirth: profile.dateOfBirth ?? null,
+      fatherName: profile.fatherName ?? null,
+      fatherContact: profile.fatherContact ?? null,
+      governmentIdType: profile.governmentIdType ?? null,
+      governmentIdNumber: profile.governmentIdNumber ?? null,
+      addressStreet: profile.addressStreet ?? null,
+      addressCity: profile.addressCity ?? null,
+      addressState: profile.addressState ?? null,
+      addressPincode: profile.addressPincode ?? null,
+      emailVerified: req.body.emailVerified === true,
+      isActive: req.body.isActive !== false
     });
 
     logInfo('Visitor created by admin', { visitorId: visitor.id, createdBy: req.dealer.id });
 
+    const created = await Visitor.findByPk(visitor.id, { attributes: { exclude: ['password'] } });
     res.status(201).json({
       success: true,
-      data: {
-        id: visitor.id,
-        username: visitor.username,
-        firstName: visitor.firstName,
-        lastName: visitor.lastName,
-        email: visitor.email,
-        mobile: visitor.mobile,
-        employeeId: visitor.employeeId,
-        createdBy: req.dealer.id,
-        isActive: visitor.isActive,
-        createdAt: visitor.createdAt
-      }
+      data: publicVisitorForApi(visitorRecord(created || visitor))
     });
   } catch (error) {
     logError('Create visitor error', error, { createdBy: req.dealer?.id });
@@ -101,12 +127,37 @@ export const getAllVisitors = async (req: Request, res: Response): Promise<void>
     }
 
     const page = parseInt(req.query.page as string) || 1;
-    const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
-    const offset = (page - 1) * limit;
+    const limit = Math.min(parseInt(req.query.limit as string) || 1000, 1000);
     const search = req.query.search as string;
     const isActive = req.query.isActive as string;
     const sortBy = (req.query.sortBy as string) || 'createdAt';
     const sortOrder = (req.query.sortOrder as string) || 'desc';
+    const accessKey = parseAccessQueryFromReq(req);
+    const includeAccessUsers = includeAccessUsersFromReq(req) || accessKey === 'visitor';
+
+    if (includeAccessUsers) {
+      const union = await listAssignableVisitors({
+        search,
+        isActive: isActive === undefined ? true : isActive === 'true' || isActive === '1'
+      });
+      const filtered = filterByListAccess(union, accessKey || 'visitor');
+      const paged = paginateRows(filtered, page, limit);
+      res.json({
+        success: true,
+        data: {
+          visitors: paged.rows,
+          pagination: {
+            page: paged.page,
+            limit: paged.limit,
+            total: paged.total,
+            totalPages: paged.totalPages,
+            hasNext: paged.hasNext,
+            hasPrev: paged.hasPrev
+          }
+        }
+      });
+      return;
+    }
 
     const where: any = {};
 
@@ -124,39 +175,38 @@ export const getAllVisitors = async (req: Request, res: Response): Promise<void>
       ];
     }
 
-    const visitors = await Visitor.findAndCountAll({
+    const visitors = await Visitor.findAll({
       where,
       attributes: { exclude: ['password'] },
-      limit,
-      offset,
       order: [[sortBy, sortOrder.toUpperCase()]]
     });
 
-    // Get visit counts for each visitor
     const visitorsWithStats = await Promise.all(
-      visitors.rows.map(async (visitor) => {
+      visitors.map(async (visitor) => {
         const visitCount = await VisitAssignment.count({
           where: { visitorId: visitor.id }
         });
 
-        return {
-          ...visitor.toJSON(),
+        return publicVisitorForApi({
+          ...visitorRecord(visitor),
           visitCount
-        };
+        });
       })
     );
+    const filtered = filterByListAccess(visitorsWithStats, accessKey);
+    const paged = paginateRows(filtered, page, limit);
 
     res.json({
       success: true,
       data: {
-        visitors: visitorsWithStats,
+        visitors: paged.rows,
         pagination: {
-          page,
-          limit,
-          total: visitors.count,
-          totalPages: Math.ceil(visitors.count / limit),
-          hasNext: page < Math.ceil(visitors.count / limit),
-          hasPrev: page > 1
+          page: paged.page,
+          limit: paged.limit,
+          total: paged.total,
+          totalPages: paged.totalPages,
+          hasNext: paged.hasNext,
+          hasPrev: paged.hasPrev
         }
       }
     });
@@ -231,7 +281,7 @@ export const getVisitorById = async (req: Request, res: Response): Promise<void>
     res.json({
       success: true,
       data: {
-        ...visitor.toJSON(),
+        ...publicVisitorForApi(visitorRecord(visitor)),
         visitCount,
         completedVisits,
         pendingVisits,
@@ -259,7 +309,16 @@ export const updateVisitor = async (req: Request, res: Response): Promise<void> 
     }
 
     const { visitorId } = req.params;
-    const { firstName, lastName, email, mobile, employeeId, isActive } = req.body;
+    const { firstName, lastName, email, mobile, employeeId, isActive, emailVerified, password } = req.body;
+    const accessParse = parseAccessFromBody(req.body || {});
+    if (accessParse.error) {
+      res.status(400).json({
+        success: false,
+        error: { code: 'VAL_001', message: accessParse.error }
+      });
+      return;
+    }
+    const profile = parseProfilePatchFromBody(req.body || {});
 
     const visitor = await Visitor.findByPk(visitorId);
 
@@ -289,14 +348,22 @@ export const updateVisitor = async (req: Request, res: Response): Promise<void> 
       }
     }
 
-    await visitor.update({
+    const updateData: Record<string, unknown> = {
       firstName: firstName !== undefined ? firstName : visitor.firstName,
       lastName: lastName !== undefined ? lastName : visitor.lastName,
       email: email !== undefined ? email : visitor.email,
       mobile: mobile !== undefined ? mobile : visitor.mobile,
       employeeId: employeeId !== undefined ? employeeId : visitor.employeeId,
-      isActive: isActive !== undefined ? isActive : visitor.isActive
-    });
+      isActive: isActive !== undefined ? isActive : visitor.isActive,
+      ...profile
+    };
+    if (emailVerified !== undefined) updateData.emailVerified = emailVerified;
+    if (accessParse.access) updateData.access = accessParse.access;
+    if (password && String(password).trim()) {
+      updateData.password = await bcrypt.hash(String(password), 10);
+    }
+
+    await visitor.update(updateData);
 
     const updatedVisitor = await Visitor.findByPk(visitor.id, {
       attributes: { exclude: ['password'] }
@@ -304,7 +371,7 @@ export const updateVisitor = async (req: Request, res: Response): Promise<void> 
 
     res.json({
       success: true,
-      data: updatedVisitor
+      data: publicVisitorForApi(visitorRecord(updatedVisitor || visitor))
     });
   } catch (error) {
     logError('Update visitor error', error, { visitorId: req.params.visitorId });

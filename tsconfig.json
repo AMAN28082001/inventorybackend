@@ -24,7 +24,8 @@
     "types": ["node"]
   },
   "ts-node": {
-    "files": true
+    "files": true,
+    "transpileOnly": true
   },
   "include": [
     "server.ts",
