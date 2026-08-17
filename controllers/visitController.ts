@@ -375,7 +375,7 @@ export const createVisit = async (req: Request, res: Response): Promise<void> =>
       return;
     }
 
-    const { quotationId, visitDate, visitTime, location, locationLink, notes, visitors } = req.body;
+    const { quotationId, visitDate, visitTime, location, locationLink, notes } = req.body;
     const visitorId = parseVisitorIdFromBody(req.body || {});
     if (!visitorId) {
       res.status(400).json({

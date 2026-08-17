@@ -15,7 +15,7 @@ import { parseProfilePatchFromBody } from '../utils/userProfile';
 import { filterByListAccess, paginateRows, parseAccessQueryFromReq } from '../utils/accessLists';
 
 const toPublicAccountManager = (am: AccountManager) => {
-  const json = am.toJSON() as Record<string, unknown>;
+  const json = am.toJSON() as unknown as Record<string, unknown>;
   delete json.password;
   return publicAccountManagerForApi(json);
 };
