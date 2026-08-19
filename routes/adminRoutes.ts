@@ -19,7 +19,8 @@ import {
   updateQuotationInstallationScheduledAt,
   updateQuotationPaymentDetails,
   saveFinalConfirmationDocuments,
-  uploadQuotationDocument
+  uploadQuotationDocument,
+  getQuotationDocumentViewUrl
 } from '../controllers/quotationController';
 import {
   handleFinalConfirmationDocumentsMultipart,
@@ -170,8 +171,8 @@ router.get('/visits', authorizeAdmin, getAdminVisits);
 router.use(authorizeAdmin);
 
 /**
- * Admin Product Needed — installation-pending brand / wattage aggregates.
- * GET /api/admin/product-needed?scope=installation_pending
+ * Admin Product Needed — installation-pending or file-login (not approved) aggregates.
+ * GET /api/admin/product-needed?scope=installation_pending|file_login
  */
 router.get('/product-needed', getAdminProductNeeded);
 
@@ -218,6 +219,14 @@ router.post(
   '/quotations/:quotationId/documents/upload',
   handleSingleInstallerUploadMultipart,
   uploadInstallerDocument
+);
+router.get(
+  '/quotations/:quotationId/documents/view-url',
+  getQuotationDocumentViewUrl
+);
+router.get(
+  '/quotations/:quotationId/documents/presign-url',
+  getQuotationDocumentViewUrl
 );
 
 /** §M — Final confirmation document uploads (admin / baldev; not KYC PATCH). */

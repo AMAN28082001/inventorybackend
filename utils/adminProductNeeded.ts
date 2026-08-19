@@ -65,9 +65,47 @@ export function isReleasedToInstaller(q: Record<string, unknown>): boolean {
   );
 }
 
-/** Same rules as frontend isQuotationEligibleForProductNeeded */
+export type ProductNeededScope = 'installation_pending' | 'file_login';
+
+const FILE_LOGIN_STATUSES = ['already_login', 'login_now'] as const;
+
+export function parseProductNeededScope(query: {
+  scope?: unknown;
+  tab?: unknown;
+}): ProductNeededScope {
+  const raw = str(query.scope || query.tab).toLowerCase();
+  if (raw === 'file_login' || raw === 'file-login') return 'file_login';
+  return 'installation_pending';
+}
+
+function quotationStatusValue(q: Record<string, unknown>): string {
+  return str(q.status || q.quotationStatus || q.quotation_status).toLowerCase();
+}
+
+export function isProductNeededRejected(q: Record<string, unknown>): boolean {
+  const status = quotationStatusValue(q);
+  return status === 'rejected' || status === 'reject';
+}
+
+export function hasFileLoginRecorded(q: Record<string, unknown>): boolean {
+  const status = str(q.fileLoginStatus || q.file_login_status).toLowerCase();
+  if (FILE_LOGIN_STATUSES.includes(status as (typeof FILE_LOGIN_STATUSES)[number])) return true;
+  const at = q.fileLoginAt ?? q.file_login_at;
+  return at != null && str(at) !== '';
+}
+
+/** File login recorded, quotation not approved, never rejected. */
+export function isQuotationEligibleForProductNeededFileLogin(q: Record<string, unknown>): boolean {
+  if (isProductNeededRejected(q)) return false;
+  const status = quotationStatusValue(q);
+  if (status === 'approved' || status === 'completed') return false;
+  return hasFileLoginRecorded(q);
+}
+
+/** Same rules as frontend isQuotationEligibleForProductNeeded (installation pending). */
 export function isQuotationEligibleForProductNeeded(q: Record<string, unknown>): boolean {
-  if (String(q.status || q.quotationStatus || '').toLowerCase() !== 'approved') return false;
+  if (isProductNeededRejected(q)) return false;
+  if (quotationStatusValue(q) !== 'approved') return false;
   if (!isReleasedToInstaller(q)) return false;
   if (q.installerApprovedAt || q.installer_approved_at) return false;
   const inst = str(q.installationStatus || q.installation_status || 'pending_installer');
@@ -77,6 +115,27 @@ export function isQuotationEligibleForProductNeeded(q: Record<string, unknown>):
     inst === '' ||
     inst === 'pending_installer'
   );
+}
+
+export function isQuotationEligibleForProductNeededScope(
+  q: Record<string, unknown>,
+  scope: ProductNeededScope
+): boolean {
+  if (isProductNeededRejected(q)) return false;
+  if (scope === 'file_login') return isQuotationEligibleForProductNeededFileLogin(q);
+  return isQuotationEligibleForProductNeeded(q);
+}
+
+export function resolveProductNeededDateColumn(
+  dateField: unknown,
+  scope: ProductNeededScope
+): 'createdAt' | 'installationReleasedAt' | 'fileLoginAt' | 'statusApprovedAt' {
+  const field = str(dateField).toLowerCase();
+  if (field === 'created') return 'createdAt';
+  if (field === 'file_login' || field === 'filelogin') return 'fileLoginAt';
+  if (field === 'approved') return 'statusApprovedAt';
+  if (field === 'installation_released') return 'installationReleasedAt';
+  return scope === 'file_login' ? 'fileLoginAt' : 'installationReleasedAt';
 }
 
 function effectiveQty(quantity: unknown, sizeOrBrand: unknown): number {
@@ -315,6 +374,15 @@ export function serializeProductNeededRow(quotation: Record<string, any>) {
     quotation.systemKw ??
     quotation.system_kw ??
     (products.systemSize || products.system_size || null);
+  const customer = quotation.customer || {};
+  const customerAddress =
+    quotation.customerAddress ||
+    customer.address ||
+    [customer.streetAddress, customer.city, customer.state, customer.pincode]
+      .map((part: unknown) => str(part))
+      .filter(Boolean)
+      .join(', ') ||
+    null;
 
   return {
     quotationId: quotation.id,
@@ -322,9 +390,10 @@ export function serializeProductNeededRow(quotation: Record<string, any>) {
     dealerId: quotation.dealerId || quotation.dealer_id || null,
     customerName:
       quotation.customerName ||
-      [quotation.customer?.firstName, quotation.customer?.lastName].filter(Boolean).join(' ') ||
+      [customer.firstName, customer.lastName].filter(Boolean).join(' ') ||
       null,
-    customerMobile: quotation.phoneNumber || quotation.customer?.mobile || null,
+    customerMobile: quotation.phoneNumber || customer.mobile || null,
+    customerAddress,
     dealerName: dealerDisplayName(quotation.dealer),
     systemKw: systemKw != null ? String(systemKw) : null,
     systemType: products.systemType || products.system_type || null,
@@ -336,6 +405,9 @@ export function serializeProductNeededRow(quotation: Record<string, any>) {
     inverterQuantity: inverter?.quantity ?? null,
     installationStatus: quotation.installationStatus || quotation.installation_status || 'pending_installer',
     installationReleasedAt: quotation.installationReleasedAt || quotation.installation_released_at || null,
+    fileLoginAt: quotation.fileLoginAt || quotation.file_login_at || null,
+    fileLoginStatus: quotation.fileLoginStatus || quotation.file_login_status || null,
+    statusApprovedAt: quotation.statusApprovedAt || quotation.status_approved_at || null,
     quotationStatus: quotation.status,
     products
   };

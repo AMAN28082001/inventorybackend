@@ -21,6 +21,7 @@
  *
  * Preferred:
  *   GET /api/admin/product-needed?scope=installation_pending
+ *   GET /api/admin/product-needed?scope=file_login
  *
  * Shipped: controllers/adminController.ts → getAdminProductNeeded
  *          utils/adminProductNeeded.ts
@@ -307,12 +308,13 @@ function serializeProductNeededRow(quotation) {
 // -----------------------------------------------------------------------------
 /**
  * Query params:
- *   scope=installation_pending (default) — do NOT require tab=file_login
+ *   scope=installation_pending (default) or file_login
  *   dealerId, search, startDate, endDate
- *   dateField=installation_released|created (default installation_released)
+ *   dateField=installation_released|created|file_login (default depends on scope)
  *   page, limit (default 500, max 2000)
  *
  * aggregates computed on FULL filtered set before pagination.
+ * Rejected quotations are never included.
  */
 export async function getAdminProductNeeded(req, res) {
   try {
@@ -323,13 +325,8 @@ export async function getAdminProductNeeded(req, res) {
       })
     }
 
-    const scope = String(req.query.scope || "installation_pending").toLowerCase()
-    if (scope && scope !== "installation_pending") {
-      return res.status(400).json({
-        success: false,
-        error: { code: "VAL_001", message: 'scope must be "installation_pending"' },
-      })
-    }
+    const rawScope = String(req.query.scope || req.query.tab || "installation_pending").toLowerCase()
+    const scope = rawScope === "file_login" ? "file_login" : "installation_pending"
 
     const page = Math.max(1, parseInt(String(req.query.page || "1"), 10) || 1)
     const limit = Math.min(

@@ -1703,7 +1703,7 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
       const dealer = (q as any).dealer;
       const documents = (q as any).documents;
       const phaseRows = phaseMap.get(String(q.id)) || ((q as any).paymentPhases || []);
-      const resolvedDocuments = await resolveQuotationDocumentUrls(documents, { sign: false });
+      const resolvedDocuments = await resolveQuotationDocumentUrls(documents);
       
       // Calculate pricing if products exist
       const pricing = products 
@@ -1711,10 +1711,7 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         : null;
 
       const amountAfterSubsidyNum = resolveAmountAfterSubsidy(q as any, products);
-      const totalPaidForRemaining =
-        phaseRows.length > 0
-          ? sumPhasePaidAmounts(phaseRows as PaymentPhaseRecord[])
-          : Number(q.paidAmount || 0);
+          const totalPaidForRemaining = sumPhasePaidAmounts(phaseRows as PaymentPhaseRecord[]);
       const { remaining: remainingAmount, paymentStatus: reconciledPaymentStatus } =
         reconcilePaymentRemainingStatus(
           q.paymentStatus,
@@ -1814,7 +1811,7 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
           installationPartialApprovedAt: (q as any).installationPartialApprovedAt
         }),
         ...quotationAmountApiFields(row, pricing),
-        paidAmount: q.paidAmount !== undefined && q.paidAmount !== null ? Number(q.paidAmount) : null,
+        paidAmount: sumPhasePaidAmounts(phaseRows as PaymentPhaseRecord[]),
         remaining: remainingAmount,
         remainingAmount,
         paymentDate: q.paymentDate,
@@ -2226,10 +2223,7 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
     };
 
     const amountAfterSubsidyNum = resolveAmountAfterSubsidy(quotation as any, products);
-    const totalPaidForRemaining =
-      phaseRows.length > 0
-        ? sumPhasePaidAmounts(phaseRows as PaymentPhaseRecord[])
-        : Number(quotation.paidAmount || 0);
+    const totalPaidForRemaining = sumPhasePaidAmounts(phaseRows as PaymentPhaseRecord[]);
     const { remaining: remainingAmount, paymentStatus: reconciledPaymentStatus } =
       reconcilePaymentRemainingStatus(
         quotation.paymentStatus,
@@ -2383,7 +2377,7 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
         ...quotationPaymentApiFields(rowById),
         ...quotationAdminMetadataFields(rowById),
         subtotal: Number(quotation.subtotal || finalPricing.subtotal),
-        paidAmount: quotation.paidAmount ? Number(quotation.paidAmount) : null,
+        paidAmount: sumPhasePaidAmounts(phaseRows as PaymentPhaseRecord[]),
         remaining: remainingAmount,
         remainingAmount,
         paymentDate: quotation.paymentDate,
@@ -4468,7 +4462,7 @@ const resolveDocumentImageUrl = async (value: string | null | undefined): Promis
   }
 
   try {
-    return await generatePublicUrl(key, 24 * 60 * 60);
+    return await generatePublicUrl(key, 7 * 24 * 60 * 60);
   } catch (error) {
     logError('Failed to generate signed URL for quotation document', error, { key });
     return value;
@@ -4563,7 +4557,7 @@ const ensureQuotationDocumentUploadFieldIsValid = (
     : { valid: false, message: 'Only image or PDF uploads are allowed' };
 };
 
-const resolveQuotationDocumentUrls = async (
+export const resolveQuotationDocumentUrls = async (
   documents: any,
   options?: { sign?: boolean }
 ) => {
@@ -4597,13 +4591,16 @@ const resolveQuotationDocumentUrls = async (
     );
   }
 
-  // Always expose consistent alias keys for frontend compatibility.
+  // Keep signed GET URLs (or stored keys) for View. Do not replace with unsigned
+  // bucket URLs — private buckets return AccessDenied without X-Amz-* params.
   for (const field of mediaFields) {
     const value = json[field] ?? null;
     const urlKey = `${field}Url`;
+    const publicUrlKey = `${field}PublicUrl`;
     const nameKey = `${field}Name`;
     const snakeField = field.replace(/[A-Z]/g, (m) => `_${m.toLowerCase()}`);
     const snakeUrlKey = `${snakeField}_url`;
+    const snakePublicUrlKey = `${snakeField}_public_url`;
     const snakeNameKey = `${snakeField}_name`;
     const resolvedName =
       typeof value === 'string' && value.trim()
@@ -4614,7 +4611,9 @@ const resolveQuotationDocumentUrls = async (
           })()
         : null;
     json[urlKey] = value;
+    json[publicUrlKey] = value;
     json[snakeUrlKey] = value;
+    json[snakePublicUrlKey] = value;
     json[nameKey] = resolvedName;
     json[snakeNameKey] = resolvedName;
   }
@@ -4894,6 +4893,7 @@ export const uploadQuotationDocument = async (req: Request, res: Response): Prom
     const storedValue = normalizeStoredDocumentReference(uploadedReference) || uploadedReference;
     const usableUrl = (await resolveDocumentImageUrl(storedValue)) || uploadedReference;
     const urlKey = `${fieldName}Url`;
+    const publicUrlKey = `${fieldName}PublicUrl`;
 
     let persistedDocuments: Record<string, unknown> | null = null;
     if (isFinalConfirmationDocumentField(fieldName) && isOperationalDocumentsEditorRole(role)) {
@@ -4911,13 +4911,17 @@ export const uploadQuotationDocument = async (req: Request, res: Response): Prom
       data: {
         field: fieldName,
         url: usableUrl,
+        publicUrl: usableUrl,
+        public_url: usableUrl,
         fileUrl: usableUrl,
         storedValue,
         [urlKey]: usableUrl,
+        [publicUrlKey]: usableUrl,
         [fieldName]: usableUrl,
         documents: persistedDocuments ?? {
           [fieldName]: usableUrl,
-          [urlKey]: usableUrl
+          [urlKey]: usableUrl,
+          [publicUrlKey]: usableUrl
         },
         ...(persistedDocuments
           ? await buildFinalConfirmationResponseExtras(persistedDocuments)
@@ -5677,14 +5681,15 @@ export const getQuotationDocumentViewUrl = async (req: Request, res: Response): 
     }
 
     const { quotationId } = req.params;
-    const urlParam = String(req.query.url ?? req.query.fileUrl ?? req.query.file_url ?? '').trim();
-    if (!urlParam) {
+    let urlParam = String(req.query.url ?? req.query.fileUrl ?? req.query.file_url ?? '').trim();
+    const fieldParam = String(req.query.field ?? req.query.fileField ?? '').trim();
+    if (!urlParam && !fieldParam) {
       res.status(400).json({
         success: false,
         error: {
           code: 'VALIDATION_ERROR',
-          message: 'url query parameter is required',
-          details: [{ field: 'url', message: 'Provide url (encoded private S3 URL or object key)' }]
+          message: 'url or field query parameter is required',
+          details: [{ field: 'url', message: 'Provide url (encoded private S3 URL or object key) or field (aadharBack, …)' }]
         }
       });
       return;
@@ -5730,6 +5735,25 @@ export const getQuotationDocumentViewUrl = async (req: Request, res: Response): 
       res.status(404).json({
         success: false,
         error: { code: 'RES_001', message: 'Quotation not found' }
+      });
+      return;
+    }
+
+    if (fieldParam && (!urlParam || !isQuotationScopedMediaRef(urlParam, quotationId))) {
+      const docs = await QuotationDocument.findOne({ where: { quotationId: quotation.id } });
+      const stored = docs ? (docs as any)[fieldParam] : null;
+      if (typeof stored === 'string' && stored.trim()) {
+        urlParam = stored.trim();
+      }
+    }
+
+    if (!urlParam) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VAL_001',
+          message: 'Could not resolve a stored file for this quotation'
+        }
       });
       return;
     }

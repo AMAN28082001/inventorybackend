@@ -61,7 +61,9 @@ import {
 import {
   INSTALLATION_PENDING_STATUSES,
   buildBrandAggregates,
-  isQuotationEligibleForProductNeeded,
+  isQuotationEligibleForProductNeededScope,
+  parseProductNeededScope,
+  resolveProductNeededDateColumn,
   serializeProductNeededRow
 } from '../utils/adminProductNeeded';
 import {
@@ -70,6 +72,7 @@ import {
 } from '../utils/cashLoanAmounts';
 import { persistQuotationSystemKw } from '../utils/persistQuotationSystemKw';
 import { buildFinalConfirmationApiFields } from '../utils/finalConfirmationDocuments';
+import { resolveQuotationDocumentUrls } from './quotationController';
 
 const sumPhasePaidAmounts = (phases: { paidAmount?: number }[]): number =>
   phases.reduce((sum, p) => sum + Number((p as any).paidAmount || 0), 0);
@@ -509,8 +512,7 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
             ...(q as any),
             products: qAny.products
           });
-          const totalPaidForRemaining =
-            phases.length > 0 ? sumPhasePaidAmounts(phases) : Number(q.paidAmount || 0);
+          const totalPaidForRemaining = sumPhasePaidAmounts(phases);
           const discountAmt = Number((q as any).discountAmount || 0);
           let remainingAmount = remainingAgainstSubtotal(
             amountAfterSubsidyNum,
@@ -1739,13 +1741,7 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
         {
           model: QuotationDocument,
           as: 'documents',
-          required: false,
-          attributes: [
-            'customerFinalBillFile',
-            'panelWarrantyFile',
-            'inverterWarrantyFile',
-            'workCompletionWarrantyFile'
-          ]
+          required: false
         }
       ]
     });
@@ -1759,7 +1755,8 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
     }
 
     const quotationAny = quotation as any;
-    const finalConfirmationFields = await buildFinalConfirmationApiFields(quotationAny.documents);
+    const resolvedDocuments = await resolveQuotationDocumentUrls(quotationAny.documents);
+    const finalConfirmationFields = await buildFinalConfirmationApiFields(resolvedDocuments);
     const phaseRows = await QuotationPaymentPhase.findAll({
       where: { quotationId: quotation.id },
       order: [['phaseNumber', 'ASC']]
@@ -1780,8 +1777,7 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
       ...(quotation as any),
       products: quotationAny.products
     });
-    const totalPaidForRemaining =
-      phases.length > 0 ? sumPhasePaidAmounts(phases) : Number(quotation.paidAmount || 0);
+    const totalPaidForRemaining = sumPhasePaidAmounts(phases);
     const discountAmt = Number((quotation as any).discountAmount || 0);
     let remainingAmount = remainingAgainstSubtotal(
       amountAfterSubsidyNum,
@@ -1883,9 +1879,18 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
         ...meterDocumentFields,
         ...finalConfirmationFields,
         documents: {
+          ...(resolvedDocuments || {}),
           ...finalConfirmationFields,
           ...installationPayload.documents
         },
+        aadharFront: (resolvedDocuments as any)?.aadharFront || null,
+        aadharBack: (resolvedDocuments as any)?.aadharBack || null,
+        panImage: (resolvedDocuments as any)?.panImage || null,
+        electricityBillImage: (resolvedDocuments as any)?.electricityBillImage || null,
+        bankPassbookImage: (resolvedDocuments as any)?.bankPassbookImage || null,
+        geotagRoofPhoto: (resolvedDocuments as any)?.geotagRoofPhoto || null,
+        customerWithHousePhoto: (resolvedDocuments as any)?.customerWithHousePhoto || null,
+        propertyDocumentPdf: (resolvedDocuments as any)?.propertyDocumentPdf || null,
         installationDocuments: installationPayload.installationDocuments,
         installationPhotoUrls: installationPayload.installationPhotoUrls,
         installation_photo_urls: installationPayload.installationPhotoUrls,
@@ -2217,19 +2222,13 @@ export const activateDealer = async (req: Request, res: Response): Promise<void>
 };
 
 /**
- * GET /api/admin/product-needed?scope=installation_pending
- * Procurement dashboard for Pending Installation jobs (brand + wattage/set cards).
+ * GET /api/admin/product-needed?scope=installation_pending|file_login
+ * Procurement dashboard for Pending Installation jobs, or file-login (not approved).
+ * Rejected quotations are never included.
  */
 export const getAdminProductNeeded = async (req: Request, res: Response): Promise<void> => {
   try {
-    const scope = String(req.query.scope || 'installation_pending').toLowerCase();
-    if (scope && scope !== 'installation_pending') {
-      res.status(400).json({
-        success: false,
-        error: { code: 'VAL_001', message: 'scope must be "installation_pending"' }
-      });
-      return;
-    }
+    const scope = parseProductNeededScope(req.query);
 
     const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
     const limit = Math.min(
@@ -2238,29 +2237,28 @@ export const getAdminProductNeeded = async (req: Request, res: Response): Promis
     );
     const dealerId = req.query.dealerId ? String(req.query.dealerId) : null;
     const search = req.query.search ? String(req.query.search).trim().toLowerCase() : '';
-    const dateField =
-      String(req.query.dateField || 'installation_released').toLowerCase() === 'created'
-        ? 'createdAt'
-        : 'installationReleasedAt';
+    const dateField = resolveProductNeededDateColumn(req.query.dateField, scope);
     const startDate = req.query.startDate ? new Date(String(req.query.startDate)) : null;
     const endDate = req.query.endDate ? new Date(String(req.query.endDate)) : null;
 
-    const where: any = {
-      status: 'approved',
-      [Op.and]: [
-        {
-          [Op.or]: [
-            { installationReadyForInstaller: true },
-            { installationReleasedAt: { [Op.ne]: null } },
-            { installationStatus: { [Op.in]: [...INSTALLATION_PENDING_STATUSES] } }
-          ]
-        },
-        {
-          installationStatus: { [Op.in]: [...INSTALLATION_PENDING_STATUSES] }
-        },
-        { installerApprovedAt: null }
-      ]
-    };
+    const where: any =
+      scope === 'file_login'
+        ? {
+            status: { [Op.notIn]: ['rejected', 'reject', 'approved', 'completed'] },
+            [Op.or]: [
+              { fileLoginStatus: { [Op.in]: ['already_login', 'login_now'] } },
+              { fileLoginAt: { [Op.ne]: null } }
+            ]
+          }
+        : {
+            status: 'approved',
+            installerApprovedAt: null,
+            [Op.or]: [
+              { installationReadyForInstaller: true },
+              { installationReleasedAt: { [Op.ne]: null } },
+              { installationStatus: { [Op.in]: [...INSTALLATION_PENDING_STATUSES] } }
+            ]
+          };
     if (dealerId) where.dealerId = dealerId;
     if (startDate || endDate) {
       where[dateField] = {};
@@ -2285,10 +2283,13 @@ export const getAdminProductNeeded = async (req: Request, res: Response): Promis
         {
           model: Customer,
           as: 'customer',
-          attributes: ['id', 'firstName', 'lastName', 'mobile']
+          attributes: ['id', 'firstName', 'lastName', 'mobile', 'streetAddress', 'city', 'state', 'pincode']
         }
       ],
-      order: [['installationReleasedAt', 'DESC'], ['createdAt', 'DESC']]
+      order:
+        scope === 'file_login'
+          ? [['fileLoginAt', 'DESC'], ['createdAt', 'DESC']]
+          : [['installationReleasedAt', 'DESC'], ['createdAt', 'DESC']]
     });
 
     let all = rows
@@ -2304,7 +2305,7 @@ export const getAdminProductNeeded = async (req: Request, res: Response): Promis
         }
         return q;
       })
-      .filter(isQuotationEligibleForProductNeeded)
+      .filter((q: Record<string, unknown>) => isQuotationEligibleForProductNeededScope(q, scope))
       .map(serializeProductNeededRow);
 
     if (search) {
@@ -2324,7 +2325,7 @@ export const getAdminProductNeeded = async (req: Request, res: Response): Promis
     res.json({
       success: true,
       data: {
-        scope: 'installation_pending',
+        scope,
         rows: pageRows,
         quotations: pageRows,
         aggregates,
