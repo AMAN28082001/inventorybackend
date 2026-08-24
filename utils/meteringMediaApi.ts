@@ -1,4 +1,4 @@
-import { resolveBrowsableMediaUrl } from './s3Service';
+import { resolveBrowsableMediaUrl, persistableMediaReference } from './s3Service';
 
 const METER_DOC_PRESIGN_TTL_SECONDS = Math.max(
   3600,
@@ -9,9 +9,11 @@ export type MeterDocumentApiFields = {
   meterDocumentImageUrl: string | null;
   meterDocumentUrl: string | null;
   meterDocumentPublicUrl: string | null;
+  meterDocumentKey: string | null;
   meter_document_image_url: string | null;
   meter_document_url: string | null;
   meter_document_public_url: string | null;
+  meter_document_key: string | null;
   meterDocumentName: string | null;
   meter_document_name: string | null;
 };
@@ -28,12 +30,13 @@ export const meterDocumentNameFromStored = (
   return base || null;
 };
 
-/** Presigned/public browsable meter document URLs for API responses (§J / §6.4.C.8). */
+/** Presigned/public browsable meter document URLs for API responses (§J / §AF / §6.4.C.8). */
 export const buildMeterDocumentApiFields = async (
   storedRef: string | null | undefined,
   fallbackName?: string | null
 ): Promise<MeterDocumentApiFields> => {
   const ref = typeof storedRef === 'string' && storedRef.trim() ? storedRef.trim() : null;
+  const key = ref ? persistableMediaReference(ref) : null;
   const browsable = ref
     ? await resolveBrowsableMediaUrl(ref, METER_DOC_PRESIGN_TTL_SECONDS)
     : null;
@@ -43,9 +46,11 @@ export const buildMeterDocumentApiFields = async (
     meterDocumentImageUrl: browsable,
     meterDocumentUrl: browsable,
     meterDocumentPublicUrl: browsable,
+    meterDocumentKey: key,
     meter_document_image_url: browsable,
     meter_document_url: browsable,
     meter_document_public_url: browsable,
+    meter_document_key: key,
     meterDocumentName: name,
     meter_document_name: name
   };

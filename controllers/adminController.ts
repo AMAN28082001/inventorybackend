@@ -12,6 +12,7 @@ import {
   serializeInstallationReleaseFields,
   quotationProposalDateApiFields
 } from '../utils/quotationApiJson';
+import { quotationCallingLeadApiFields } from '../utils/quotationAdditionalCreate';
 import { emitRealtime, realtimeEvents } from '../utils/realtime';
 import { parseCityFilter, cityInFilterWhere } from '../utils/serviceCities';
 import {
@@ -545,13 +546,15 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
               };
           const latestMeterDoc = includeMedia
             ? getLatestMeterDocMeta(rawInstallationDocs)
-            : { name: null as string | null };
-          const meterDocumentFields = includeMedia
-            ? await buildMeterDocumentApiFields(
-                resolveMeterStoredRef((q as any).meterDocumentImageUrl, rawInstallationDocs),
-                latestMeterDoc.name
-              )
-            : {};
+            : { name: null as string | null, storedRef: null as string | null };
+          // §AF — always echo browsable meter document URLs on admin list (not gated on includeMedia).
+          const meterDocumentFields = await buildMeterDocumentApiFields(
+            resolveMeterStoredRef(
+              (q as any).meterDocumentImageUrl,
+              includeMedia ? rawInstallationDocs : []
+            ) || ((q as any).meterDocumentImageUrl as string | null),
+            latestMeterDoc.name
+          );
           const productListFields = quotationProductEnrichmentFields(
             qAny.products,
             qAny.customPanels,
@@ -671,7 +674,8 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
             installationPhotoUrls: installationPayload.installationPhotoUrls,
             installation_photo_urls: installationPayload.installationPhotoUrls,
             ...installationPayload.installationFieldUrls,
-            ...quotationProposalDateApiFields(q)
+            ...quotationProposalDateApiFields(q),
+            ...quotationCallingLeadApiFields(row)
           };
         })),
         pagination: {

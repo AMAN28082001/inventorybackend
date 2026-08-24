@@ -1521,6 +1521,41 @@ Fixes **500** when dealer submits **Connected → Decision Pending → Callback 
 
 ---
 
+## §AE — Customer Journey (Calling → Final Confirmation) — Aug 2026
+
+**Status: implemented** — see `BACKEND_CUSTOMER_JOURNEY.ts`, HANDOFF **§33**.
+
+| Item | Status |
+|------|--------|
+| Calling-actions GET `range=all` + limit ≤2000 | Done |
+| Action rows: `leadId`, `mobile`, `name`, `dealerId`, `dealerName`, `actionAt`, remarks/status | Done |
+| Queue + actions list: dialled/connected/notConnected/recent buckets | Done |
+| Persist + echo `callingLeadId` on quotation create/GET | Done |
+| Mobile search last-10 digits | Done |
+| Migration `calling_lead_id` | Done (`20260821160000-…`) |
+
+Optional dedicated `GET …/customer-journey` not shipped (FE merges client-side).
+
+---
+
+## §AF — Meter Document public view link (Metering Details) — Aug 2026
+
+**Status: implemented** — see `BACKEND_METER_DOCUMENT_PUBLIC_URL.ts`, HANDOFF **§34** (FE §33).
+
+| Item | Status |
+|------|--------|
+| Multipart aliases (`meterDocument`, `file`, …) | Done |
+| Auth: metering + admin | Done (`authorizeMetering`) |
+| Save: presigned `meterDocumentPublicUrl` + name + key | Done |
+| Admin + metering list GET always echo (re-presign) | Done |
+
+### QA
+
+1. Upload PDF → Save → Open public link.
+2. Hard refresh → link still works.
+
+---
+
 ## File index (May–June 2026 handoff)
 
 | Doc / code | Topics |

@@ -391,6 +391,10 @@ const handleQuotationMeteringDetailsMultipart = (
   documentsUpload.fields([
     { name: 'meterDocumentImage', maxCount: 1 },
     { name: 'meter_document_image', maxCount: 1 },
+    { name: 'meterDocument', maxCount: 1 },
+    { name: 'meter_document', maxCount: 1 },
+    { name: 'meterDocumentFile', maxCount: 1 },
+    { name: 'file', maxCount: 1 },
     { name: 'meterInstallationPhoto', maxCount: 1 },
     { name: 'meter_installation_photo', maxCount: 1 },
     { name: 'plantLivePhoto', maxCount: 1 },

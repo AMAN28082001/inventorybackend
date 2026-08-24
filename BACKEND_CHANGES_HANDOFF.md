@@ -63,6 +63,8 @@
 | 51 | High | Visit dropdown = Visitor-checkbox users (e.g. Saurav/`aman4119`); single assign; Transfer on Assign form + visit cards | **Done** | `BACKEND_VISIT_TRANSFER.md` |
 | 52 | High | Dealer/visitor lists from Admin checkboxes — quotation union (HR/Jagdish) + visitor union (visits/Saurav) | **Done** | `BACKEND_ACCESS_BASED_LISTS.md` |
 | 53 | High | Non-DCR Waaree 125kW @ ₹35,62,500 + catalog 125kW / 705W | **Done** | `BACKEND_NON_DCR_125KW_WAAREE.md` |
+| 54 | High | Customer Journey — calling history + `callingLeadId` | **Done** | §33 / `BACKEND_CUSTOMER_JOURNEY.ts` / §AE |
+| 55 | High | Meter document public view link (Metering Details) | **Done** | §34 / `BACKEND_METER_DOCUMENT_PUBLIC_URL.ts` / §AF |
 
 **Deploy before QA:**
 
@@ -84,6 +86,7 @@ yarn migrate
 | `20260806120000-add-site-cost-to-quotations.js` | `site_cost` for Account Management Cost of site (§30) |
 | `20260808120000-seed-pricing-tables-aug-2026.js` | Seed Aug 2026 FE pricing catalog into `system_config.pricing_tables` (§2.6.4) |
 | `20260817160000-add-non-dcr-waaree-125kw-pricing.js` | Merge Non-DCR Waaree 125kW @ ₹35,62,500 + catalog `125kW` / `705W` |
+| `20260821160000-add-calling-lead-id-to-quotations.js` | `quotations.calling_lead_id` for Customer Journey (§33 / §AE) |
 
 After migrate, optional backfill: `npx ts-node scripts/backfill-system-kw.ts`
 
@@ -2641,4 +2644,63 @@ Example: `{ "role": "hr", "access": ["hr","quotation","visitor"] }` must open de
 | **`BACKEND_ACCOUNT_PAYMENT_MANAGEMENT.md`** | **§30–§31** pack — site cost + installment payment cap |
 | **`BACKEND_DEALER_PAYMENTS.md`** | **§32** Dealer Payments tab (read-only) |
 | **`BACKEND_USER_ACCESS.md`** | Admin Users `access[]` (A–G) + multi-access Quotation/HR/Visitor |
+| **§33** (this file) | Customer Journey — calling history + `callingLeadId` |
+| **`BACKEND_CUSTOMER_JOURNEY.ts`** | **§33 / §AE** full Customer Journey backend spec |
+| **§34** (this file) | Meter document public view link |
+| **`BACKEND_METER_DOCUMENT_PUBLIC_URL.ts`** | **§34 / §AF** meter document public view link |
+
+---
+
+## 33. Customer Journey (Calling Data → Final Confirmation) — Aug 2026
+
+**Status: implemented** — `BACKEND_CHANGES_REQUIRED.md` §AE, `BACKEND_CUSTOMER_JOURNEY.ts`
+
+### Problem
+
+Quotations from Calling Data show later stages complete, but **Calling Data** / **Calling Action** stay Pending when action history is thin or not matchable.
+
+### Shipped
+
+| Item | Detail |
+|------|--------|
+| Calling-actions GET | Dealer + admin honour `range=all`, `limit` ≤ 2000 |
+| Action row fields | `leadId`, `mobile`, `name`, `dealerId`, `dealerName`, `action`, `actionAt`, `callRemark`, `statusText`, `statusCategory` |
+| Queue buckets | `dialledActions` / `connectedActions` / `notConnectedActions` / `recentActions` on queue + actions list |
+| Quotation link | Persist `callingLeadId` from `callingLeadId` \| `prefillLeadId` \| `leadId` on create; echo on list/detail |
+| Mobile search | Last-10 digit compare on calling-actions `?search=` |
+| Migration | `20260821160000-add-calling-lead-id-to-quotations.js` → `quotations.calling_lead_id` |
+
+### Optional (not shipped)
+
+`GET /api/admin/customer-journey` and `GET /api/dealers/me/customer-journey` — FE still merges client-side.
+
+### QA
+
+1. Call lead → Submit → Create Quotation Prefill → save (body includes `callingLeadId`).
+2. Customer Journey search by mobile → Calling Data + Calling Action **Completed**.
+3. Admin same mobile → same stages + dealer name.
+
+---
+
+## 34. Metering Details — meter document public view link (Aug 2026)
+
+**Status: implemented** — FE HANDOFF §33 / `BACKEND_CHANGES_REQUIRED.md` §AF, `BACKEND_METER_DOCUMENT_PUBLIC_URL.ts`
+
+### Problem
+
+Upload + Save still showed **“No meter document on file yet.”** — multer rejected SPA file aliases (`LIMIT_UNEXPECTED_FILE`), and list GET omitted browsable URLs when `includeMedia=false`.
+
+### Shipped
+
+| Item | Detail |
+|------|--------|
+| Multipart aliases | `meterDocumentImage`, `meter_document_image`, `meterDocument`, `meter_document`, `meterDocumentFile`, `file` |
+| Auth | `authorizeMetering` — metering + admin (+ installer dual-track) |
+| Save | Store S3 **key** on `meterDocumentImageUrl`; response includes **presigned** `meterDocumentPublicUrl` / `meterDocumentUrl` / `meterDocumentName` / `meterDocumentKey` |
+| List GET | Admin + metering queues **always** re-presign meter document fields (not gated on `includeMedia`) |
+
+### QA
+
+1. Upload PDF in Metering Details → Save → **Open public link** visible.
+2. Hard refresh → link still works.
 

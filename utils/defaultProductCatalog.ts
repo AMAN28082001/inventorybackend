@@ -114,15 +114,15 @@ export const DEFAULT_CABLE_BRANDS = ['Polycab', 'Havells', 'Finolex'] as const;
 export const DEFAULT_STRUCTURE_TYPES = ['GI Structure', 'Aluminum Structure', 'MS Structure'] as const;
 
 export const DEFAULT_ACDB_OPTIONS = [
-  'Havells (1-Phase)',
-  'Havells (3-Phase)',
+  'Havells+Elmex (1-Phase)',
+  'Havells+Elmex (3-Phase)',
   'Crompton (1-Phase)',
   'Crompton (3-Phase)'
 ] as const;
 
 export const DEFAULT_DCDB_OPTIONS = [
-  'Havells (1-Phase)',
-  'Havells (3-Phase)',
+  'Elmex (1-Phase)',
+  'Elmex (3-Phase)',
   'Crompton (1-Phase)',
   'Crompton (3-Phase)'
 ] as const;

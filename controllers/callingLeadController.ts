@@ -1241,14 +1241,35 @@ const withCallingRemarkApiAliases = <T extends Record<string, unknown>>(row: T):
 const callingActionToApiJson = (row: any) => {
   const parsed = parseTaggedCallRemark(row.callRemark ?? row.call_remark);
   const normalizedCategory = normalizeStatusCategory(row.statusCategory ?? row.status_category ?? parsed.statusCategory);
+  const name =
+    row.lead?.name ||
+    row.customerName ||
+    row.customer_name ||
+    row.name ||
+    '';
+  const mobile =
+    row.lead?.mobile ||
+    row.customerMobile ||
+    row.customer_mobile ||
+    row.mobile ||
+    '';
+  const dealerId = row.dealerId || row.dealer_id || row.assignedDealerId || '';
+  const dealerName = row.dealerName || row.dealer_name || row.assignedDealerName || '';
   return {
     // Stable identifier: UI should update the same card for the same leadId.
-    id: row.leadId,
+    id: row.id || row.leadId,
     leadId: row.leadId,
-    name: row.lead?.name || '',
-    mobile: row.lead?.mobile || '',
+    name,
+    mobile,
+    customerName: name,
+    customerMobile: mobile,
+    dealerId,
+    dealer_id: dealerId,
+    dealerName,
+    dealer_name: dealerName,
     action: row.action,
     actionAt: toIsoStringOrNull(row.actionAt),
+    action_at: toIsoStringOrNull(row.actionAt),
     // compatibility
     callRemark: row.callRemark,
     statusLabel: row.statusLabel,
@@ -1588,7 +1609,9 @@ const buildCallingActionsFilter = (req: Request): WhereOptions => {
     (filter as any).action = { [Op.in]: REPORT_ACTIONS };
   }
   if (search) {
-    (filter as any)[Op.or] = [
+    const searchDigits = search.replace(/\D/g, '');
+    const last10 = searchDigits.length >= 7 ? searchDigits.slice(-10) : '';
+    const orClauses: any[] = [
       { leadId: { [Op.iLike]: `%${search}%` } },
       { customerName: { [Op.iLike]: `%${search}%` } },
       { customerMobile: { [Op.iLike]: `%${search}%` } },
@@ -1596,6 +1619,20 @@ const buildCallingActionsFilter = (req: Request): WhereOptions => {
       { statusReason: { [Op.iLike]: `%${search}%` } },
       { callRemark: { [Op.iLike]: `%${search}%` } }
     ];
+    // Customer Journey: compare last 10 digits (strip non-digits).
+    if (last10) {
+      orClauses.push(
+        Sequelize.where(
+          Sequelize.fn(
+            'RIGHT',
+            Sequelize.fn('regexp_replace', Sequelize.col('customerMobile'), '\\D', '', 'g'),
+            10
+          ),
+          last10
+        )
+      );
+    }
+    (filter as any)[Op.or] = orClauses;
   }
   return filter;
 };
@@ -1710,11 +1747,18 @@ const buildCallingActionsResponse = async (req: Request) => {
         callRemark: row.callRemark,
         statusCategory: row.statusCategory
       });
+    const name = row.customerName || '';
+    const mobile = row.customerMobile || '';
+    const dealerName = row.dealerName || dealerNameMap.get(row.dealerId) || '';
     return {
       id: row.id,
       leadId: row.leadId,
       dealerId: row.dealerId,
-      dealerName: row.dealerName || dealerNameMap.get(row.dealerId) || '',
+      dealer_id: row.dealerId,
+      dealerName,
+      dealer_name: dealerName,
+      name,
+      mobile,
       action: row.action,
       reasonCategory,
       callRemark: row.callRemark,
@@ -1732,8 +1776,8 @@ const buildCallingActionsResponse = async (req: Request) => {
       actionAt: toIsoStringOrNull(row.actionAt),
       action_at: toIsoStringOrNull(row.actionAt),
       nextFollowUpAt: toIsoStringOrNull(row.nextFollowUpAt),
-      customerName: row.customerName,
-      customerMobile: row.customerMobile,
+      customerName: name,
+      customerMobile: mobile,
       customerAddress: row.customerAddress,
       createdAt: toIsoStringOrNull(row.createdAt)
     };
@@ -1744,6 +1788,10 @@ const buildCallingActionsResponse = async (req: Request) => {
     dealerName: `${dealer.firstName || ''} ${dealer.lastName || ''}`.trim()
   }));
 
+  const dialledActions = filterDialledActions(actionRows);
+  const connectedActions = dialledActions.filter((row: any) => classifyActionStage(row) === 'connected');
+  const notConnectedActions = dialledActions.filter((row: any) => classifyActionStage(row) === 'not_connected');
+
   return {
     // Primary list key
     actions: actionRows,
@@ -1753,6 +1801,11 @@ const buildCallingActionsResponse = async (req: Request) => {
     rows: actionRows,
     items: actionRows,
     logs: actionRows,
+    recentActions: actionRows,
+    actionHistory: actionRows,
+    dialledActions,
+    connectedActions,
+    notConnectedActions,
     summary: {
       interested: summary.interested,
       followUp: summary.follow_up,

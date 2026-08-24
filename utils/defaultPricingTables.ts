@@ -173,8 +173,8 @@ export const NON_DCR_WAAREE_125KW_SYSTEM_CONFIG = {
   acCableSize: 'As per Set',
   dcCableBrand: 'Polycab',
   dcCableSize: 'As per Set',
-  acdb: 'Havells (3-Phase)',
-  dcdb: 'Havells (3-Phase)'
+  acdb: 'Havells+Elmex (3-Phase)',
+  dcdb: 'Elmex (3-Phase)'
 };
 
 const normSizeKey = (value: unknown): string =>
@@ -331,8 +331,8 @@ export const JUNE_2026_SYSTEM_CONFIG_DEFAULTS = [
     acCableSize: 'As per Set',
     dcCableBrand: 'Polycab',
     dcCableSize: 'As per Set',
-    acdb: 'Havells (1-Phase)',
-    dcdb: 'Havells (1-Phase)'
+    acdb: 'Havells+Elmex (1-Phase)',
+    dcdb: 'Elmex (1-Phase)'
   },
   {
     systemType: 'dcr' as const,
@@ -350,8 +350,8 @@ export const JUNE_2026_SYSTEM_CONFIG_DEFAULTS = [
     acCableSize: 'As per Set',
     dcCableBrand: 'Polycab',
     dcCableSize: 'As per Set',
-    acdb: 'Havells (1-Phase)',
-    dcdb: 'Havells (1-Phase)'
+    acdb: 'Havells+Elmex (1-Phase)',
+    dcdb: 'Elmex (1-Phase)'
   },
   {
     systemType: 'non-dcr' as const,
@@ -369,8 +369,8 @@ export const JUNE_2026_SYSTEM_CONFIG_DEFAULTS = [
     acCableSize: 'As per Set',
     dcCableBrand: 'Polycab',
     dcCableSize: 'As per Set',
-    acdb: 'Havells (1-Phase)',
-    dcdb: 'Havells (1-Phase)'
+    acdb: 'Havells+Elmex (1-Phase)',
+    dcdb: 'Elmex (1-Phase)'
   },
   {
     systemType: 'both' as const,
@@ -388,8 +388,8 @@ export const JUNE_2026_SYSTEM_CONFIG_DEFAULTS = [
     acCableSize: 'As per Set',
     dcCableBrand: 'Polycab',
     dcCableSize: 'As per Set',
-    acdb: 'Havells (1-Phase)',
-    dcdb: 'Havells (1-Phase)'
+    acdb: 'Havells+Elmex (1-Phase)',
+    dcdb: 'Elmex (1-Phase)'
   },
   {
     systemType: 'dcr' as const,
@@ -407,8 +407,8 @@ export const JUNE_2026_SYSTEM_CONFIG_DEFAULTS = [
     acCableSize: 'As per Set',
     dcCableBrand: 'Polycab',
     dcCableSize: 'As per Set',
-    acdb: 'Havells (1-Phase)',
-    dcdb: 'Havells (1-Phase)'
+    acdb: 'Havells+Elmex (1-Phase)',
+    dcdb: 'Elmex (1-Phase)'
   },
   {
     systemType: 'dcr' as const,
@@ -426,8 +426,8 @@ export const JUNE_2026_SYSTEM_CONFIG_DEFAULTS = [
     acCableSize: 'As per Set',
     dcCableBrand: 'Polycab',
     dcCableSize: 'As per Set',
-    acdb: 'Havells (1-Phase)',
-    dcdb: 'Havells (1-Phase)'
+    acdb: 'Havells+Elmex (1-Phase)',
+    dcdb: 'Elmex (1-Phase)'
   },
   {
     systemType: 'dcr' as const,
@@ -445,8 +445,8 @@ export const JUNE_2026_SYSTEM_CONFIG_DEFAULTS = [
     acCableSize: 'As per Set',
     dcCableBrand: 'Polycab',
     dcCableSize: 'As per Set',
-    acdb: 'Havells (1-Phase)',
-    dcdb: 'Havells (1-Phase)'
+    acdb: 'Havells+Elmex (1-Phase)',
+    dcdb: 'Elmex (1-Phase)'
   },
   {
     systemType: 'dcr' as const,
@@ -464,8 +464,8 @@ export const JUNE_2026_SYSTEM_CONFIG_DEFAULTS = [
     acCableSize: 'As per Set',
     dcCableBrand: 'Polycab',
     dcCableSize: 'As per Set',
-    acdb: 'Havells (1-Phase)',
-    dcdb: 'Havells (1-Phase)'
+    acdb: 'Havells+Elmex (1-Phase)',
+    dcdb: 'Elmex (1-Phase)'
   },
   {
     systemType: 'non-dcr' as const,
@@ -483,8 +483,8 @@ export const JUNE_2026_SYSTEM_CONFIG_DEFAULTS = [
     acCableSize: 'As per Set',
     dcCableBrand: 'Polycab',
     dcCableSize: 'As per Set',
-    acdb: 'Havells (3-Phase)',
-    dcdb: 'Havells (3-Phase)'
+    acdb: 'Havells+Elmex (3-Phase)',
+    dcdb: 'Elmex (3-Phase)'
   },
   {
     systemType: 'non-dcr' as const,
@@ -502,8 +502,8 @@ export const JUNE_2026_SYSTEM_CONFIG_DEFAULTS = [
     acCableSize: 'As per Set',
     dcCableBrand: 'Polycab',
     dcCableSize: 'As per Set',
-    acdb: 'Havells (3-Phase)',
-    dcdb: 'Havells (3-Phase)'
+    acdb: 'Havells+Elmex (3-Phase)',
+    dcdb: 'Elmex (3-Phase)'
   },
   NON_DCR_WAAREE_125KW_SYSTEM_CONFIG,
   {
@@ -522,8 +522,8 @@ export const JUNE_2026_SYSTEM_CONFIG_DEFAULTS = [
     acCableSize: 'As per Set',
     dcCableBrand: 'Polycab',
     dcCableSize: 'As per Set',
-    acdb: 'Havells (3-Phase)',
-    dcdb: 'Havells (3-Phase)'
+    acdb: 'Havells+Elmex (3-Phase)',
+    dcdb: 'Elmex (3-Phase)'
   },
   {
     systemType: 'dcr' as const,
@@ -541,8 +541,8 @@ export const JUNE_2026_SYSTEM_CONFIG_DEFAULTS = [
     acCableSize: 'As per Set',
     dcCableBrand: 'Polycab',
     dcCableSize: 'As per Set',
-    acdb: 'Havells (1-Phase)',
-    dcdb: 'Havells (1-Phase)'
+    acdb: 'Havells+Elmex (1-Phase)',
+    dcdb: 'Elmex (1-Phase)'
   },
   {
     systemType: 'dcr' as const,
@@ -560,8 +560,8 @@ export const JUNE_2026_SYSTEM_CONFIG_DEFAULTS = [
     acCableSize: 'As per Set',
     dcCableBrand: 'Polycab',
     dcCableSize: 'As per Set',
-    acdb: 'Havells (1-Phase)',
-    dcdb: 'Havells (1-Phase)'
+    acdb: 'Havells+Elmex (1-Phase)',
+    dcdb: 'Elmex (1-Phase)'
   },
   {
     systemType: 'dcr' as const,
@@ -579,8 +579,8 @@ export const JUNE_2026_SYSTEM_CONFIG_DEFAULTS = [
     acCableSize: 'As per Set',
     dcCableBrand: 'Polycab',
     dcCableSize: 'As per Set',
-    acdb: 'Havells (1-Phase)',
-    dcdb: 'Havells (1-Phase)'
+    acdb: 'Havells+Elmex (1-Phase)',
+    dcdb: 'Elmex (1-Phase)'
   },
   /** Crompton DCR set (§27) */
   {

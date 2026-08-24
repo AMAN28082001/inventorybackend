@@ -20,6 +20,48 @@ export const resolveSourceQuotationId = (body: Record<string, unknown> | null | 
   ).trim();
 };
 
+/**
+ * Calling Data → Quotation link (§AE / Customer Journey).
+ * Accept callingLeadId | leadId | prefillLeadId (and snake_case) from create body.
+ */
+export const resolveCallingLeadId = (body: Record<string, unknown> | null | undefined): string | null => {
+  if (!body) return null;
+  const nestedCustomer =
+    body.customer && typeof body.customer === 'object'
+      ? (body.customer as Record<string, unknown>)
+      : null;
+  const nestedProducts =
+    body.products && typeof body.products === 'object'
+      ? (body.products as Record<string, unknown>)
+      : null;
+  const raw = String(
+    body.callingLeadId ||
+      body.calling_lead_id ||
+      body.prefillLeadId ||
+      body.prefill_lead_id ||
+      body.leadId ||
+      body.lead_id ||
+      nestedCustomer?.callingLeadId ||
+      nestedCustomer?.calling_lead_id ||
+      nestedCustomer?.leadId ||
+      nestedCustomer?.lead_id ||
+      nestedProducts?.callingLeadId ||
+      nestedProducts?.calling_lead_id ||
+      nestedProducts?.leadId ||
+      nestedProducts?.lead_id ||
+      ''
+  ).trim();
+  return raw || null;
+};
+
+export const quotationCallingLeadApiFields = (row: Record<string, unknown> | null | undefined) => {
+  const callingLeadId = (row?.callingLeadId ?? row?.calling_lead_id ?? null) as string | null;
+  return {
+    callingLeadId: callingLeadId || null,
+    calling_lead_id: callingLeadId || null
+  };
+};
+
 export const isAdditionalQuotationRequest = (
   body: Record<string, unknown> | null | undefined
 ): boolean => {

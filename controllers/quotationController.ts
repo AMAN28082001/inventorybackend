@@ -47,7 +47,9 @@ import {
   resolveSourceQuotationId,
   resolveQuotationCreateNotes,
   markQuotationAsCurrentForCustomer,
-  quotationCurrentApiFields
+  quotationCurrentApiFields,
+  resolveCallingLeadId,
+  quotationCallingLeadApiFields
 } from '../utils/quotationAdditionalCreate';
 import { persistQuotationSystemKw } from '../utils/persistQuotationSystemKw';
 import {
@@ -943,6 +945,7 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
     // for the same customer mobile/customer record — unless §23 additional/revise flags.
     const allowAdditional = isAdditionalQuotationRequest(req.body as Record<string, unknown>);
     const sourceQuotationId = resolveSourceQuotationId(req.body as Record<string, unknown>);
+    const callingLeadId = resolveCallingLeadId(req.body as Record<string, unknown>);
 
     if (allowAdditional && sourceQuotationId) {
       const sourceWhere: any = { id: sourceQuotationId };
@@ -1293,6 +1296,7 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
       paymentDate: paymentDate ?? null,
       paymentStatus: normalizedPaymentStatus,
       sourceQuotationId: sourceQuotationId || null,
+      callingLeadId: callingLeadId || null,
       notes: quotationCreateNotes,
       isCurrent: true,
       validUntil
@@ -1425,6 +1429,7 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
         },
         sourceQuotationId: (quotation as any).sourceQuotationId || null,
         source_quotation_id: (quotation as any).sourceQuotationId || null,
+        ...quotationCallingLeadApiFields(quotation as any),
         notes: (quotation as any).notes || null,
         isCurrent: true,
         is_current: true,
@@ -1751,16 +1756,7 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         installationPhotoUrls: [] as string[]
       };
       const meterRef = (q as any).meterDocumentImageUrl || null;
-      const meterDocumentFields = {
-        meterDocumentImageUrl: meterRef,
-        meterDocumentUrl: meterRef,
-        meterDocumentPublicUrl: meterRef,
-        meter_document_image_url: meterRef,
-        meter_document_url: meterRef,
-        meter_document_public_url: meterRef,
-        meterDocumentName: meterRef ? String(meterRef).split('?')[0].split('/').pop() || null : null,
-        meter_document_name: meterRef ? String(meterRef).split('?')[0].split('/').pop() || null : null
-      };
+      const meterDocumentFields = await buildMeterDocumentApiFields(meterRef);
 
       const productListFields = quotationProductEnrichmentFields(
         products,
@@ -1882,7 +1878,8 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         discountAmount: Number((q as any).discountAmount || 0),
         discount_amount: Number((q as any).discountAmount || 0),
         ...quotationProposalDateApiFields(q),
-        ...quotationCurrentApiFields(row)
+        ...quotationCurrentApiFields(row),
+        ...quotationCallingLeadApiFields(row)
       };
     }));
 
@@ -2388,6 +2385,7 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
         ...quotationProposalDateApiFields(quotation),
         ...quotationSystemHistoryApiFields(rowById),
         ...quotationCurrentApiFields(rowById),
+        ...quotationCallingLeadApiFields(rowById),
         notes: (rowById as any).notes ?? null
       }
     });

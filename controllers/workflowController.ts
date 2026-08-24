@@ -400,16 +400,18 @@ const getWorkflowQueue = async (
               };
           const latestMeterDoc = includeMedia
             ? getLatestMeterDocMeta(rawInstallationDocs)
-            : { name: null as string | null };
+            : { name: null as string | null, storedRef: null as string | null };
           const mcoDocFields = includeMedia
             ? await buildMcoDocApiFields(rawInstallationDocs)
             : {};
-          const meterStoredRef = includeMedia
-            ? resolveMeterStoredRef(q.meterDocumentImageUrl, rawInstallationDocs)
-            : null;
-          const meterDocumentFields = includeMedia
-            ? await buildMeterDocumentApiFields(meterStoredRef, latestMeterDoc.name)
-            : {};
+          // §AF — always echo meter document public URLs (re-presign from stored key), even when includeMedia=false.
+          const meterStoredRef =
+            resolveMeterStoredRef(q.meterDocumentImageUrl, includeMedia ? rawInstallationDocs : []) ||
+            (typeof q.meterDocumentImageUrl === 'string' ? q.meterDocumentImageUrl : null);
+          const meterDocumentFields = await buildMeterDocumentApiFields(
+            meterStoredRef,
+            latestMeterDoc.name
+          );
           const finalConfirmationFields = await buildFinalConfirmationApiFields(q.documents);
           return {
             id: q.id,
@@ -1557,7 +1559,14 @@ export const saveMeteringDetails = async (req: Request, res: Response): Promise<
     const pickFirst = (...names: string[]) =>
       allFiles.find((f) => names.includes(f.fieldname)) || null;
 
-    const meterDocFile = pickFirst('meterDocumentImage', 'meter_document_image');
+    const meterDocFile = pickFirst(
+      'meterDocumentImage',
+      'meter_document_image',
+      'meterDocument',
+      'meter_document',
+      'meterDocumentFile',
+      'file'
+    );
     const meterInstallPhotoFile = pickFirst(
       'meterInstallationPhoto',
       'meter_installation_photo'
