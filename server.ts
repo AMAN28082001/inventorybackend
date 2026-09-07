@@ -22,6 +22,7 @@ import inventoryTransactionRoutes from './routes/inventoryTransactionRoutes';
 import stockReturnRoutes from './routes/stockReturnRoutes';
 import serialNumberRoutes from './routes/serialNumberRoutes';
 import reviewRoutes from './routes/reviewRoutes';
+import mapsRoutes from './routes/mapsRoutes';
 
 // Import routes (Quotation System)
 import quotationAuthRoutes from './routes/quotationAuthRoutes';
@@ -168,6 +169,7 @@ app.use('/api/inventory-transactions', inventoryTransactionRoutes);
 app.use('/api/stock-returns', stockReturnRoutes);
 app.use('/api/serial-numbers', serialNumberRoutes);
 app.use('/api/reviews', reviewRoutes);
+app.use('/api/maps', mapsRoutes);
 
 // 404 handler res
 app.use((_: Request, res: Response) => {

@@ -7,6 +7,7 @@ import { logError, logInfo } from '../utils/loggerHelper';
 import { v4 as uuidv4 } from 'uuid';
 import { normalizeInventoryRole } from '../utils/inventoryRole';
 import { resolveAccess } from '../utils/userAccess';
+import { workflowPermissionFieldsForApi } from '../utils/moduleFieldPermissions';
 
 // Login - for dealers and visitors
 export const login = async (req: Request, res: Response): Promise<void> => {
@@ -102,6 +103,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
             role: dealer.role,
             access,
             permissions: access,
+            ...workflowPermissionFieldsForApi(dealer.toJSON() as unknown as Record<string, unknown>),
             isActive: dealer.isActive,
             // Quotation Admin may open Inventory with this same token (no second login)
             ...(dealer.role === 'admin' || access.includes('admin')
@@ -181,7 +183,8 @@ export const login = async (req: Request, res: Response): Promise<void> => {
             email: visitor.email,
             role: 'visitor',
             access,
-            permissions: access
+            permissions: access,
+            ...workflowPermissionFieldsForApi(visitor.toJSON() as unknown as Record<string, unknown>)
           },
           expiresIn: 3600
         }
@@ -361,6 +364,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
             role: updatedAccountManager!.role,
             access,
             permissions: access,
+            ...workflowPermissionFieldsForApi(updatedAccountManager!.toJSON() as unknown as Record<string, unknown>),
             isActive: updatedAccountManager!.isActive,
             emailVerified: updatedAccountManager!.emailVerified || false,
             loginCount: updatedAccountManager!.loginCount,

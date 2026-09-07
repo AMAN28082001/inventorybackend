@@ -24,10 +24,15 @@ import {
 import { canAccessSection } from '../utils/userAccess';
 import { emitRealtime, realtimeEvents } from '../utils/realtime';
 import {
-  classifyCallingActionSummaryBucket,
+  buildCallingReportsCountSummary,
+  classifyCallingConnection,
   inferReasonCategoryFromOutcome,
   resolveCallingActionStatusText
 } from '../utils/callingActionSummary';
+import {
+  buildDealerQueueSocialFields,
+  loadUploadBatchMapByIds
+} from '../utils/callingQueueSocialFields';
 
 const MOBILE_KEYS = ['mobile', 'phone', 'contact', 'contact no', 'contact no.', 'contactnumber', 'phone_number', 'phone number', 'mobile number'];
 const NAME_KEYS = ['name', 'customername', 'customer name', 'full name'];
@@ -488,6 +493,13 @@ const hrUploadCountsToApi = (counts: HrUploadLeadCounts) => ({
   }
 });
 
+export const fetchHrUploadBatchCounts = async (batchId: string, uploadedRowCount = 0) => {
+  const map = await buildHrUploadCountsForBatches([{ id: batchId, rowCount: uploadedRowCount }]);
+  return map.get(batchId) || emptyHrUploadLeadCounts(uploadedRowCount);
+};
+
+export const hrUploadCountsApiFields = hrUploadCountsToApi;
+
 const escapeSqlString = (value: string) => value.replace(/'/g, "''");
 
 const batchDealerEligibilityPredicate = (dealerId: string, batchAlias: string) => {
@@ -873,6 +885,33 @@ const activeCapAssignUnassignedLeadsForBatch = async ({
   return { assigned, released };
 };
 
+/** Internal helper — Google Sheets sync + HR assign-unassigned (active_cap). */
+export const assignUploadBatchWithActiveCap = async ({
+  batchId,
+  dealerIds,
+  activeLimitPerDealer = 1,
+  assignedByUserId = '1'
+}: {
+  batchId: string;
+  dealerIds: string[];
+  activeLimitPerDealer?: number;
+  assignedByUserId?: string;
+}): Promise<{ assigned: number; released: number }> => {
+  if (!dealerIds.length) return { assigned: 0, released: 0 };
+  await ensureCallingPoolDealerExists();
+  return sequelize.transaction(async (transaction) => {
+    await reclaimStuckCallingAssignments(transaction);
+    return activeCapAssignUnassignedLeadsForBatch({
+      batchId,
+      dealerIds,
+      assignedByUserId,
+      activeLimit: activeLimitPerDealer,
+      rebalance: true,
+      transaction
+    });
+  });
+};
+
 /**
  * §15-C — round-robin assign all unassigned/pool leads in a batch to dealerIds.
  * Returns how many leads were moved to assigned.
@@ -1154,6 +1193,38 @@ const toIsoStringOrNull = (value: unknown): string | null => {
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 };
 
+/** §AG — never send actionAt as null when createdAt/updatedAt exists. Always ISO-8601. */
+const isoActionAtFromHistoryRow = (row: Record<string, unknown> | null | undefined): string | null => {
+  if (!row) return null;
+  return (
+    toIsoStringOrNull(row.actionAt ?? row.action_at) ||
+    toIsoStringOrNull(row.createdAt ?? row.created_at) ||
+    toIsoStringOrNull(row.updatedAt ?? row.updated_at)
+  );
+};
+
+const mobileFromHistoryRow = (row: any): string => {
+  const lead = row?.lead || {};
+  const raw =
+    lead.mobile ||
+    lead.mobileNormalized ||
+    row.customerMobile ||
+    row.customer_mobile ||
+    row.mobile ||
+    '';
+  const digits = String(raw).replace(/\D/g, '');
+  return digits.length >= 10 ? digits.slice(-10) : String(raw || '').trim();
+};
+
+const nameFromHistoryRow = (row: any): string =>
+  String(
+    row?.lead?.name ||
+      row.customerName ||
+      row.customer_name ||
+      row.name ||
+      ''
+  ).trim();
+
 const parseTaggedCallRemark = (rawRemark: unknown): { statusCategory: string | null; status: string | null; remark: string | null } => {
   const raw = String(rawRemark || '').trim();
   if (!raw) return { statusCategory: null, status: null, remark: null };
@@ -1241,18 +1312,9 @@ const withCallingRemarkApiAliases = <T extends Record<string, unknown>>(row: T):
 const callingActionToApiJson = (row: any) => {
   const parsed = parseTaggedCallRemark(row.callRemark ?? row.call_remark);
   const normalizedCategory = normalizeStatusCategory(row.statusCategory ?? row.status_category ?? parsed.statusCategory);
-  const name =
-    row.lead?.name ||
-    row.customerName ||
-    row.customer_name ||
-    row.name ||
-    '';
-  const mobile =
-    row.lead?.mobile ||
-    row.customerMobile ||
-    row.customer_mobile ||
-    row.mobile ||
-    '';
+  const name = nameFromHistoryRow(row);
+  const mobile = mobileFromHistoryRow(row);
+  const actionAtIso = isoActionAtFromHistoryRow(row);
   const dealerId = row.dealerId || row.dealer_id || row.assignedDealerId || '';
   const dealerName = row.dealerName || row.dealer_name || row.assignedDealerName || '';
   return {
@@ -1268,8 +1330,10 @@ const callingActionToApiJson = (row: any) => {
     dealerName,
     dealer_name: dealerName,
     action: row.action,
-    actionAt: toIsoStringOrNull(row.actionAt),
-    action_at: toIsoStringOrNull(row.actionAt),
+    actionAt: actionAtIso,
+    action_at: actionAtIso,
+    calledAt: actionAtIso,
+    called_at: actionAtIso,
     // compatibility
     callRemark: row.callRemark,
     statusLabel: row.statusLabel,
@@ -1332,21 +1396,8 @@ const buildQueueCountsPayload = (counts: Awaited<ReturnType<typeof buildDealerQu
   }
 });
 
-const NOT_CONNECTED_STATUS_TEXTS = new Set([
-  'call unanswered',
-  'switched off',
-  'not reachable',
-  'busy / line busy',
-  'call disconnected',
-  'wrong number',
-  'invalid number',
-  'number does not exist'
-]);
-
-const classifyActionStage = (action: any): 'connected' | 'not_connected' => {
-  const statusText = String(action.status || '').trim().toLowerCase();
-  return NOT_CONNECTED_STATUS_TEXTS.has(statusText) ? 'not_connected' : 'connected';
-};
+const classifyActionStage = (action: any): 'connected' | 'not_connected' =>
+  classifyCallingConnection(action);
 
 const parsePositiveInt = (value: unknown, fallback: number): number => {
   const parsed = Number(value);
@@ -1355,9 +1406,81 @@ const parsePositiveInt = (value: unknown, fallback: number): number => {
   return normalized > 0 ? normalized : fallback;
 };
 
+/** Calling Reports calendar TZ (§AI / §J). */
+const REPORT_TIME_ZONE = 'Asia/Kolkata';
+
+const getKolkataYmd = (
+  date: Date
+): { y: number; m: number; d: number; dow: number } => {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: REPORT_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    weekday: 'short'
+  }).formatToParts(date);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value || '';
+  const weekday = get('weekday');
+  const dowMap: Record<string, number> = {
+    Sun: 0,
+    Mon: 1,
+    Tue: 2,
+    Wed: 3,
+    Thu: 4,
+    Fri: 5,
+    Sat: 6
+  };
+  return {
+    y: Number(get('year')),
+    m: Number(get('month')),
+    d: Number(get('day')),
+    dow: dowMap[weekday] ?? 0
+  };
+};
+
+/** Instant for a calendar day boundary in Asia/Kolkata (IST = UTC+5:30, no DST). */
+const kolkataDayBoundary = (
+  y: number,
+  m: number,
+  d: number,
+  boundary: 'start' | 'end'
+): Date => {
+  const ymd = `${String(y).padStart(4, '0')}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  if (boundary === 'start') return new Date(`${ymd}T00:00:00.000+05:30`);
+  return new Date(`${ymd}T23:59:59.999+05:30`);
+};
+
+const addCalendarDays = (y: number, m: number, d: number, delta: number): { y: number; m: number; d: number } => {
+  // Noon UTC avoids DST edge cases when shifting calendar days.
+  const utc = new Date(Date.UTC(y, m - 1, d + delta, 12, 0, 0));
+  return { y: utc.getUTCFullYear(), m: utc.getUTCMonth() + 1, d: utc.getUTCDate() };
+};
+
+/** Monday 00:00 — Sunday 23:59:59.999 Asia/Kolkata (§AI weekly alignment). */
+const getMondayThroughSundayWeekBounds = (reference: Date): { from: Date; to: Date } => {
+  const { y, m, d, dow } = getKolkataYmd(reference);
+  const diffToMonday = dow === 0 ? -6 : 1 - dow;
+  const monday = addCalendarDays(y, m, d, diffToMonday);
+  const sunday = addCalendarDays(monday.y, monday.m, monday.d, 6);
+  return {
+    from: kolkataDayBoundary(monday.y, monday.m, monday.d, 'start'),
+    to: kolkataDayBoundary(sunday.y, sunday.m, sunday.d, 'end')
+  };
+};
+
+/** 1st 00:00 — last day 23:59:59.999 of the calendar month in Asia/Kolkata. */
+const getMonthRange = (reference: Date): { from: Date; to: Date } => {
+  const { y, m } = getKolkataYmd(reference);
+  const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  return {
+    from: kolkataDayBoundary(y, m, 1, 'start'),
+    to: kolkataDayBoundary(y, m, lastDay, 'end')
+  };
+};
+
 /**
- * HR/Admin calling-actions GET (§J): supports ISO timestamps from the SPA and plain YYYY-MM-DD.
- * Plain dates use local start/end-of-day; full ISO strings are used as parsed (inclusive window on action_at).
+ * HR/Admin calling-actions GET (§J / §AI): supports ISO timestamps from the SPA and plain YYYY-MM-DD.
+ * Plain dates use Asia/Kolkata start/end-of-day; full ISO strings are used as parsed (inclusive on action_at).
  */
 const parseReportDateQueryParam = (value: unknown, boundary: 'start' | 'end'): Date | null => {
   if (value === undefined || value === null || value === '') return null;
@@ -1365,37 +1488,11 @@ const parseReportDateQueryParam = (value: unknown, boundary: 'start' | 'end'): D
   if (!s) return null;
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
     const [y, m, d] = s.split('-').map(Number);
-    const parsed = new Date(y, m - 1, d);
-    if (Number.isNaN(parsed.getTime())) return null;
-    if (boundary === 'start') parsed.setHours(0, 0, 0, 0);
-    else parsed.setHours(23, 59, 59, 999);
-    return parsed;
+    if (!y || !m || !d || Number.isNaN(y) || Number.isNaN(m) || Number.isNaN(d)) return null;
+    return kolkataDayBoundary(y, m, d, boundary);
   }
   const parsed = new Date(s);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
-};
-
-/** Monday 00:00:00.000 — Sunday 23:59:59.999 in the server's local timezone (§J weekly alignment). */
-const getMondayThroughSundayWeekBounds = (reference: Date): { from: Date; to: Date } => {
-  const from = new Date(reference);
-  const dow = from.getDay();
-  const diffToMonday = dow === 0 ? -6 : 1 - dow;
-  from.setDate(from.getDate() + diffToMonday);
-  from.setHours(0, 0, 0, 0);
-  const to = new Date(from);
-  to.setDate(to.getDate() + 6);
-  to.setHours(23, 59, 59, 999);
-  return { from, to };
-};
-
-const getMonthRange = (reference: Date): { from: Date; to: Date } => {
-  const year = reference.getFullYear();
-  const month = reference.getMonth();
-  const from = new Date(year, month, 1);
-  from.setHours(0, 0, 0, 0);
-  const to = new Date(year, month + 1, 0);
-  to.setHours(23, 59, 59, 999);
-  return { from, to };
 };
 
 const getReasonCategoryFromAction = (
@@ -1475,10 +1572,9 @@ const resolveReportDateRange = (
 
   if (!startDate && !endDate) {
     if (effectivePreset === 'daily' || effectivePreset === 'today') {
-      rangeStart = new Date(now);
-      rangeStart.setHours(0, 0, 0, 0);
-      rangeEnd = new Date(now);
-      rangeEnd.setHours(23, 59, 59, 999);
+      const { y, m, d } = getKolkataYmd(now);
+      rangeStart = kolkataDayBoundary(y, m, d, 'start');
+      rangeEnd = kolkataDayBoundary(y, m, d, 'end');
     } else if (effectivePreset === 'weekly' || effectivePreset === 'week') {
       const week = getMondayThroughSundayWeekBounds(now);
       rangeStart = week.from;
@@ -1488,8 +1584,13 @@ const resolveReportDateRange = (
       rangeStart = monthRange.from;
       rangeEnd = monthRange.to;
     } else if (effectivePreset === 'last_month') {
-      const previousMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      const monthRange = getMonthRange(previousMonth);
+      const { y, m } = getKolkataYmd(now);
+      const prev = m === 1 ? { y: y - 1, m: 12 } : { y, m: m - 1 };
+      // Mid-month noon IST avoids month-boundary ambiguity.
+      const previousMonthRef = new Date(
+        `${prev.y}-${String(prev.m).padStart(2, '0')}-15T12:00:00.000+05:30`
+      );
+      const monthRange = getMonthRange(previousMonthRef);
       rangeStart = monthRange.from;
       rangeEnd = monthRange.to;
     }
@@ -1564,8 +1665,15 @@ const buildCallingActionsFilter = (req: Request): WhereOptions => {
   const action = req.query.action ? String(req.query.action).trim() : '';
   const search = req.query.search ? String(req.query.search).trim() : '';
   const dateRange = req.query.dateRange ? String(req.query.dateRange).trim().toLowerCase() : '';
-  const startDate = parseReportDateQueryParam(req.query.startDate ?? req.query.start_date, 'start');
-  const endDate = parseReportDateQueryParam(req.query.endDate ?? req.query.end_date, 'end');
+  // Prefer ISO startDate/endDate; accept fromDate/toDate (YYYY-MM-DD) as aliases (§AI).
+  const startDate = parseReportDateQueryParam(
+    req.query.startDate ?? req.query.start_date ?? req.query.fromDate ?? req.query.from_date,
+    'start'
+  );
+  const endDate = parseReportDateQueryParam(
+    req.query.endDate ?? req.query.end_date ?? req.query.toDate ?? req.query.to_date,
+    'end'
+  );
 
   const { rangeStart, rangeEnd } = resolveReportDateRange(range, dateRange, startDate, endDate);
 
@@ -1577,25 +1685,17 @@ const buildCallingActionsFilter = (req: Request): WhereOptions => {
     (filter as any).dealerName = { [Op.iLike]: `%${String(dealerName).trim()}%` };
   }
   if (rangeStart || rangeEnd) {
-    const actionAtBound: Record<symbol, Date> = {} as Record<symbol, Date>;
-    const createdAtBound: Record<symbol, Date> = {} as Record<symbol, Date>;
-    if (rangeStart) {
-      actionAtBound[Op.gte] = rangeStart;
-      createdAtBound[Op.gte] = rangeStart;
-    }
-    if (rangeEnd) {
-      actionAtBound[Op.lte] = rangeEnd;
-      createdAtBound[Op.lte] = rangeEnd;
-    }
-    // Backward compatibility: some historical rows may miss actionAt.
-    (filter as any)[Op.and] = [
-      {
-        [Op.or]: [
-          { actionAt: actionAtBound },
-          { createdAt: createdAtBound }
-        ]
-      }
-    ];
+    // Filter on effective action time only — NEVER lead.created_at (§AI).
+    // COALESCE covers legacy rows missing actionAt (history.createdAt only).
+    const effectiveActionAt = Sequelize.fn(
+      'COALESCE',
+      Sequelize.col('CallingActionHistory.actionAt'),
+      Sequelize.col('CallingActionHistory.createdAt')
+    );
+    const bound: Record<symbol | string, Date> = {};
+    if (rangeStart) bound[Op.gte] = rangeStart;
+    if (rangeEnd) bound[Op.lte] = rangeEnd;
+    (filter as any)[Op.and] = [Sequelize.where(effectiveActionAt, bound)];
   }
   if (category || statusCategoryKey) {
     (filter as any).statusCategory = statusCategoryKey || category;
@@ -1617,9 +1717,11 @@ const buildCallingActionsFilter = (req: Request): WhereOptions => {
       { customerMobile: { [Op.iLike]: `%${search}%` } },
       { dealerName: { [Op.iLike]: `%${search}%` } },
       { statusReason: { [Op.iLike]: `%${search}%` } },
-      { callRemark: { [Op.iLike]: `%${search}%` } }
+      { callRemark: { [Op.iLike]: `%${search}%` } },
+      { '$lead.mobile$': { [Op.iLike]: `%${search}%` } },
+      { '$lead.name$': { [Op.iLike]: `%${search}%` } }
     ];
-    // Customer Journey: compare last 10 digits (strip non-digits).
+    // Customer Journey: compare last 10 digits (strip non-digits) on denormalized + lead join.
     if (last10) {
       orClauses.push(
         Sequelize.where(
@@ -1631,6 +1733,8 @@ const buildCallingActionsFilter = (req: Request): WhereOptions => {
           last10
         )
       );
+      orClauses.push({ '$lead.mobileNormalized$': last10 });
+      orClauses.push({ '$lead.mobileNormalized$': { [Op.iLike]: `%${last10}%` } });
     }
     (filter as any)[Op.or] = orClauses;
   }
@@ -1639,24 +1743,49 @@ const buildCallingActionsFilter = (req: Request): WhereOptions => {
 
 const buildCallingActionsResponse = async (req: Request) => {
   const page = parsePositiveInt(req.query.page, 1);
-  const limit = Math.min(parsePositiveInt(req.query.limit, 20), 2000);
-  const offset = (page - 1) * limit;
   const hasExplicitLimit = req.query.limit !== undefined && req.query.limit !== null;
+  const rawRange = String(req.query.range ?? req.query.dateRange ?? 'all').trim().toLowerCase();
+  const defaultLimit = !hasExplicitLimit && (rawRange === 'all' || rawRange === '') ? 2000 : 20;
+  const limit = Math.min(parsePositiveInt(req.query.limit, defaultLimit), 2000);
+  const offset = (page - 1) * limit;
   const summaryScope = String(req.query.summaryScope || req.query.summary_scope || 'page').trim().toLowerCase();
   const wantsFullSummary = !hasExplicitLimit && summaryScope === 'full';
   const where = buildCallingActionsFilter(req);
 
-  const rows = await CallingActionHistory.findAndCountAll({
-    where,
-    raw: true,
-    order: [['actionAt', 'DESC'], ['id', 'DESC']],
-    limit,
-    offset
-  });
+  const leadInclude = {
+    model: CallingLead,
+    as: 'lead',
+    attributes: ['id', 'mobile', 'mobileNormalized', 'name'],
+    required: false
+  };
+
+  const [total, historyRows] = await Promise.all([
+    CallingActionHistory.count({
+      where,
+      include: [leadInclude],
+      distinct: true,
+      col: 'id'
+    }),
+    CallingActionHistory.findAll({
+      where,
+      include: [leadInclude],
+      order: [
+        [Sequelize.literal('COALESCE("CallingActionHistory"."actionAt", "CallingActionHistory"."createdAt")'), 'DESC'],
+        ['id', 'DESC']
+      ],
+      limit,
+      offset
+    })
+  ]);
+  const rows = {
+    count: total,
+    rows: historyRows.map((row: any) => (typeof row.toJSON === 'function' ? row.toJSON() : row))
+  };
 
   const summarySourceRows = wantsFullSummary
     ? await CallingActionHistory.findAll({
         where,
+        include: [leadInclude],
         raw: true,
         attributes: [
           'action',
@@ -1709,28 +1838,16 @@ const buildCallingActionsResponse = async (req: Request) => {
     dealerNameMap.set(String(dealer.id), `${dealer.firstName || ''} ${dealer.lastName || ''}`.trim());
   }
 
-  const total = rows.count;
-  const summarySeed = {
-    interested: 0,
-    follow_up: 0,
-    not_interested: 0,
-    others: 0,
-    total: summarySourceRows.length
-  };
-  const summary = (summarySourceRows as any[]).reduce((acc, row) => {
-    const bucket = classifyCallingActionSummaryBucket({
+  const summaryCounts = buildCallingReportsCountSummary(
+    (summarySourceRows as any[]).map((row) => ({
       action: row.action,
       statusLabel: row.statusLabel,
       statusReason: row.statusReason,
+      statusText: row.statusLabel || row.statusReason,
       callRemark: row.callRemark,
       statusCategory: row.statusCategory
-    });
-    if (bucket === 'interested') acc.interested += 1;
-    else if (bucket === 'followUp') acc.follow_up += 1;
-    else if (bucket === 'notInterested') acc.not_interested += 1;
-    else acc.others += 1;
-    return acc;
-  }, summarySeed);
+    }))
+  );
 
   const actionRows = rows.rows.map((row: any) => {
     const statusText = resolveCallingActionStatusText({
@@ -1747,9 +1864,10 @@ const buildCallingActionsResponse = async (req: Request) => {
         callRemark: row.callRemark,
         statusCategory: row.statusCategory
       });
-    const name = row.customerName || '';
-    const mobile = row.customerMobile || '';
+    const name = nameFromHistoryRow(row);
+    const mobile = mobileFromHistoryRow(row);
     const dealerName = row.dealerName || dealerNameMap.get(row.dealerId) || '';
+    const actionAtIso = isoActionAtFromHistoryRow(row);
     return {
       id: row.id,
       leadId: row.leadId,
@@ -1773,8 +1891,10 @@ const buildCallingActionsResponse = async (req: Request) => {
       isCustomReason: row.isCustomReason,
       statusCategoryKey: row.statusCategory,
       statusCategoryLabel: row.statusLabel,
-      actionAt: toIsoStringOrNull(row.actionAt),
-      action_at: toIsoStringOrNull(row.actionAt),
+      actionAt: actionAtIso,
+      action_at: actionAtIso,
+      calledAt: actionAtIso,
+      called_at: actionAtIso,
       nextFollowUpAt: toIsoStringOrNull(row.nextFollowUpAt),
       customerName: name,
       customerMobile: mobile,
@@ -1807,19 +1927,37 @@ const buildCallingActionsResponse = async (req: Request) => {
     connectedActions,
     notConnectedActions,
     summary: {
-      interested: summary.interested,
-      followUp: summary.follow_up,
-      notInterested: summary.not_interested,
-      others: summary.others,
-      total: summary.total
+      totalCalls: summaryCounts.totalCalls,
+      connected: summaryCounts.connected,
+      notConnected: summaryCounts.notConnected,
+      connectedInterested: summaryCounts.connectedInterested,
+      connectedNotInterested: summaryCounts.connectedNotInterested,
+      connectedFollowUp: summaryCounts.connectedFollowUp,
+      interested: summaryCounts.interested,
+      followUp: summaryCounts.followUp,
+      notInterested: summaryCounts.notInterested,
+      others: summaryCounts.others,
+      total: summaryCounts.total
     },
-    summaryCounts: summary,
+    summaryCounts: {
+      interested: summaryCounts.interested,
+      follow_up: summaryCounts.followUp,
+      not_interested: summaryCounts.notInterested,
+      others: summaryCounts.others,
+      total: summaryCounts.total,
+      totalCalls: summaryCounts.totalCalls,
+      connected: summaryCounts.connected,
+      notConnected: summaryCounts.notConnected,
+      connectedInterested: summaryCounts.connectedInterested,
+      connectedNotInterested: summaryCounts.connectedNotInterested,
+      connectedFollowUp: summaryCounts.connectedFollowUp
+    },
     dealers,
     pagination: {
       page,
       limit,
       total,
-      totalPages: Math.ceil(total / limit),
+      totalPages: Math.max(1, Math.ceil(total / limit) || 1),
       hasNext: page < Math.ceil(total / limit),
       hasPrev: page > 1
     }
@@ -1832,8 +1970,12 @@ const callingSummaryCache = new Map<string, { expiresAt: number; summary: any }>
 const buildCallingActionsSummaryOnly = async (req: Request) => {
   const where = buildCallingActionsFilter(req);
   const dealerId = String(req.query.dealerId || req.query.dealer_id || '');
-  const startDate = String(req.query.startDate || req.query.start_date || '');
-  const endDate = String(req.query.endDate || req.query.end_date || '');
+  const startDate = String(
+    req.query.startDate || req.query.start_date || req.query.fromDate || req.query.from_date || ''
+  );
+  const endDate = String(
+    req.query.endDate || req.query.end_date || req.query.toDate || req.query.to_date || ''
+  );
   const range = String(req.query.range || req.query.dateRange || '');
   const cacheKey = `sum:${dealerId}:${startDate}:${endDate}:${range}`;
   const cached = callingSummaryCache.get(cacheKey);
@@ -1843,6 +1985,14 @@ const buildCallingActionsSummaryOnly = async (req: Request) => {
 
   const summarySourceRows = await CallingActionHistory.findAll({
     where,
+    include: [
+      {
+        model: CallingLead,
+        as: 'lead',
+        attributes: ['id'],
+        required: false
+      }
+    ],
     raw: true,
     attributes: [
       'action',
@@ -1854,35 +2004,17 @@ const buildCallingActionsSummaryOnly = async (req: Request) => {
     ]
   });
 
-  const summarySeed = {
-    interested: 0,
-    follow_up: 0,
-    not_interested: 0,
-    others: 0,
-    total: summarySourceRows.length
-  };
-  const summary = (summarySourceRows as any[]).reduce((acc, row) => {
-    const bucket = classifyCallingActionSummaryBucket({
+  const payload = buildCallingReportsCountSummary(
+    (summarySourceRows as any[]).map((row) => ({
       action: row.action,
       statusLabel: row.statusLabel,
       statusReason: row.statusReason,
+      statusText: row.statusLabel || row.statusReason,
       callRemark: row.callRemark,
       statusCategory: row.statusCategory
-    });
-    if (bucket === 'interested') acc.interested += 1;
-    else if (bucket === 'followUp') acc.follow_up += 1;
-    else if (bucket === 'notInterested') acc.not_interested += 1;
-    else acc.others += 1;
-    return acc;
-  }, summarySeed);
+    }))
+  );
 
-  const payload = {
-    interested: summary.interested,
-    followUp: summary.follow_up,
-    notInterested: summary.not_interested,
-    others: summary.others,
-    total: summary.total
-  };
   callingSummaryCache.set(cacheKey, {
     expiresAt: Date.now() + CALLING_SUMMARY_CACHE_TTL_MS,
     summary: payload
@@ -1890,7 +2022,7 @@ const buildCallingActionsSummaryOnly = async (req: Request) => {
   return payload;
 };
 
-const resolveAssignedByUserId = async (req: Request, transaction: any): Promise<string> => {
+export const resolveAssignedByUserId = async (req: Request, transaction: any): Promise<string> => {
   const requesterId = req.user?.id;
   const requesterUsername = req.user?.username;
 
@@ -3150,6 +3282,15 @@ const mapAssignmentRowsToQueueLeads = async (dealerId: string, rows: any[]) => {
     logError('buildLatestStatusMetaMap failed (non-fatal)', error, { dealerId });
   }
 
+  let uploadBatchById = new Map<string, any>();
+  try {
+    uploadBatchById = await loadUploadBatchMapByIds(
+      rows.map((row: any) => row.lead?.batchId).filter(Boolean)
+    );
+  } catch (error) {
+    logError('loadUploadBatchMapByIds failed (non-fatal)', error, { dealerId });
+  }
+
   const assigneeDealerIds = Array.from(
     new Set(rows.map((row: any) => String(row.dealerId)).filter((id) => isValidHrCallingAssigneeDealerId(id)))
   );
@@ -3177,6 +3318,7 @@ const mapAssignmentRowsToQueueLeads = async (dealerId: string, rows: any[]) => {
       if (!lead) return null;
       const latestStatus = latestStatusMap.get(String(row.leadId));
       const assignedDealerName = assigneeNameById.get(String(row.dealerId)) || null;
+      const uploadBatch = lead.batchId ? uploadBatchById.get(String(lead.batchId)) : null;
       return withCallingRemarkApiAliases({
         id: lead.id,
         leadId: lead.id,
@@ -3206,7 +3348,8 @@ const mapAssignmentRowsToQueueLeads = async (dealerId: string, rows: any[]) => {
         statusCategoryKey: latestStatus?.statusCategory || null,
         statusCategoryLabel: latestStatus?.statusLabel || null,
         nextFollowUpAt: row.nextFollowUpAt,
-        actionAt: row.actionAt
+        actionAt: row.actionAt,
+        ...buildDealerQueueSocialFields(lead, uploadBatch)
       });
     })
     .filter(Boolean) as any[];
@@ -3268,7 +3411,8 @@ const buildDealerQueueCounts = async (dealerId: string) => {
 
 const mapAssignmentToScheduledLead = (
   row: any,
-  latestStatusMap: Map<string, LeadStatusMeta>
+  latestStatusMap: Map<string, LeadStatusMeta>,
+  uploadBatchById: Map<string, any>
 ) => {
   const parsed = parseTaggedCallRemark(row.callRemark);
   const meta = latestStatusMap.get(String(row.leadId));
@@ -3278,6 +3422,7 @@ const mapAssignmentToScheduledLead = (
     null;
   const statusText = meta?.statusLabel || parsed.status || null;
   const remark = meta?.statusReason || parsed.remark || null;
+  const uploadBatch = row.lead?.batchId ? uploadBatchById.get(String(row.lead.batchId)) : null;
 
   return withCallingRemarkApiAliases({
     leadId: row.leadId,
@@ -3306,7 +3451,9 @@ const mapAssignmentToScheduledLead = (
     statusCategoryKey: statusCategory,
     statusCategoryLabel: statusText,
     nextFollowUpAt: toIsoStringOrNull(row.nextFollowUpAt),
-    status: 'rescheduled'
+    status: 'rescheduled',
+    uploadBatchId: row.lead?.batchId || null,
+    ...buildDealerQueueSocialFields(row.lead, uploadBatch)
   });
 };
 
@@ -3338,9 +3485,12 @@ const buildScheduledLeads = async (dealerId: string) => {
   });
   const leadIds = rows.map((row: any) => String(row.leadId)).filter(Boolean);
   const latestStatusMap = await buildLatestStatusMetaMap(dealerId, leadIds);
+  const uploadBatchById = await loadUploadBatchMapByIds(
+    rows.map((row: any) => row.lead?.batchId).filter(Boolean)
+  );
 
   return dedupeScheduledLeadsByLeadId(
-    rows.map((row: any) => mapAssignmentToScheduledLead(row, latestStatusMap))
+    rows.map((row: any) => mapAssignmentToScheduledLead(row, latestStatusMap, uploadBatchById))
   );
 };
 
@@ -3429,8 +3579,11 @@ export const getDealerScheduledQueue = async (req: Request, res: Response): Prom
     });
     const leadIds = rows.rows.map((row: any) => String(row.leadId)).filter(Boolean);
     const latestStatusMap = await buildLatestStatusMetaMap(dealerId, leadIds);
+    const uploadBatchById = await loadUploadBatchMapByIds(
+      rows.rows.map((row: any) => row.lead?.batchId).filter(Boolean)
+    );
     const items = dedupeScheduledLeadsByLeadId(
-      rows.rows.map((row: any) => mapAssignmentToScheduledLead(row, latestStatusMap))
+      rows.rows.map((row: any) => mapAssignmentToScheduledLead(row, latestStatusMap, uploadBatchById))
     );
 
     applyNoCacheHeaders(res);
@@ -4969,6 +5122,10 @@ export const getHrLeadUploadBatches = async (req: Request, res: Response): Promi
         id: batch.id,
         uploadedAt: batch.uploadedAt,
         fileName: batch.fileName,
+        sourceType: (batch as any).sourceType || 'csv',
+        source_type: (batch as any).sourceType || 'csv',
+        sourceSheetTab: (batch as any).sourceSheetTab || null,
+        source_sheet_tab: (batch as any).sourceSheetTab || null,
         dealerIds: assignedDealers,
         dealers: assignedDealers
           .map((dealerId) => dealerById.get(String(dealerId)))
@@ -4998,6 +5155,10 @@ export const getHrLeadUploadBatches = async (req: Request, res: Response): Promi
             id: batch.id,
             batchId: batch.id,
             fileName: batch.fileName,
+            sourceType: (batch as any).sourceType || 'csv',
+            source_type: (batch as any).sourceType || 'csv',
+            sourceSheetTab: (batch as any).sourceSheetTab || null,
+            source_sheet_tab: (batch as any).sourceSheetTab || null,
             uploadedBy: batch.uploadedBy,
             uploadedAt: batch.uploadedAt,
             dealerIds: assignedDealers,
@@ -5422,6 +5583,12 @@ export const getAdminCallingActionsSummary = async (req: Request, res: Response)
       success: true,
       data: {
         summary,
+        totalCalls: summary.totalCalls,
+        connected: summary.connected,
+        notConnected: summary.notConnected,
+        connectedNotInterested: summary.connectedNotInterested,
+        connectedInterested: summary.connectedInterested,
+        connectedFollowUp: summary.connectedFollowUp,
         interested: summary.interested,
         followUp: summary.followUp,
         notInterested: summary.notInterested,
@@ -5461,6 +5628,12 @@ export const getHrCallingActionsSummary = async (req: Request, res: Response): P
       success: true,
       data: {
         summary,
+        totalCalls: summary.totalCalls,
+        connected: summary.connected,
+        notConnected: summary.notConnected,
+        connectedNotInterested: summary.connectedNotInterested,
+        connectedInterested: summary.connectedInterested,
+        connectedFollowUp: summary.connectedFollowUp,
         interested: summary.interested,
         followUp: summary.followUp,
         notInterested: summary.notInterested,

@@ -14,12 +14,25 @@ import {
   assignHrUploadUnassigned,
   updateHrUploadDealerPool
 } from '../controllers/callingLeadController';
+import {
+  listHrSheetSources,
+  discoverHrSheetTabs,
+  patchHrSheetSource,
+  postHrSheetSourceSync,
+  postHrSheetSourcesSyncAll,
+  getHrSheetSourceLeads
+} from '../controllers/hrSheetSourceController';
 import { validate } from '../middleware/validate';
 import {
   uploadCallingLeadsSchema,
   assignUnassignedLeadsSchema,
   updateUploadDealerPoolSchema
 } from '../validations/callingLeadValidations';
+import {
+  discoverHrSheetTabsSchema,
+  patchHrSheetSourceSchema,
+  hrSheetSourceLeadsQuerySchema
+} from '../validations/hrSheetSourceValidations';
 import { canAccessSection, hasAdminPanelAccess } from '../utils/userAccess';
 
 const router: Router = express.Router();
@@ -55,6 +68,24 @@ const authorizeHrLeadAccess = (req: Request, res: Response, next: NextFunction):
   }
   next();
 };
+
+/** HR JWT or `x-cron-secret` matching `CRON_SECRET` (sheet auto-sync). */
+const authenticateHrOrCron = (req: Request, res: Response, next: NextFunction): void => {
+  const cronSecret = String(process.env.CRON_SECRET || '').trim();
+  const headerSecret = String(req.headers['x-cron-secret'] || '').trim();
+  if (cronSecret && headerSecret && headerSecret === cronSecret) {
+    (req as Request & { isCronSheetSync?: boolean }).isCronSheetSync = true;
+    next();
+    return;
+  }
+  authenticate(req, res, () => authorizeHrLeadAccess(req, res, next));
+};
+
+/**
+ * P0 auto-sync — must be registered BEFORE authenticate + `/:id` routes
+ * so cron can call with x-cron-secret only (no JWT).
+ */
+router.post('/sheet-sources/sync-all', authenticateHrOrCron, postHrSheetSourcesSyncAll);
 
 router.use(authenticate);
 router.use(authorizeHrLeadAccess);
@@ -123,5 +154,13 @@ router.post(
   assignHrUploadUnassigned
 );
 router.post('/leads/upload-csv', upload.fields([{ name: 'file', maxCount: 1 }, { name: 'csvFile', maxCount: 1 }]), validate(uploadCallingLeadsSchema), uploadCallingLeadsCsv);
+
+/** Google Sheets → Social Media leads (§42 / BACKEND_GOOGLE_SHEETS_SOCIAL_LEADS.ts) */
+router.get('/sheet-sources', listHrSheetSources);
+router.post('/sheet-sources/discover', validate(discoverHrSheetTabsSchema), discoverHrSheetTabs);
+// sync-all is registered above authenticate (cron + HR)
+router.patch('/sheet-sources/:id', validate(patchHrSheetSourceSchema), patchHrSheetSource);
+router.post('/sheet-sources/:id/sync', postHrSheetSourceSync);
+router.get('/sheet-sources/:id/leads', validate(hrSheetSourceLeadsQuerySchema), getHrSheetSourceLeads);
 
 export default router;

@@ -8,13 +8,15 @@ interface CallingLeadUploadBatchAttributes {
   uploadedAt: Date;
   rowCount: number;
   assignedDealers: string[];
+  sourceType?: string;
+  sourceSheetTab?: string | null;
   createdAt?: Date;
   updatedAt?: Date;
 }
 
 interface CallingLeadUploadBatchCreationAttributes extends Optional<
   CallingLeadUploadBatchAttributes,
-  'id' | 'uploadedAt' | 'createdAt' | 'updatedAt'
+  'id' | 'uploadedAt' | 'sourceType' | 'sourceSheetTab' | 'createdAt' | 'updatedAt'
 > {}
 
 class CallingLeadUploadBatch
@@ -26,6 +28,8 @@ class CallingLeadUploadBatch
   public uploadedAt!: Date;
   public rowCount!: number;
   public assignedDealers!: string[];
+  public sourceType!: string;
+  public sourceSheetTab!: string | null;
   public readonly createdAt!: Date;
   public readonly updatedAt!: Date;
 }
@@ -58,6 +62,15 @@ CallingLeadUploadBatch.init(
       type: DataTypes.JSONB,
       allowNull: false,
       defaultValue: []
+    },
+    sourceType: {
+      type: DataTypes.STRING(32),
+      allowNull: false,
+      defaultValue: 'csv'
+    },
+    sourceSheetTab: {
+      type: DataTypes.STRING(128),
+      allowNull: true
     }
   },
   {

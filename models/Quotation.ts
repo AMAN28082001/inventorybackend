@@ -40,6 +40,8 @@ interface QuotationAttributes {
   fileBankIfsc?: string | null;
   fileSubsidyChequeDetails?: string | null;
   fileLoginAt?: Date | null;
+  /** §AK — office scope for workflow field permissions (copied from dealer at create). */
+  officeLocation?: string | null;
   statusApprovedAt?: Date | null;
   statusHistory?: Array<{ status: string; at: string }> | null;
   /** Revise/revert stack: previous products+pricing snapshots (HANDOFF §23) */
@@ -176,6 +178,7 @@ class Quotation extends Model<QuotationAttributes, QuotationCreationAttributes> 
   public fileBankIfsc!: string | null;
   public fileSubsidyChequeDetails!: string | null;
   public fileLoginAt!: Date | null;
+  public officeLocation!: string | null;
   public statusApprovedAt!: Date | null;
   public statusHistory!: Array<{ status: string; at: string }> | null;
   public systemHistory!: Array<{
@@ -412,6 +415,10 @@ Quotation.init(
     },
     fileLoginAt: {
       type: DataTypes.DATE,
+      allowNull: true
+    },
+    officeLocation: {
+      type: DataTypes.STRING(32),
       allowNull: true
     },
     statusApprovedAt: {

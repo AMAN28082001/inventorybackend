@@ -12,6 +12,8 @@ interface VisitorAttributes {
   employeeId?: string | null;
   /** Dashboard section keys */
   access?: string[] | null;
+  officeLocation?: string | null;
+  moduleFieldPermissions?: Record<string, unknown> | null;
   gender?: string | null;
   dateOfBirth?: Date | string | null;
   fatherName?: string | null;
@@ -40,6 +42,8 @@ class Visitor extends Model<VisitorAttributes, VisitorCreationAttributes> implem
   public mobile!: string;
   public employeeId!: string | null;
   public access!: string[] | null;
+  public officeLocation!: string | null;
+  public moduleFieldPermissions!: Record<string, unknown> | null;
   public gender!: string | null;
   public dateOfBirth!: Date | string | null;
   public fatherName!: string | null;
@@ -97,6 +101,15 @@ Visitor.init(
       type: DataTypes.JSONB,
       allowNull: false,
       defaultValue: []
+    },
+    officeLocation: {
+      type: DataTypes.STRING(32),
+      allowNull: true
+    },
+    moduleFieldPermissions: {
+      type: DataTypes.JSONB,
+      allowNull: false,
+      defaultValue: {}
     },
     gender: {
       type: DataTypes.STRING(20),

@@ -67,7 +67,8 @@ import { validate } from '../middleware/validate';
 import { logRequestBeforeValidation, logRequestAfterValidation } from '../middleware/requestLogger';
 import { createQuotationSchema, updateDiscountSchema, updateProductsSchema, updatePricingSchema, updatePaymentDetailsSchema, updatePaymentModeSchema, updateInstallationReleaseSchema, updateInstallationScheduledAtSchema, finalSettlementSchema, revertFinalSettlementSchema } from '../validations/quotationValidations';
 import { updatePricingTablesSchema } from '../validations/pricingValidations';
-import { patchQuotationInstallationTeamSchema, bankProcessSchema } from '../validations/adminValidations';
+import { patchQuotationInstallationTeamSchema, bankProcessSchema, retrieveFromInstallationSchema } from '../validations/adminValidations';
+import { retrieveQuotationFromInstallation } from '../controllers/adminController';
 import {
   meteringDetailsSchema,
   meteringMcoDocumentsSchema,
@@ -979,6 +980,18 @@ router.patch(
 );
 router.patch('/:quotationId/installation-release', authorizeDealerOrAccountManager, validate(updateInstallationReleaseSchema), updateQuotationInstallationRelease);
 router.patch('/:quotationId/installation/ready', authorizeDealerOrAccountManager, validate(updateInstallationReleaseSchema), updateQuotationInstallationRelease);
+router.patch(
+  '/:quotationId/retrieve-from-installation',
+  authorizeDealerOrAccountManager,
+  validate(retrieveFromInstallationSchema),
+  retrieveQuotationFromInstallation
+);
+router.post(
+  '/:quotationId/retrieve-from-installation',
+  authorizeDealerOrAccountManager,
+  validate(retrieveFromInstallationSchema),
+  retrieveQuotationFromInstallation
+);
 router.patch('/:quotationId/installation-scheduled-at', authorizeAdmin, validate(updateInstallationScheduledAtSchema), updateQuotationInstallationScheduledAt);
 router.patch('/:quotationId/installation-schedule', authorizeAdmin, validate(updateInstallationScheduledAtSchema), updateQuotationInstallationScheduledAt);
 router.patch(

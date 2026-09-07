@@ -1556,6 +1556,172 @@ Optional dedicated `GET …/customer-journey` not shipped (FE merges client-side
 
 ---
 
+## §AG — Customer Journey calling stage timestamps on bulk GET — Aug 2026
+
+**Status: implemented** — see `BACKEND_CUSTOMER_JOURNEY.ts` (Timestamps + speed), HANDOFF **§35** (FE §34).
+
+| Item | Status |
+|------|--------|
+| ISO `actionAt` on every bulk calling-action row | Done (`COALESCE` createdAt; echo `calledAt`) |
+| Join lead `mobile` + `leadId` | Done |
+| `range=all` + `limit` ≤ 2000 + `pagination.total` | Done (default limit 2000 when range=all) |
+| Default journey list does not require `?search=` | Done |
+
+Optional dedicated `GET …/customer-journey` with `stageDates` not shipped.
+
+---
+
+## §AH — Admin Installation **Revert** (Approved → Pending) — Aug 2026
+
+**Status: implemented** — see `BACKEND_INSTALLATION_REVERT.ts`, HANDOFF **§36** (FE §35).
+
+| Item | Status |
+|------|--------|
+| Admin PATCH `installer_approved` / partial → `pending_installer` | Done |
+| Do not write `pending_installer` onto quotation `status` | Done |
+| Clear `installer_approved_at` + partial flags; keep photos | Done |
+| `POST …/revert-installation` | Done |
+| Installer queue `?status=approved` excludes reverted rows | Done (filters on `installationStatus`) |
+
+---
+
+## §AI — Admin Calling Reports **exact counts** by date filter — Aug 2026
+
+**Status: implemented** — see `BACKEND_CALLING_REPORTS_COUNTS.ts`, HANDOFF **§37** (FE §36).
+
+| Item | Status |
+|------|--------|
+| Honour `range` + `startDate`/`endDate` + `fromDate`/`toDate` | Done |
+| Filter on history `action_at` (COALESCE createdAt), not lead `created_at` | Done |
+| Weekly Mon–Sun / monthly calendar month in **Asia/Kolkata** | Done |
+| Exclude `action=start`; honour `page`/`limit`; `pagination.total` filtered | Done |
+| ISO `actionAt` on every row | Done |
+| `GET …/calling-actions/summary` with `totalCalls === connected + notConnected` | Done |
+
+---
+
+## §AK — Google Maps proxy (geotag) — Aug 2026
+
+**Status: implemented** — see `BACKEND_GOOGLE_MAPS_PROXY.ts`, HANDOFF **§38**.
+
+| Item | Status |
+|------|--------|
+| `GOOGLE_MAPS_API_KEY` server env | Done (set value in `.env` / deploy secrets) |
+| `GET /api/maps/reverse-geocode` → `{ title, address, countryCode }` | Done |
+| `GET /api/maps/static` streams Google Static Map image | Done |
+| Auth + rate limit on both routes | Done |
+| Optional capture meta on installation photos | Not in this change (see §AJ) |
+
+FE should call these with Bearer instead of Google directly.
+
+---
+
+## §AL — User office location + workflow field permissions — Aug 2026
+
+**Status: implemented** — see `BACKEND_USER_FIELD_PERMISSIONS.ts`, HANDOFF **§39** (FE §AK / HANDOFF §38).
+
+| Item | Status |
+|------|--------|
+| `officeLocation` + `moduleFieldPermissions` on users (account_managers, dealers, visitors) | Done |
+| User CRUD accept + echo | Done |
+| Login echo | Done |
+| Quotation `officeLocation` on GET + copy from dealer on create | Done |
+| Write enforcement (`FIELD_PERMISSION_DENIED`) on install / metering / final confirmation | Done |
+| Scope `everyone` (legacy `everyone_except_dealer` → `everyone`; dealers not blocked) | Done |
+
+---
+
+## §AN — Admin **Retrieve from Metering** — Sep 2026
+
+**Status: implemented** — see `BACKEND_RETRIEVE_FROM_METERING.ts`, HANDOFF **§40** (FE §AL / FE HANDOFF §39).
+
+| Item | Status |
+|------|--------|
+| `PATCH\|POST /api/admin/quotations/:id/retrieve-from-metering` | Done |
+| Early metering → `installer_approved`; clear metering fields | Done |
+| Keep release flags + `quotations.status` | Done |
+| Late metering → **409** | Done |
+| GET echoes updated stages | Done |
+
+---
+
+## §AM — **Retrieve from Installation** (undo Send to Installer) — Sep 2026
+
+**Status: implemented** — see `BACKEND_RETRIEVE_FROM_INSTALLATION.ts`, HANDOFF **§41** (FE HANDOFF §40).
+
+| Item | Status |
+|------|--------|
+| `PATCH\|POST /api/admin/quotations/:id/retrieve-from-installation` | Done |
+| `PATCH /api/quotations/:id/installation-release` merge (`retrieveFromInstallation`) | Done |
+| Clear release flags; do not wipe installments | Done |
+| Late metering → **409** | Done |
+| Installer + Admin Installation queues exclude until re-released | Done |
+
+**Distinction:** §AH Revert on Approved tab = workflow `installer_approved` → `pending_installer` (release flags stay).
+
+---
+
+## §AO — Google Sheets → HR Social Media Leads — Sep 2026
+
+**Status: implemented** — send to API team with `BACKEND_GOOGLE_SHEETS_SOCIAL_LEADS.ts` + HANDOFF **§42** (FE HANDOFF §41 / §44).
+
+### 1. Routes
+
+| Method | Path |
+|--------|------|
+| `GET` | `/hr/sheet-sources` |
+| `POST` | `/hr/sheet-sources/discover` (upsert + **delete** stale tabs) |
+| `PATCH` | `/hr/sheet-sources/:id` |
+| `POST` | `/hr/sheet-sources/:id/sync` |
+| `POST` | `/hr/sheet-sources/sync-all` ← cron / HR |
+| `GET` | `/hr/sheet-sources/:id/leads` |
+
+**Auth:** `hr`. For `sync-all` also allow `x-cron-secret: $CRON_SECRET`.
+
+### 2. Meta columns (map these)
+
+| Sheet | DB | |
+|-------|-----|--|
+| `phone_number` | `mobile` (last 10) | **Required** |
+| `id` | `external_id` | **Required** |
+| `full_name` | `name` | **Required** |
+| `lead_status` | `lead_status` | **Required** (`CREATED` = New) |
+| `platform`, `campaign_name`, `ad_name`, `created_time` | same | Optional |
+| `ad_id`, `adset_*`, `campaign_id`, `form_id`, `is_organic` | — | Ignore (raw OK) |
+
+Assign from `dealer_ids` on the source (`active_cap` 1/dealer) — **not** from the sheet.
+
+### 3. After each sync
+
+1. Import → `calling_leads` + `calling_lead_upload_batches` (`source_type=google_sheet`)
+2. Assign unassigned via `active_cap`
+3. Emit `calling:uploads-updated`
+
+### 4. Cron (P0)
+
+```bash
+*/15 * * * *  curl -sS -X POST "$API_BASE/hr/sheet-sources/sync-all" \
+  -H "x-cron-secret: $CRON_SECRET" -H "Content-Type: application/json" -d '{}'
+```
+
+**Env:** `GOOGLE_SERVICE_ACCOUNT_JSON` (or credentials path), `GOOGLE_SHEETS_SPREADSHEET_ID`, `CRON_SECRET`
+
+### 5. Echo on lead APIs
+
+`mobile`, `name`, `leadStatus`, `finalDecision`, `remarks`, `platform`, `campaignName`, `adName`, `assignedDealerId`, `assignedDealerName`, `externalId`
+
+### Checklist status
+
+| Item | Status |
+|------|--------|
+| Routes (incl. discover prune + sync-all) | Done |
+| Meta column map (P0) | Done |
+| `active_cap` assign after sync | Done |
+| Socket `calling:uploads-updated` | Done |
+| Cron + `CRON_SECRET` | Done (ops must schedule) |
+
+---
+
 ## File index (May–June 2026 handoff)
 
 | Doc / code | Topics |

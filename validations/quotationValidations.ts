@@ -691,9 +691,20 @@ export const updateInstallationReleaseSchema = z.preprocess((body) => {
   return {
     installationReadyForInstaller:
       raw.installationReadyForInstaller ?? raw.installation_ready_for_installer,
-    installationReleasedAt: raw.installationReleasedAt ?? raw.installation_released_at
+    installationReleasedAt: raw.installationReleasedAt ?? raw.installation_released_at,
+    retrieveFromInstallation: raw.retrieveFromInstallation,
+    allowRevert: raw.allowRevert,
+    force: raw.force,
+    adminOverride: raw.adminOverride,
+    source: raw.source
   };
-}, installationReleaseBodySchema);
+}, installationReleaseBodySchema.extend({
+  retrieveFromInstallation: z.union([z.boolean(), z.string(), z.number()]).optional(),
+  allowRevert: z.union([z.boolean(), z.string(), z.number()]).optional(),
+  force: z.union([z.boolean(), z.string(), z.number()]).optional(),
+  adminOverride: z.union([z.boolean(), z.string(), z.number()]).optional(),
+  source: z.string().optional()
+}));
 
 const yyyyMmDd = /^\d{4}-\d{2}-\d{2}$/;
 

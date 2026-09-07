@@ -1,6 +1,6 @@
 import express, { Router, Request, Response, NextFunction } from 'express';
 import { authenticate } from '../middleware/authQuotation';
-import { downloadQuotationsExcel } from '../controllers/quotationController';
+import { downloadQuotationsExcel, getAccountManagementQuotations } from '../controllers/quotationController';
 import { canAccessSection, hasAdminPanelAccess } from '../utils/userAccess';
 
 const router: Router = express.Router();
@@ -15,9 +15,9 @@ const authorizeAccountManagementPayments = (req: Request, res: Response, next: N
     hasAdminPanelAccess(req) ||
     canAccessSection(
       {
-        role: req.user?.role,
-        access: (req.user as any)?.access,
-        username: req.user?.username
+        role: req.user?.role ?? req.dealer?.role,
+        access: (req.user as any)?.access ?? (req.dealer as any)?.access,
+        username: req.user?.username ?? req.dealer?.username
       },
       'accounts'
     );
@@ -34,6 +34,7 @@ const authorizeAccountManagementPayments = (req: Request, res: Response, next: N
 router.use(authenticate);
 router.use(authorizeAccountManagementPayments);
 
+router.get('/quotations', getAccountManagementQuotations);
 router.get('/payments/export', downloadQuotationsExcel);
 
 export default router;

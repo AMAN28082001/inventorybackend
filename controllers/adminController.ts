@@ -1,6 +1,20 @@
 import { Request, Response } from 'express';
 import { Quotation, QuotationPaymentPhase, QuotationInstallationDoc, QuotationProduct, CustomPanel, Dealer, Customer, Visitor, Visit, QuotationDocument } from '../models/index-quotation';
 import { Op, fn, col, literal, Sequelize } from 'sequelize';
+import {
+  canAccessSection,
+  hasAdminPanelAccess,
+  parseAccessFromBody,
+  parseWorkflowPermissionPatchFromBody,
+  publicDealerForApi,
+  resolveAccess
+} from '../utils/userAccess';
+import {
+  buildWorkflowPermissionContext,
+  canAccessFullAdminQuotationList,
+  enforceWorkflowFieldWriteOrRespond,
+  resolveWorkflowModuleForInstallationStatus
+} from '../utils/moduleFieldPermissions';
 import { logError, logInfo } from '../utils/loggerHelper';
 import { normalizePaymentModeInput } from '../utils/paymentMode';
 import {
@@ -30,11 +44,7 @@ import {
   getLatestMeterDocMeta,
   resolveMeterStoredRef
 } from '../utils/meteringMediaApi';
-import {
-  hasAdminPanelAccess,
-  parseAccessFromBody,
-  resolveAccess
-} from '../utils/userAccess';
+
 import { filterByListAccess, paginateRows, parseAccessQueryFromReq } from '../utils/accessLists';
 import {
   METER_INSTALLATION_PENDING_STATUS,
@@ -51,6 +61,20 @@ import {
   isInstallationPartialApprovedStatus,
   meteringDetailsEchoFields
 } from '../utils/installationPartialApi';
+import {
+  INSTALLATION_REVERT_ALLOWED_FROM,
+  installationRevertPatch,
+  isPendingInstallerStatus,
+  normalizeInstallStatus
+} from '../utils/installationRevert';
+import {
+  applyRetrieveFromMetering,
+  RetrieveFromMeteringError
+} from '../utils/retrieveFromMetering';
+import {
+  applyRetrieveFromInstallation,
+  RetrieveFromInstallationError
+} from '../utils/retrieveFromInstallation';
 import {
   buildAdminListCustomerFields,
   adminQuotationLocationApiFields,
@@ -88,6 +112,42 @@ const hasAdminQuotationAccess = (req: Request): boolean => {
       req.user.role === 'super-admin-manager')
   );
   return isQuotationAdmin || isInventoryAdmin;
+};
+
+/** Admin retrieve-from-installation — admin or account-management (§AM / HANDOFF §40). */
+const hasRetrieveFromInstallationAccess = (req: Request): boolean => {
+  if (hasAdminQuotationAccess(req)) return true;
+  return req.user?.role === 'account-management';
+};
+
+const respondWorkflowQuotation = async (quotation: Quotation, res: Response): Promise<void> => {
+  await quotation.reload();
+  const row = typeof quotation.toJSON === 'function' ? quotation.toJSON() : (quotation as any);
+  res.json({
+    success: true,
+    data: {
+      id: quotation.id,
+      status: quotation.status,
+      ...meteringWorkflowApiFields({
+        installationStatus: quotation.installationStatus,
+        meteringApprovedAt: quotation.meteringApprovedAt,
+        mcoAt: quotation.mcoAt,
+        completionAt: quotation.completionAt,
+        meterInstallationPendingAt: (quotation as any).meterInstallationPendingAt,
+        meteringWccAfterDiscom: (quotation as any).meteringWccAfterDiscom,
+        meteringWccAfterDiscomAt: (quotation as any).meteringWccAfterDiscomAt
+      }),
+      ...serializeInstallationReleaseFields(row),
+      installerApprovedAt: quotation.installerApprovedAt || null,
+      installer_approved_at: quotation.installerApprovedAt || null,
+      ...installationPartialApiFields({
+        installationStatus: quotation.installationStatus,
+        installationPartialApproved: (quotation as any).installationPartialApproved,
+        installationPartialApprovedAt: (quotation as any).installationPartialApprovedAt
+      }),
+      updatedAt: quotation.updatedAt
+    }
+  });
 };
 
 /** §17 — Admin / metering / installer may update WCC flag + bank process. */
@@ -223,21 +283,41 @@ function parseOptionalTimestamp(value: unknown): Date | null {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
-// Get all quotations (admin)
+// Get all quotations (admin + workflow everyone scope)
 export const getAllQuotations = async (req: Request, res: Response): Promise<void> => {
   try {
     const isQuotationAdmin = req.dealer && req.dealer.role === 'admin';
     const isQuotationDealer = req.dealer && req.dealer.role !== 'admin';
     const isInventoryAdmin = req.user && (req.user.role === 'admin' || req.user.role === 'super-admin' || req.user.role === 'super-admin-manager');
     const isInventoryAgent = req.user && (req.user.role === 'agent' || req.user.role === 'account');
+    const permCtx = await buildWorkflowPermissionContext(req);
+    const accessUser = {
+      role: req.user?.role ?? req.dealer?.role,
+      access: (req.user as any)?.access ?? (req.dealer as any)?.access,
+      username: req.user?.username ?? req.dealer?.username,
+      viewerIsAdmin: permCtx.viewerIsAdmin
+    };
+    const hasFullWorkflowList = canAccessFullAdminQuotationList(
+      permCtx.moduleFieldPermissions,
+      accessUser
+    );
 
-    if (!isQuotationAdmin && !isQuotationDealer && !isInventoryAdmin && !isInventoryAgent) {
+    if (
+      !isQuotationAdmin &&
+      !isInventoryAdmin &&
+      !hasFullWorkflowList &&
+      !hasAdminPanelAccess(req) &&
+      !isInventoryAgent &&
+      !isQuotationDealer
+    ) {
       res.status(403).json({
         success: false,
         error: { code: 'AUTH_004', message: 'Insufficient permissions' }
       });
       return;
     }
+
+    const skipDealerScope = hasFullWorkflowList || isQuotationAdmin || isInventoryAdmin || hasAdminPanelAccess(req);
 
     const page = parseInt(req.query.page as string) || 1;
     const limitParam = req.query.limit as string | undefined;
@@ -346,9 +426,9 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
       ];
     }
 
-    if (isQuotationDealer && req.dealer) {
+    if (isQuotationDealer && req.dealer && !skipDealerScope) {
       where.dealerId = req.dealer.id;
-    } else if (isInventoryAgent && req.user) {
+    } else if (isInventoryAgent && req.user && !skipDealerScope) {
       const mappedDealerId = await resolveDealerIdForInventoryUser(req.user.id, req.user.username);
       if (!mappedDealerId) {
         res.json({
@@ -903,14 +983,6 @@ export const updateQuotationStatus = async (req: Request, res: Response): Promis
 
 export const updateQuotationInstallationStatus = async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!hasAdminQuotationAccess(req)) {
-      res.status(403).json({
-        success: false,
-        error: { code: 'AUTH_004', message: 'Insufficient permissions. Admin access required.' }
-      });
-      return;
-    }
-
     const { quotationId } = req.params;
     if (!quotationId) {
       res.status(400).json({
@@ -935,6 +1007,32 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
     const wccAfterDiscomFlag = parseMeteringWccAfterDiscomFlag(body);
     const bankDoneFlag = parseBankProcessDoneFlag(body);
 
+    const quotation = await Quotation.findByPk(quotationId);
+    if (!quotation) {
+      res.status(404).json({
+        success: false,
+        error: { code: 'RES_001', message: 'Quotation not found' }
+      });
+      return;
+    }
+
+    const workflowModule =
+      resolveWorkflowModuleForInstallationStatus(requested) ||
+      (wccAfterDiscomFlag !== undefined ? 'metering' : bankDoneFlag !== undefined ? 'metering' : null);
+
+    if (!hasAdminQuotationAccess(req)) {
+      if (!workflowModule) {
+        res.status(403).json({
+          success: false,
+          error: { code: 'AUTH_004', message: 'Insufficient permissions. Admin access required.' }
+        });
+        return;
+      }
+      if (!(await enforceWorkflowFieldWriteOrRespond(req, res, workflowModule, quotation))) {
+        return;
+      }
+    }
+
     // §17 SPA fallback: installation-status body with only bankProcessDone → bank-process handler
     if (
       !requested &&
@@ -953,15 +1051,6 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
       res.status(400).json({
         success: false,
         error: { code: 'VAL_001', message: 'installationStatus is required' }
-      });
-      return;
-    }
-
-    const quotation = await Quotation.findByPk(quotationId);
-    if (!quotation) {
-      res.status(404).json({
-        success: false,
-        error: { code: 'RES_001', message: 'Quotation not found' }
       });
       return;
     }
@@ -1025,6 +1114,7 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
         success: true,
         data: {
           id: quotation.id,
+          status: quotation.status,
           ...meteringWorkflowApiFields({
             installationStatus: quotation.installationStatus,
             meteringApprovedAt: quotation.meteringApprovedAt,
@@ -1035,6 +1125,8 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
             meteringWccAfterDiscomAt: (quotation as any).meteringWccAfterDiscomAt
           }),
           ...quotationPaymentApiFields(row),
+          installerApprovedAt: quotation.installerApprovedAt || null,
+          installer_approved_at: quotation.installerApprovedAt || null,
           ...installationPartialApiFields({
             installationStatus: quotation.installationStatus,
             installationPartialApproved: (quotation as any).installationPartialApproved,
@@ -1074,6 +1166,32 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
 
     const nextStatus =
       normalizeMeteringWorkflowStatus(requested) || requested!;
+
+    // §AH — Admin Revert: installer_approved / partial → pending_installer.
+    // Do not write pending_installer onto quotation.status. Keep S3 photos.
+    if (isPendingInstallerStatus(nextStatus)) {
+      const currentNorm = normalizeInstallStatus(currentStatus);
+      if (!INSTALLATION_REVERT_ALLOWED_FROM.has(currentNorm)) {
+        res.status(409).json({
+          success: false,
+          error: {
+            code: 'VAL_001',
+            message: `Cannot revert installation from "${currentStatus}"`,
+            details: [
+              {
+                field: 'installationStatus',
+                message:
+                  'Allowed from installer_approved / installer_partial_approved / installer_in_progress (idempotent if already pending_installer)'
+              }
+            ]
+          }
+        });
+        return;
+      }
+      await quotation.update(installationRevertPatch() as any);
+      await respondWithQuotation();
+      return;
+    }
 
     if (nextStatus === METER_INSTALLATION_PENDING_STATUS) {
       if (
@@ -1316,6 +1434,21 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
   }
 };
 
+/** POST /admin/quotations/:id/revert-installation — §AH dedicated alias. */
+export const revertQuotationInstallationToPending = async (req: Request, res: Response): Promise<void> => {
+  const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>;
+  req.body = {
+    ...body,
+    installationStatus: 'pending_installer',
+    installation_status: 'pending_installer',
+    force: body.force ?? true,
+    adminOverride: body.adminOverride ?? true,
+    allowRevert: body.allowRevert ?? true,
+    source: body.source ?? 'admin-install-revert'
+  };
+  await updateQuotationInstallationStatus(req, res);
+};
+
 /**
  * Preferred Admin "Send to Metering" endpoint (Jul 2026).
  * PATCH|POST /admin/quotations/:quotationId/send-to-metering
@@ -1338,6 +1471,99 @@ export const sendQuotationToMetering = async (req: Request, res: Response): Prom
     source: body.source ?? 'admin'
   };
   await updateQuotationInstallationStatus(req, res);
+};
+
+/**
+ * PATCH|POST /admin/quotations/:quotationId/retrieve-from-metering
+ * Meter Pending → installer_approved (§AN / HANDOFF §40). See BACKEND_RETRIEVE_FROM_METERING.ts.
+ */
+export const retrieveQuotationFromMetering = async (req: Request, res: Response): Promise<void> => {
+  try {
+    if (!hasAdminQuotationAccess(req)) {
+      res.status(403).json({
+        success: false,
+        error: { code: 'AUTH_004', message: 'Insufficient permissions. Admin access required.' }
+      });
+      return;
+    }
+
+    const { quotationId } = req.params;
+    const quotation = await Quotation.findByPk(quotationId);
+    if (!quotation) {
+      res.status(404).json({
+        success: false,
+        error: { code: 'RES_001', message: 'Quotation not found' }
+      });
+      return;
+    }
+
+    await applyRetrieveFromMetering(quotation);
+    await respondWorkflowQuotation(quotation, res);
+  } catch (error) {
+    if (error instanceof RetrieveFromMeteringError) {
+      res.status(error.status).json({
+        success: false,
+        error: { code: error.code, message: error.message }
+      });
+      return;
+    }
+    logError('Retrieve from metering error', error, { quotationId: req.params.quotationId });
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal error' }
+    });
+  }
+};
+
+/**
+ * PATCH|POST /admin/quotations/:quotationId/retrieve-from-installation
+ * Undo Send to Installer — clear release flags (§AM / HANDOFF §41). See BACKEND_RETRIEVE_FROM_INSTALLATION.ts.
+ */
+export const retrieveQuotationFromInstallation = async (req: Request, res: Response): Promise<void> => {
+  try {
+    if (!hasRetrieveFromInstallationAccess(req)) {
+      res.status(403).json({
+        success: false,
+        error: { code: 'AUTH_004', message: 'Insufficient permissions' }
+      });
+      return;
+    }
+
+    const { quotationId } = req.params;
+    const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>;
+    const force =
+      body.force === true ||
+      body.force === 'true' ||
+      body.adminOverride === true ||
+      body.adminOverride === 'true' ||
+      body.allowRevert === true ||
+      body.allowRevert === 'true';
+
+    const quotation = await Quotation.findByPk(quotationId);
+    if (!quotation) {
+      res.status(404).json({
+        success: false,
+        error: { code: 'RES_001', message: 'Quotation not found' }
+      });
+      return;
+    }
+
+    await applyRetrieveFromInstallation(quotation, { force });
+    await respondWorkflowQuotation(quotation, res);
+  } catch (error) {
+    if (error instanceof RetrieveFromInstallationError) {
+      res.status(error.status).json({
+        success: false,
+        error: { code: error.code, message: error.message }
+      });
+      return;
+    }
+    logError('Retrieve from installation error', error, { quotationId: req.params.quotationId });
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal error' }
+    });
+  }
 };
 
 /**
@@ -2115,6 +2341,19 @@ export const updateDealer = async (req: Request, res: Response): Promise<void> =
       updateData.access = accessParse.access;
     }
 
+    const permPatch = parseWorkflowPermissionPatchFromBody(req.body || {});
+    if ('error' in permPatch) {
+      res.status(400).json({
+        success: false,
+        error: { code: 'VAL_001', message: permPatch.error }
+      });
+      return;
+    }
+    if (permPatch.officeLocation !== undefined) updateData.officeLocation = permPatch.officeLocation;
+    if (permPatch.moduleFieldPermissions !== undefined) {
+      updateData.moduleFieldPermissions = permPatch.moduleFieldPermissions;
+    }
+
     // Update address fields if provided
     if (req.body.address) {
       if (req.body.address.street) updateData.addressStreet = req.body.address.street;
@@ -2130,16 +2369,8 @@ export const updateDealer = async (req: Request, res: Response): Promise<void> =
     });
 
     const dealerData = updatedDealer?.toJSON() as any;
-    const access = resolveAccess({
-      role: dealerData.role || 'dealer',
-      access: dealerData.access,
-      username: dealerData.username
-    });
     const responseData: any = {
-      ...dealerData,
-      role: dealerData.role || 'dealer',
-      access,
-      permissions: access,
+      ...publicDealerForApi(dealerData),
       address: {
         street: dealerData.addressStreet,
         city: dealerData.addressCity,

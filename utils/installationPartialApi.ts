@@ -31,6 +31,19 @@ export const installationPartialApiFields = (q: {
   installationPartialApproved?: boolean | null;
   installationPartialApprovedAt?: Date | string | null;
 }) => {
+  const inst = String(q.installationStatus || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+  // After admin revert, pending_installer must not still look partial from leftover flags.
+  if (inst === 'pending_installer' || inst === 'installer_in_progress') {
+    return {
+      installationPartialApproved: false,
+      installation_partial_approved: false,
+      installationPartialApprovedAt: null,
+      installation_partial_approved_at: null
+    };
+  }
   const statusPartial = isInstallationPartialApprovedStatus(q.installationStatus);
   const flagPartial = Boolean(q.installationPartialApproved) || statusPartial;
   return {

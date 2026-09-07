@@ -1,6 +1,8 @@
-/**
- * Dashboard access keys for Admin Users tab + unified login (BACKEND_USER_ACCESS.md).
- */
+import {
+  parseModuleFieldPermissionsFromBody,
+  parseOfficeLocationFromBody,
+  workflowPermissionFieldsForApi
+} from './moduleFieldPermissions';
 
 export const ACCESS_KEYS = [
   'admin',
@@ -148,6 +150,25 @@ export const parseAccessFromBody = (body: Record<string, unknown>): {
   return { access: parsed };
 };
 
+export const parseWorkflowPermissionPatchFromBody = (
+  body: Record<string, unknown>
+): { officeLocation?: string | null; moduleFieldPermissions?: Record<string, unknown> } | { error: string } => {
+  const patch: { officeLocation?: string | null; moduleFieldPermissions?: Record<string, unknown> } = {};
+  try {
+    const office = parseOfficeLocationFromBody(body);
+    if (office !== undefined) patch.officeLocation = office;
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : 'Invalid officeLocation' };
+  }
+  try {
+    const perms = parseModuleFieldPermissionsFromBody(body);
+    if (perms !== undefined) patch.moduleFieldPermissions = perms as Record<string, unknown>;
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : 'Invalid moduleFieldPermissions' };
+  }
+  return patch;
+};
+
 export const publicUserAccessFields = (userLike: {
   id?: string;
   username?: string;
@@ -183,7 +204,8 @@ export const publicDealerForApi = (dealer: Record<string, unknown>) => {
     ...dealer,
     role: dealer.role || 'dealer',
     access,
-    permissions: access
+    permissions: access,
+    ...workflowPermissionFieldsForApi(dealer)
   };
 };
 
@@ -211,7 +233,8 @@ export const publicAccountManagerForApi = (row: Record<string, unknown>) => {
     employeeId: row.employeeId ?? null,
     address,
     access,
-    permissions: access
+    permissions: access,
+    ...workflowPermissionFieldsForApi(row)
   };
 };
 

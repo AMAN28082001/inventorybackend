@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { workflowPermissionFieldsSchema } from './workflowPermissionValidations';
 
 export const updateStatusSchema = z
   .object({
@@ -62,8 +63,13 @@ export const updateInstallationStatusSchema = z.object({
   force: z.union([z.boolean(), z.string(), z.number()]).optional(),
   adminOverride: z.union([z.boolean(), z.string(), z.number()]).optional(),
   allowFromPendingInstaller: z.union([z.boolean(), z.string(), z.number()]).optional(),
-  source: z.string().optional()
-}).refine((data) => {
+  allowRevert: z.union([z.boolean(), z.string(), z.number()]).optional(),
+  source: z.string().optional(),
+  installerApprovedAt: z.any().optional(),
+  installer_approved_at: z.any().optional(),
+  installationPartialApproved: z.union([z.boolean(), z.string(), z.number()]).optional(),
+  installation_partial_approved: z.union([z.boolean(), z.string(), z.number()]).optional()
+}).passthrough().refine((data) => {
   const hasStatus = Boolean(
     data.installationStatus ||
       data.installation_status ||
@@ -95,6 +101,35 @@ export const sendToMeteringSchema = z
     allowFromPendingInstaller: z.union([z.boolean(), z.string(), z.number()]).optional(),
     source: z.string().optional(),
     remarks: z.string().max(5000).optional()
+  })
+  .passthrough();
+
+/** PATCH|POST /admin/quotations/:id/retrieve-from-metering */
+export const retrieveFromMeteringSchema = z
+  .object({
+    installationStatus: installationStatusEnum.optional(),
+    installation_status: installationStatusEnum.optional(),
+    target: z.string().optional(),
+    retrieveFromMetering: z.union([z.boolean(), z.string(), z.number()]).optional(),
+    allowRevert: z.union([z.boolean(), z.string(), z.number()]).optional(),
+    force: z.union([z.boolean(), z.string(), z.number()]).optional(),
+    adminOverride: z.union([z.boolean(), z.string(), z.number()]).optional(),
+    source: z.string().optional()
+  })
+  .passthrough();
+
+/** PATCH|POST /admin/quotations/:id/retrieve-from-installation */
+export const retrieveFromInstallationSchema = z
+  .object({
+    installationReadyForInstaller: z.union([z.boolean(), z.string(), z.number()]).optional(),
+    installation_ready_for_installer: z.union([z.boolean(), z.string(), z.number()]).optional(),
+    installationReleasedAt: z.union([z.string(), z.date(), z.null()]).optional(),
+    installation_released_at: z.union([z.string(), z.date(), z.null()]).optional(),
+    retrieveFromInstallation: z.union([z.boolean(), z.string(), z.number()]).optional(),
+    allowRevert: z.union([z.boolean(), z.string(), z.number()]).optional(),
+    force: z.union([z.boolean(), z.string(), z.number()]).optional(),
+    adminOverride: z.union([z.boolean(), z.string(), z.number()]).optional(),
+    source: z.string().optional()
   })
   .passthrough();
 
@@ -180,7 +215,8 @@ export const createVisitorSchema = z.object({
   access: z.array(z.string()).optional(),
   permissions: z.array(z.string()).optional(),
   isActive: z.boolean().optional(),
-  emailVerified: z.boolean().optional()
+  emailVerified: z.boolean().optional(),
+  ...workflowPermissionFieldsSchema
 });
 
 export const updateVisitorSchema = z.object({
@@ -207,7 +243,8 @@ export const updateVisitorSchema = z.object({
   permissions: z.array(z.string()).optional(),
   password: z.union([z.string().min(6), z.literal('')]).optional(),
   isActive: z.boolean().optional(),
-  emailVerified: z.boolean().optional()
+  emailVerified: z.boolean().optional(),
+  ...workflowPermissionFieldsSchema
 }).refine((data) => Object.keys(data).length > 0, {
   message: 'At least one field must be provided for update'
 });

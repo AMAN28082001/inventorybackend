@@ -5,6 +5,7 @@ import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { Op } from 'sequelize';
 import { Quotation, QuotationInstallationDoc, Dealer, Customer, QuotationProduct, Visit, VisitAssignment, Visitor, CustomPanel, QuotationDocument } from '../models/index-quotation';
+import { enforceWorkflowFieldWriteOrRespond } from '../utils/moduleFieldPermissions';
 import { logError, logInfo } from '../utils/loggerHelper';
 import {
   buildReleasedToInstallerWhere,
@@ -649,6 +650,10 @@ export const meteringStatusUpdate = async (req: Request, res: Response): Promise
     const quotation = await Quotation.findByPk(quotationId);
     if (!quotation) {
       res.status(404).json({ success: false, error: { code: 'RES_001', message: 'Quotation not found' } });
+      return;
+    }
+
+    if (!(await enforceWorkflowFieldWriteOrRespond(req, res, 'metering', quotation))) {
       return;
     }
 
@@ -1425,6 +1430,10 @@ export const uploadInstallerDocument = async (req: Request, res: Response): Prom
       return;
     }
 
+    if (!(await enforceWorkflowFieldWriteOrRespond(req, res, 'installation', quotation))) {
+      return;
+    }
+
     const fieldName = parseTrimmedString(req.body?.field);
     const file = req.file as Express.Multer.File | undefined;
     const allowedFields = new Set([
@@ -1829,6 +1838,10 @@ export const installerUploadDocuments = async (req: Request, res: Response): Pro
     }
 
     if (rejectIfInstallationUploadNotAllowed(req, quotation, res)) {
+      return;
+    }
+
+    if (!(await enforceWorkflowFieldWriteOrRespond(req, res, 'installation', quotation))) {
       return;
     }
 

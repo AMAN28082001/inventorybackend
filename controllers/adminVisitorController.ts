@@ -4,7 +4,7 @@ import bcrypt from 'bcryptjs';
 import { Visitor, VisitAssignment, Visit } from '../models/index-quotation';
 import { Op } from 'sequelize';
 import { logError, logInfo } from '../utils/loggerHelper';
-import { parseAccessFromBody, resolveAccess } from '../utils/userAccess';
+import { parseAccessFromBody, parseWorkflowPermissionPatchFromBody, resolveAccess } from '../utils/userAccess';
 import { parseProfilePatchFromBody, publicVisitorForApi } from '../utils/userProfile';
 import { listAssignableVisitors } from '../utils/assignableVisitors';
 import {
@@ -41,6 +41,14 @@ export const createVisitor = async (req: Request, res: Response): Promise<void> 
         ? accessParse.access
         : resolveAccess({ role: 'visitor', access: req.body.access });
     const profile = parseProfilePatchFromBody(req.body || {});
+    const permPatch = parseWorkflowPermissionPatchFromBody(req.body || {});
+    if ('error' in permPatch) {
+      res.status(400).json({
+        success: false,
+        error: { code: 'VAL_001', message: permPatch.error }
+      });
+      return;
+    }
 
     // Check if username already exists
     const existingVisitor = await Visitor.findOne({ where: { username } });
@@ -96,7 +104,11 @@ export const createVisitor = async (req: Request, res: Response): Promise<void> 
       addressState: profile.addressState ?? null,
       addressPincode: profile.addressPincode ?? null,
       emailVerified: req.body.emailVerified === true,
-      isActive: req.body.isActive !== false
+      isActive: req.body.isActive !== false,
+      ...(permPatch.officeLocation !== undefined ? { officeLocation: permPatch.officeLocation } : {}),
+      ...(permPatch.moduleFieldPermissions !== undefined
+        ? { moduleFieldPermissions: permPatch.moduleFieldPermissions }
+        : {})
     });
 
     logInfo('Visitor created by admin', { visitorId: visitor.id, createdBy: req.dealer.id });
@@ -319,6 +331,14 @@ export const updateVisitor = async (req: Request, res: Response): Promise<void> 
       return;
     }
     const profile = parseProfilePatchFromBody(req.body || {});
+    const permPatch = parseWorkflowPermissionPatchFromBody(req.body || {});
+    if ('error' in permPatch) {
+      res.status(400).json({
+        success: false,
+        error: { code: 'VAL_001', message: permPatch.error }
+      });
+      return;
+    }
 
     const visitor = await Visitor.findByPk(visitorId);
 
@@ -359,6 +379,10 @@ export const updateVisitor = async (req: Request, res: Response): Promise<void> 
     };
     if (emailVerified !== undefined) updateData.emailVerified = emailVerified;
     if (accessParse.access) updateData.access = accessParse.access;
+    if (permPatch.officeLocation !== undefined) updateData.officeLocation = permPatch.officeLocation;
+    if (permPatch.moduleFieldPermissions !== undefined) {
+      updateData.moduleFieldPermissions = permPatch.moduleFieldPermissions;
+    }
     if (password && String(password).trim()) {
       updateData.password = await bcrypt.hash(String(password), 10);
     }

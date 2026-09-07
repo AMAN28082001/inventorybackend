@@ -8,6 +8,11 @@ import { Quotation, QuotationProduct, QuotationPaymentPhase, CustomPanel, Custom
 import { Product } from '../models';
 import { Op, Sequelize } from 'sequelize';
 import { logError, logInfo } from '../utils/loggerHelper';
+import {
+  applyRetrieveFromInstallation,
+  isRetrieveFromInstallationRequest,
+  RetrieveFromInstallationError
+} from '../utils/retrieveFromInstallation';
 import { deleteFileFromS3IfExists } from '../middleware/upload';
 import {
   decodeS3UrlPathToKey,
@@ -80,6 +85,7 @@ import {
 } from '../constants/workflowQueues';
 import { extractS3KeyOrStoredPath } from '../utils/s3Service';
 import { isOpsAccountManagerView } from '../utils/userAccess';
+import { enforceWorkflowFieldWriteOrRespond } from '../utils/moduleFieldPermissions';
 import { parseCityFilter, cityInFilterWhere } from '../utils/serviceCities';
 import {
   buildQuotationProductPdfPersistFields,
@@ -1275,11 +1281,15 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
       sourceQuotationId
     );
 
+    const dealerOfficeRow = await Dealer.findByPk(req.dealer.id, { attributes: ['officeLocation'] });
+    const officeLocation = (dealerOfficeRow as any)?.officeLocation ?? null;
+
     // Create quotation - MUST save all pricing fields from frontend
     const quotation = await Quotation.create({
       id: quotationId,
       dealerId: req.dealer.id,
       customerId: finalCustomerId,
+      officeLocation,
       systemType: products.systemType,
       status: 'pending',
       discount,
@@ -1470,10 +1480,21 @@ const QUOTATION_LIST_SORT_FIELDS = new Set([
   'installationReleasedAt'
 ]);
 
+/** Everyone scope — all approved quotations across dealers (Payment Management). */
+export const getAccountManagementQuotations = async (req: Request, res: Response): Promise<void> => {
+  (req as Request & { __accountsAllApprovedQuotations?: boolean }).__accountsAllApprovedQuotations = true;
+  if (!req.query.status) {
+    req.query.status = 'approved';
+  }
+  return getQuotations(req, res);
+};
+
 // Get quotations with pagination
 export const getQuotations = async (req: Request, res: Response): Promise<void> => {
   try {
     // Authorization is handled by middleware (authorizeDealerAdminOrVisitor)
+    const listAllApprovedAccounts = !!(req as Request & { __accountsAllApprovedQuotations?: boolean })
+      .__accountsAllApprovedQuotations;
     const page = parseInt(req.query.page as string) || 1;
     const limitParam = req.query.limit as string | undefined;
     const wantsReleasedInstallerList = isReleasedToInstallerListQuery(req.query as Record<string, unknown>);
@@ -1508,7 +1529,9 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
     // Admins can see all quotations, dealers only see their own, visitors see quotations from their visits
     // Account managers only see approved quotations
     let where: any = {};
-    if (isAccountManager) {
+    if (listAllApprovedAccounts) {
+      where.status = 'approved';
+    } else if (isAccountManager) {
       // Account managers can only see approved quotations
       where.status = 'approved';
     } else if (req.dealer && req.dealer.role !== 'admin') {
@@ -1593,9 +1616,9 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
       }
     }
 
-    // Account managers cannot override status filter - they only see approved
+    // Account managers / accounts-everyone list cannot override status filter - approved only
     // For others, allow status filter from query params
-    if (!isAccountManager && status) {
+    if (!isAccountManager && !listAllApprovedAccounts && status) {
       where.status = status;
     }
 
@@ -1883,19 +1906,22 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
       };
     }));
 
+    const pagination = {
+      page,
+      limit: limit || quotations.count,
+      total: quotations.count,
+      totalPages: limit ? Math.ceil(quotations.count / limit) : 1,
+      hasNext: limit ? page < Math.ceil(quotations.count / limit) : false,
+      hasPrev: limit ? page > 1 : false
+    };
     res.json({
       success: true,
+      quotations: formattedQuotations,
       data: {
         quotations: formattedQuotations,
-        pagination: {
-          page,
-          limit: limit || quotations.count,
-          total: quotations.count,
-          totalPages: limit ? Math.ceil(quotations.count / limit) : 1,
-          hasNext: limit ? page < Math.ceil(quotations.count / limit) : false,
-          hasPrev: limit ? page > 1 : false
-        }
-      }
+        pagination
+      },
+      pagination
     });
   } catch (error) {
     logError('Get quotations error', error, { dealerId: req.dealer?.id });
@@ -3603,6 +3629,10 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
       return;
     }
 
+    if (!(await enforceWorkflowFieldWriteOrRespond(req, res, 'accounts', quotation))) {
+      return;
+    }
+
     // Loan-only cannot apply Final Settlement (cash / mix only) — even via payment-details flag.
     if (finalSettlementApplied === true && rejectLoanOnlyFinalSettlement(quotation, res)) {
       return;
@@ -4217,6 +4247,11 @@ export const updateQuotationInstallationRelease = async (req: Request, res: Resp
       installation_ready_for_installer?: boolean;
       installationReleasedAt?: string | null;
       installation_released_at?: string | null;
+      retrieveFromInstallation?: boolean;
+      allowRevert?: boolean;
+      force?: boolean;
+      adminOverride?: boolean;
+      source?: string;
     };
 
     const installationReadyForInstaller =
@@ -4257,27 +4292,57 @@ export const updateQuotationInstallationRelease = async (req: Request, res: Resp
       return;
     }
 
-    const releaseTimestamp =
-      installationReadyForInstaller === true
-        ? (installationReleasedAt ? new Date(installationReleasedAt) : new Date())
-        : null;
+    const isRetrieve =
+      installationReadyForInstaller === false &&
+      isRetrieveFromInstallationRequest(body as Record<string, unknown>);
 
-    const existingHistory = Array.isArray((quotation as any).statusHistory)
-      ? ([...(quotation as any).statusHistory] as Array<{ status: string; at: string; actorRole?: string | null; actorId?: string | null }>)
-      : [];
-    existingHistory.push({
-      status: installationReadyForInstaller ? 'installation_released' : 'installation_release_revoked',
-      at: new Date().toISOString(),
-      actorRole: role || req.dealer?.role || null,
-      actorId: req.user?.id || req.dealer?.id || null
-    });
+    if (isRetrieve) {
+      try {
+        const force =
+          body.force === true ||
+          body.adminOverride === true ||
+          body.allowRevert === true ||
+          body.retrieveFromInstallation === true;
+        await applyRetrieveFromInstallation(quotation, { force });
+      } catch (error) {
+        if (error instanceof RetrieveFromInstallationError) {
+          res.status(error.status).json({
+            success: false,
+            error: { code: error.code, message: error.message }
+          });
+          return;
+        }
+        throw error;
+      }
+    } else {
+      const releaseTimestamp =
+        installationReadyForInstaller === true
+          ? (installationReleasedAt ? new Date(installationReleasedAt) : new Date())
+          : null;
 
-    await quotation.update({
-      installationReadyForInstaller,
-      installationReleasedAt: releaseTimestamp,
-      installationStatus: installationReadyForInstaller ? 'pending_installer' : quotation.installationStatus,
-      statusHistory: existingHistory
-    });
+      const existingHistory = Array.isArray((quotation as any).statusHistory)
+        ? ([...(quotation as any).statusHistory] as Array<{
+            status: string;
+            at: string;
+            actorRole?: string | null;
+            actorId?: string | null;
+          }>)
+        : [];
+      existingHistory.push({
+        status: installationReadyForInstaller ? 'installation_released' : 'installation_release_revoked',
+        at: new Date().toISOString(),
+        actorRole: role || req.dealer?.role || null,
+        actorId: req.user?.id || req.dealer?.id || null
+      });
+
+      await quotation.update({
+        installationReadyForInstaller,
+        installationReleasedAt: releaseTimestamp,
+        installationStatus: installationReadyForInstaller ? 'pending_installer' : quotation.installationStatus,
+        statusHistory: existingHistory
+      });
+    }
+
     await quotation.reload();
 
     const rowPlain = quotation.get({ plain: true }) as unknown as Record<string, unknown>;
@@ -4708,6 +4773,10 @@ export const saveFinalConfirmationDocuments = async (req: Request, res: Response
         success: false,
         error: { code: 'RES_001', message: 'Quotation not found' }
       });
+      return;
+    }
+
+    if (!(await enforceWorkflowFieldWriteOrRespond(req, res, 'final_confirmation', quotation))) {
       return;
     }
 

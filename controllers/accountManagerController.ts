@@ -8,6 +8,7 @@ import {
   accessFromRole,
   normalizeAccess,
   parseAccessFromBody,
+  parseWorkflowPermissionPatchFromBody,
   primaryRoleFromAccess,
   publicAccountManagerForApi
 } from '../utils/userAccess';
@@ -217,6 +218,14 @@ export const createAccountManager = async (req: Request, res: Response): Promise
     const hashedPassword = await bcrypt.hash(password, 10);
 
     const profile = parseProfilePatchFromBody(req.body || {});
+    const permPatch = parseWorkflowPermissionPatchFromBody(req.body || {});
+    if ('error' in permPatch) {
+      res.status(400).json({
+        success: false,
+        error: { code: 'VAL_001', message: permPatch.error }
+      });
+      return;
+    }
     const accountManager = await AccountManager.create({
       id: uuidv4(),
       username,
@@ -232,7 +241,11 @@ export const createAccountManager = async (req: Request, res: Response): Promise
       loginCount: 0,
       lastLogin: null,
       createdBy: req.user?.id || null,
-      ...profile
+      ...profile,
+      ...(permPatch.officeLocation !== undefined ? { officeLocation: permPatch.officeLocation } : {}),
+      ...(permPatch.moduleFieldPermissions !== undefined
+        ? { moduleFieldPermissions: permPatch.moduleFieldPermissions }
+        : {})
     });
 
     // Log activity
@@ -298,6 +311,19 @@ export const updateAccountManager = async (req: Request, res: Response): Promise
     if (isActive !== undefined) updateData.isActive = isActive;
     if (emailVerified !== undefined) updateData.emailVerified = emailVerified;
     Object.assign(updateData, parseProfilePatchFromBody(req.body || {}));
+
+    const permPatch = parseWorkflowPermissionPatchFromBody(req.body || {});
+    if ('error' in permPatch) {
+      res.status(400).json({
+        success: false,
+        error: { code: 'VAL_001', message: permPatch.error }
+      });
+      return;
+    }
+    if (permPatch.officeLocation !== undefined) updateData.officeLocation = permPatch.officeLocation;
+    if (permPatch.moduleFieldPermissions !== undefined) {
+      updateData.moduleFieldPermissions = permPatch.moduleFieldPermissions;
+    }
 
     const accessParse = parseAccessFromBody(req.body || {});
     if (accessParse.error) {

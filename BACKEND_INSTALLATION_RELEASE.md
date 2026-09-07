@@ -222,21 +222,80 @@ Frontend merge of localStorage + lists is a **bridge** until every send is persi
 6. `GET /api/quotations?status=approved` — green badge fields present.
 7. Upload photos → `installationStatus: installer_approved` → **Approved Installation** tab.
 8. Admin **Send to Metering** → `pending_metering` → leaves Installation, appears in Metering.
+9. Admin **Revert to pending** from Approved Installation → `installation_status=pending_installer`; quotation `status` stays `approved`; photos kept.
 
 ---
 
-## 8. Reference files
+## 8. Revert to pending (admin — §AH)
+
+```
+PATCH /api/admin/quotations/{id}/installation-status
+POST  /api/admin/quotations/{id}/revert-installation
+```
+
+```json
+{
+  "installationStatus": "pending_installer",
+  "force": true,
+  "adminOverride": true,
+  "allowRevert": true
+}
+```
+
+- Sets **`installation_status = pending_installer`** only (never quotation `status`).
+- Clears `installer_approved_at` and `installation_partial_approved`.
+- Keeps S3 photos.
+- `GET /installer/quotations?status=approved` excludes the id; `?status=pending_installer` includes it.
+
+Full spec: `BACKEND_INSTALLATION_REVERT.ts`.
+
+---
+
+## 10. **Retrieve from Installation** (undo Send to Installer — §AM / HANDOFF §41)
+
+Clears **release flags only** — row leaves Admin Installation / installer queue; Accounts can **Send to Installer** again.
+
+```
+PATCH|POST /api/admin/quotations/{id}/retrieve-from-installation
+PATCH     /api/quotations/{id}/retrieve-from-installation
+PATCH     /api/quotations/{id}/installation-release   (fallback)
+```
+
+```json
+{
+  "installationReadyForInstaller": false,
+  "installationReleasedAt": null,
+  "retrieveFromInstallation": true,
+  "allowRevert": true
+}
+```
+
+| Rule | Detail |
+|------|--------|
+| Auth | `admin`, `account-management` |
+| Block | `metering_approved`+ → **409** |
+| Photos / installments | Unchanged |
+| vs §8 Revert (Approved tab) | §8 changes `installation_status`; this clears **release flags** only |
+
+Reference: `BACKEND_RETRIEVE_FROM_INSTALLATION.ts`, `utils/retrieveFromInstallation.ts`.
+
+---
+
+## 11. Reference files
 
 | File | Purpose |
 |------|---------|
 | `BACKEND_ADMIN_QUOTATION_STATUS.ts` | Reference: `patchQuotationInstallationRelease`, `serializeInstallationReleaseFields` |
+| `BACKEND_RETRIEVE_FROM_METERING.ts` | Retrieve Meter Pending → `installer_approved` |
+| `BACKEND_RETRIEVE_FROM_INSTALLATION.ts` | Undo Send to Installer (clear release flags) |
+| `BACKEND_SEND_TO_METERING.ts` | Send to Metering |
 | `BACKEND_CHANGES_HANDOFF.md` §17 | Sprint summary |
 | `BACKEND_CHANGES_REQUIRED.md` §M | Checklist for backend team |
 | `constants/workflowQueues.ts` | `buildReleasedToInstallerWhere()` release gate |
 
 ---
 
-## 9. Deploy checklist
+## 12. Deploy checklist
 
 ```bash
 yarn migrate   # or rely on sequelizeBootstrap on restart

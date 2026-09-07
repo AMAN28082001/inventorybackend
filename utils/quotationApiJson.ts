@@ -2,6 +2,7 @@ import { readSubsidyChequesFromRow } from './subsidyChequesNormalize';
 import { quotationProductPdfDisplayApiFields, quotationProductInaApiFields } from './quotationProductPdfDisplay';
 import { computeSystemKwFromProducts, formatSystemSizeKw } from './quotationSystemKw';
 import { serializeSiteCostFields } from './cashLoanAmounts';
+import { quotationOfficeLocationApiFields } from './moduleFieldPermissions';
 
 export type QuotationStatusHistoryEntry = { status: string; at: string };
 
@@ -462,6 +463,7 @@ export function quotationAdminMetadataFields(q: Record<string, unknown>) {
   const statusHistory = readStatusHistoryFromRow(q);
   const subsidyCheques = readSubsidyChequesFromRow(q);
   return {
+    ...quotationOfficeLocationApiFields(q),
     subsidyChequeDetails,
     subsidy_cheque_details: subsidyChequeDetails,
     subsidyCheques,

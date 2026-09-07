@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ACCESS_KEYS } from '../utils/userAccess';
+import { workflowPermissionFieldsSchema } from './workflowPermissionValidations';
 
 const accessArraySchema = z
   .array(z.enum(ACCESS_KEYS))
@@ -54,7 +55,8 @@ export const createAccountManagerSchema = z.object({
   role: opsRoleEnum.optional(),
   access: accessArraySchema,
   permissions: accessArraySchema,
-  ...optionalProfileFields
+  ...optionalProfileFields,
+  ...workflowPermissionFieldsSchema
 }).refine((data) => data.role || (data.access && data.access.length) || (data.permissions && data.permissions.length), {
   message: 'role or access is required'
 });
@@ -83,7 +85,8 @@ export const updateAccountManagerSchema = z.object({
   permissions: accessArraySchema,
   isActive: z.boolean().optional(),
   emailVerified: z.boolean().optional(),
-  ...optionalProfileFields
+  ...optionalProfileFields,
+  ...workflowPermissionFieldsSchema
 }).refine((data) => {
   // Filter out password if it's empty string - don't count it as a field
   const fieldsWithoutEmptyPassword = { ...data };

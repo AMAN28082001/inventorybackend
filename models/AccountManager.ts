@@ -12,6 +12,10 @@ interface AccountManagerAttributes {
   role: string;
   /** Dashboard section keys (BACKEND_USER_ACCESS.md) */
   access?: string[] | null;
+  /** Employee office for scope `office_only` (§AK). */
+  officeLocation?: string | null;
+  /** Per-workflow field permissions JSON (§AK). */
+  moduleFieldPermissions?: Record<string, unknown> | null;
   gender?: string | null;
   dateOfBirth?: Date | string | null;
   fatherName?: string | null;
@@ -47,6 +51,8 @@ class AccountManager extends Model<AccountManagerAttributes, AccountManagerCreat
   public mobile!: string;
   public role!: string;
   public access!: string[] | null;
+  public officeLocation!: string | null;
+  public moduleFieldPermissions!: Record<string, unknown> | null;
   public gender!: string | null;
   public dateOfBirth!: Date | string | null;
   public fatherName!: string | null;
@@ -108,6 +114,15 @@ AccountManager.init(
       type: DataTypes.JSONB,
       allowNull: false,
       defaultValue: []
+    },
+    officeLocation: {
+      type: DataTypes.STRING(32),
+      allowNull: true
+    },
+    moduleFieldPermissions: {
+      type: DataTypes.JSONB,
+      allowNull: false,
+      defaultValue: {}
     },
     gender: {
       type: DataTypes.STRING(20),

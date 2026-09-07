@@ -8,7 +8,9 @@ node_modules/
 .env.development
 .env.test
 .env.production
-.env.staging
+secrets/
+google-sheets-service-account.json
+config/googleSheetsServiceAccount.ts
 
 # Build outputs
 dist/

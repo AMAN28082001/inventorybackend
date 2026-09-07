@@ -16,42 +16,6 @@ import sequelize from '../config/database';
 import { Transaction } from 'sequelize';
 import { logError, logInfo } from '../utils/loggerHelper';
 import { lookupQuotationCustomerByPhone } from '../utils/customerPhoneLookup';
-import { persistableMediaReference } from '../utils/s3Service';
-import { isWholeSaleQuantity, hasSufficientStock } from '../utils/saleQuantity';
-import { roundProductPrice } from '../utils/productUnit';
-import {
-  InventoryCreatedByError,
-  InventoryUserMissingError,
-  resolveInventorySaleCreatedBy
-} from '../utils/resolveInventoryCreatedBy';
-import {
-  normalizeIncomingSaleItem,
-  resolveSaleMoneyFields,
-  serializeSaleItemApi,
-  serializeSaleMoneyApi
-} from '../utils/saleLineItemsApi';
-
-const SALE_PRODUCT_SUMMARY_MAX = 2000;
-const SALE_IMAGE_MAX = 2048;
-const SALE_ITEM_NAME_MAX = 255;
-
-function truncateVarchar(value: string | null | undefined, max: number): string | null {
-  if (value == null) return null;
-  const raw = String(value).trim();
-  if (!raw) return null;
-  return raw.length <= max ? raw : raw.slice(0, max);
-}
-
-function normalizeSaleImageForStorage(url: string | null | undefined): string | null {
-  if (!url) return null;
-  const stored = persistableMediaReference(url) || String(url).trim();
-  return truncateVarchar(stored, SALE_IMAGE_MAX);
-}
-
-const extractDbErrorMessage = (error: unknown): string => {
-  const err = error as { message?: string; parent?: { message?: string } };
-  return String(err?.parent?.message || err?.message || 'Unable to create sale');
-};
 
 const buildSaleIncludes = () => ([
   {
@@ -68,15 +32,7 @@ const buildSaleIncludes = () => ([
   },
   {
     model: SaleItem,
-    as: 'items',
-    include: [
-      {
-        model: Product,
-        as: 'product',
-        attributes: ['id', 'name', 'model', 'unit_price', 'selling_price'],
-        required: false
-      }
-    ]
+    as: 'items'
   },
   {
     model: Address,
@@ -89,28 +45,16 @@ const buildSaleIncludes = () => ([
 ]);
 
 const serializeSale = (sale: any) => {
-  const plain = typeof sale?.toJSON === 'function' ? sale.toJSON() : { ...sale };
-  const creator = sale.creator || plain.creator || sale.created_by;
+  const creator = sale.creator || sale.created_by;
   const createdByName = creator?.name || creator?.created_by_name || null;
-  const saleDate = plain.sale_date || plain.created_at || null;
-  const money = serializeSaleMoneyApi(plain);
-  const itemsRaw = Array.isArray(plain.items) ? plain.items : [];
-  const items = itemsRaw.map((row: any) =>
-    serializeSaleItemApi(
-      typeof row?.toJSON === 'function' ? row.toJSON() : row,
-      row?.product || null
-    )
-  );
+  const saleDate = sale.sale_date || sale.created_at || null;
 
   return {
-    ...plain,
-    ...money,
-    items,
+    ...sale.toJSON?.() || sale,
     created_by_name: createdByName,
     agent_name: createdByName,
     created_at: saleDate,
-    sale_date: saleDate,
-    admin_id: plain.admin_id ?? null
+    sale_date: saleDate
   };
 };
 
@@ -142,19 +86,16 @@ const normalizeSaleItems = async (rawItems: any, transaction: Transaction): Prom
 
   const normalized: NormalizedSaleItem[] = [];
 
-  for (const raw of rawItems) {
-    const incoming = normalizeIncomingSaleItem(
-      raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
-    );
+  for (const item of rawItems) {
+    const quantity = normalizeSaleQuantity(item.quantity);
 
-    if (!incoming.quantity || incoming.quantity <= 0 || Number.isNaN(incoming.quantity)) {
+    if (!quantity || quantity <= 0 || Number.isNaN(quantity)) {
       throw new Error('Each sale item must have a quantity greater than 0');
     }
 
-    let productId: string | null = incoming.product_id;
-    let productName =
-      (raw as any)?.product_name || (raw as any)?.productName || (raw as any)?.name;
-    let model = (raw as any)?.model;
+    let productId: string | null = item.product_id || null;
+    let productName = item.product_name;
+    let model = item.model;
     let productRecord: Product | null = null;
 
     if (productId) {
@@ -170,20 +111,17 @@ const normalizeSaleItems = async (rawItems: any, transaction: Transaction): Prom
       throw new Error('product_name and model are required for each sale item if product_id is not provided');
     }
 
-    productName = truncateVarchar(productName, SALE_ITEM_NAME_MAX) || productName.slice(0, SALE_ITEM_NAME_MAX);
-    model = truncateVarchar(model, SALE_ITEM_NAME_MAX) || model.slice(0, SALE_ITEM_NAME_MAX);
-
-    let unitPrice = incoming.unit_price;
-    if (!Number.isFinite(unitPrice) || unitPrice < 0) {
-      if (productRecord && productRecord.selling_price !== null && productRecord.selling_price !== undefined) {
-        unitPrice = Number(productRecord.selling_price);
-      } else if (productRecord && productRecord.unit_price !== null && productRecord.unit_price !== undefined) {
-        unitPrice = Number(productRecord.unit_price);
-      } else if (productRecord && (productRecord as any).price !== null && (productRecord as any).price !== undefined) {
-        unitPrice = Number((productRecord as any).price);
-      } else {
-        unitPrice = NaN;
-      }
+    let unitPrice: number;
+    if (item.unit_price !== undefined) {
+      unitPrice = Number(item.unit_price);
+    } else if (productRecord && productRecord.selling_price !== null && productRecord.selling_price !== undefined) {
+      unitPrice = Number(productRecord.selling_price);
+    } else if (productRecord && productRecord.unit_price !== null && productRecord.unit_price !== undefined) {
+      unitPrice = Number(productRecord.unit_price);
+    } else if (productRecord && (productRecord as any).price !== null && (productRecord as any).price !== undefined) {
+      unitPrice = Number((productRecord as any).price);
+    } else {
+      unitPrice = NaN;
     }
 
     if (Number.isNaN(unitPrice) || unitPrice < 0) {
@@ -191,18 +129,15 @@ const normalizeSaleItems = async (rawItems: any, transaction: Transaction): Prom
     }
     unitPrice = roundProductPrice(unitPrice) ?? unitPrice;
 
-    let lineTotal = incoming.line_total;
-    if (!Number.isFinite(lineTotal) || lineTotal < 0) {
-      lineTotal = roundProductPrice(incoming.quantity * unitPrice) ?? incoming.quantity * unitPrice;
-    } else {
-      lineTotal = roundProductPrice(lineTotal) ?? lineTotal;
-    }
+    const lineTotalRaw = item.line_total !== undefined ? Number(item.line_total) : quantity * unitPrice;
+    const lineTotal = roundProductPrice(lineTotalRaw) ?? lineTotalRaw;
 
     if (Number.isNaN(lineTotal) || lineTotal < 0) {
       throw new Error('Each sale item must have a non-negative line_total');
     }
 
-    const gstRate = Number.isFinite(incoming.gst_rate) ? incoming.gst_rate : 0;
+    const gstRate = item.gst_rate !== undefined ? Number(item.gst_rate) : 0;
+
     if (Number.isNaN(gstRate) || gstRate < 0) {
       throw new Error('Each sale item must have a non-negative gst_rate');
     }
@@ -211,20 +146,24 @@ const normalizeSaleItems = async (rawItems: any, transaction: Transaction): Prom
       product_id: productId,
       product_name: productName,
       model,
-      quantity: incoming.quantity,
+      quantity,
       unit_price: unitPrice,
       line_total: lineTotal,
       gst_rate: gstRate,
-      serial_numbers: incoming.serial_numbers ?? null
+      serial_numbers: Array.isArray(item.serial_numbers)
+        ? item.serial_numbers.map(String)
+        : typeof item.serial_numbers === 'string'
+          ? item.serial_numbers.split(/[\n,]+/).map((v: string) => v.trim()).filter(Boolean)
+          : null
     });
 
     const serials = normalized[normalized.length - 1].serial_numbers;
     if (serials?.length) {
-      if (!isWholeSaleQuantity(incoming.quantity)) {
+      if (!isWholeSaleQuantity(quantity)) {
         throw new Error('Serial numbers require a whole-number quantity');
       }
-      if (serials.length !== Math.round(incoming.quantity)) {
-        throw new Error(`Expected ${Math.round(incoming.quantity)} serial numbers, got ${serials.length}`);
+      if (serials.length !== Math.round(quantity)) {
+        throw new Error(`Expected ${Math.round(quantity)} serial numbers, got ${serials.length}`);
       }
     }
   }
@@ -334,43 +273,6 @@ const tryReduceAdminInventory = async (adminId: string, productId: string, quant
   return true;
 };
 
-/** Parse sell-from-admin id aliases from POST /sales body (§21). */
-const parseSaleAdminIdFromBody = (body: Record<string, unknown> | null | undefined): string => {
-  if (!body) return '';
-  const raw =
-    body.admin_id ??
-    body.adminId ??
-    body.sell_from_admin_id ??
-    body.stock_admin_id;
-  return String(raw ?? '').trim();
-};
-
-/** True when SPA explicitly asks to sell from admin warehouse stock. */
-const wantsAdminStockSource = (body: Record<string, unknown> | null | undefined): boolean => {
-  if (!body) return false;
-  if (parseSaleAdminIdFromBody(body)) return true;
-  const stockSource = String(body.stock_source ?? body.stockSource ?? '')
-    .trim()
-    .toLowerCase();
-  if (stockSource === 'admin') return true;
-  const flag = body.use_admin_stock ?? body.useAdminStock;
-  if (flag === true || flag === 1 || flag === '1') return true;
-  if (typeof flag === 'string' && ['true', 'yes', 'admin'].includes(flag.trim().toLowerCase())) {
-    return true;
-  }
-  return false;
-};
-
-class InsufficientAdminStockError extends Error {
-  code = 'INSUFFICIENT_ADMIN_STOCK';
-  details: Array<Record<string, unknown>>;
-  constructor(message: string, details: Array<Record<string, unknown>> = []) {
-    super(message);
-    this.name = 'InsufficientAdminStockError';
-    this.details = details;
-  }
-}
-
 const reduceCentralInventory = async (productId: string, quantity: number, transaction: Transaction): Promise<void> => {
   const product = await Product.findByPk(productId, { transaction, lock: transaction.LOCK.UPDATE });
 
@@ -403,38 +305,9 @@ const logSaleTransaction = async ({ productId, saleId, quantity, customerName, c
   }, { transaction });
 };
 
-const buildProductSummary = (items: NormalizedSaleItem[]): string => {
-  const parts = items.map((item) => `${item.product_name} (${item.quantity})`);
-  let summary = parts.join(', ');
-  if (summary.length <= SALE_PRODUCT_SUMMARY_MAX) return summary;
-
-  const kept: string[] = [];
-  for (const part of parts) {
-    const candidate = kept.length === 0 ? part : `${kept.join(', ')}, ${part}`;
-    if (candidate.length > SALE_PRODUCT_SUMMARY_MAX - 12) break;
-    kept.push(part);
-  }
-
-  const omitted = parts.length - kept.length;
-  if (omitted > 0) {
-    const suffix = ` +${omitted} more`;
-    const base = kept.join(', ');
-    const maxBase = SALE_PRODUCT_SUMMARY_MAX - suffix.length;
-    const trimmedBase = base.length > maxBase ? base.slice(0, maxBase) : base;
-    return `${trimmedBase}${suffix}`;
-  }
-
-  return truncateVarchar(summary, SALE_PRODUCT_SUMMARY_MAX) || summary.slice(0, SALE_PRODUCT_SUMMARY_MAX);
-};
-
-const resolveProductSummaryForSale = (
-  provided: string | undefined,
-  items: NormalizedSaleItem[],
-): string => {
-  const built = buildProductSummary(items);
-  const raw = provided?.trim() || built;
-  return truncateVarchar(raw, SALE_PRODUCT_SUMMARY_MAX) || built.slice(0, SALE_PRODUCT_SUMMARY_MAX);
-};
+const buildProductSummary = (items: NormalizedSaleItem[]): string => items
+  .map((item) => `${item.product_name} (${item.quantity})`)
+  .join(', ');
 
 // Get all sales (with role-based filtering)
 export const getAllSales = async (req: Request, res: Response): Promise<void> => {
@@ -602,6 +475,9 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
       customer_name,
       items: rawItems,
       product_summary,
+      subtotal,
+      tax_amount,
+      discount_amount,
       payment_status,
       sale_date,
       company_name,
@@ -669,20 +545,11 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
 
     const normalizedItems = await normalizeSaleItems(saleItems, transaction);
     const totalQuantity = normalizedItems.reduce((sum, item) => sum + item.quantity, 0);
-    const money = resolveSaleMoneyFields(
-      (req.body || {}) as Record<string, unknown>,
-      normalizedItems.map((item) => ({
-        quantity: item.quantity,
-        unit_price: item.unit_price,
-        gst_rate: item.gst_rate,
-        line_total: item.line_total,
-        subtotal: item.line_total
-      }))
-    );
-    const subtotalValue = money.subtotal;
-    const taxAmountValue = money.tax_amount;
-    const discountAmountValue = money.discount_amount;
-    const totalAmountValue = money.total_amount;
+    const computedSubtotal = normalizedItems.reduce((sum, item) => sum + item.line_total, 0);
+    const subtotalValue = subtotal !== undefined ? Number(subtotal) : computedSubtotal;
+    const taxAmountValue = tax_amount !== undefined ? Number(tax_amount) : 0;
+    const discountAmountValue = discount_amount !== undefined ? Number(discount_amount) : 0;
+    const totalAmountValue = subtotalValue + taxAmountValue - discountAmountValue;
 
     if (Number.isNaN(subtotalValue) || subtotalValue < 0) {
       await transaction.rollback();
@@ -728,109 +595,13 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
     if (req.file && !uploadedS3Image) {
       throw new Error('Image upload failed. Could not store file in S3.');
     }
-    const imagePath = normalizeSaleImageForStorage(uploadedS3Image);
-
-    // §20 — resolve inventory users.id before sales.created_by INSERT (Quotation Admin JWT ≠ users row).
-    let createdByUserId: string;
-    try {
-      createdByUserId = await resolveInventorySaleCreatedBy(
-        req.user as any,
-        (req.body || {}) as Record<string, unknown>
-      );
-    } catch (resolveErr: any) {
-      await transaction.rollback();
-      const message =
-        resolveErr?.message ||
-        'Cannot create sale: no inventory user for created_by. Upsert JWT user into inventory users or send a valid created_by.';
-      res.status(400).json({
-        success: false,
-        error: message,
-        code: resolveErr?.code || 'INV_USER_MISSING'
-      });
-      return;
-    }
-
-    // §21 — Agent / Quotation Admin sell-from-admin: use admin_inventory, never central_stock.
-    const bodyRec = (req.body || {}) as Record<string, unknown>;
-    const bodyAdminId = parseSaleAdminIdFromBody(bodyRec);
-    const forceAdminStock = wantsAdminStockSource(bodyRec);
-    let adminInventoryOwnerId: string | null = null;
-
-    if (bodyAdminId) {
-      const adminUser = await User.findByPk(bodyAdminId, { attributes: ['id', 'role', 'name', 'is_active'] });
-      if (!adminUser || adminUser.role !== 'admin') {
-        await transaction.rollback();
-        res.status(400).json({
-          success: false,
-          error: 'admin_id must be a valid admin user',
-          code: 'VAL_001'
-        });
-        return;
-      }
-      adminInventoryOwnerId = adminUser.id;
-    } else if (req.user.role === 'agent') {
-      const agentRecord = await User.findByPk(req.user.id, {
-        attributes: ['id', 'created_by_id']
-      });
-      adminInventoryOwnerId = agentRecord?.created_by_id || null;
-      if (!adminInventoryOwnerId) {
-        await transaction.rollback();
-        res.status(400).json({ error: 'Admin mapping not found for agent' });
-        return;
-      }
-    } else if (req.user.role === 'admin') {
-      adminInventoryOwnerId = req.user.id;
-    } else if (forceAdminStock) {
-      await transaction.rollback();
-      res.status(400).json({
-        success: false,
-        error:
-          'admin_id is required when selling from admin stock (send admin_id / adminId / sell_from_admin_id / stock_admin_id)',
-        code: 'VAL_001'
-      });
-      return;
-    }
-
-    // Pre-validate admin stock before INSERT so we never touch central on this path.
-    if (adminInventoryOwnerId) {
-      const shortDetails: Array<Record<string, unknown>> = [];
-      for (const item of normalizedItems) {
-        if (!item.product_id) continue;
-        const inventory = await AdminInventory.findOne({
-          where: { admin_id: adminInventoryOwnerId, product_id: item.product_id },
-          transaction,
-          lock: transaction.LOCK.UPDATE
-        });
-        const available = inventory ? Number(inventory.quantity) : 0;
-        if (!hasSufficientStock(available, item.quantity)) {
-          shortDetails.push({
-            product_id: item.product_id,
-            product_name: item.product_name,
-            admin_id: adminInventoryOwnerId,
-            requested: item.quantity,
-            available,
-            short_by: Math.max(0, Number(item.quantity) - available),
-            message: `Insufficient admin inventory for ${item.product_name}`
-          });
-        }
-      }
-      if (shortDetails.length > 0) {
-        await transaction.rollback();
-        res.status(400).json({
-          success: false,
-          error: 'Insufficient admin inventory for sale',
-          code: 'INSUFFICIENT_ADMIN_STOCK',
-          details: shortDetails
-        });
-        return;
-      }
-    }
+    const imagePath = uploadedS3Image;
 
     const saleRecord = await Sale.create({
       id: uuidv4(),
       type,
-      customer_name: truncateVarchar(customer_name, 255) || String(customer_name).slice(0, 255),
-      product_summary: resolveProductSummaryForSale(product_summary, normalizedItems),
+      customer_name,
+      product_summary: product_summary || buildProductSummary(normalizedItems),
       total_quantity: totalQuantity,
       subtotal: subtotalValue,
       tax_amount: taxAmountValue,
@@ -840,8 +611,7 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
       approval_status: 'pending',
       sale_date: sale_date ? new Date(sale_date) : new Date(),
       image: imagePath,
-      created_by: createdByUserId,
-      admin_id: adminInventoryOwnerId,
+      created_by: req.user.id,
       company_name: company_name || null,
       gst_number: gst_number || null,
       contact_person: contact_person || null,
@@ -862,14 +632,39 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
         product_id: item.product_id,
         product_name: item.product_name,
         model: item.model,
-        // §22 — always persist real qty / unit_price / line amount (never amount-only zeros)
-        quantity: Number(item.quantity),
-        unit_price: Number(item.unit_price),
-        line_total: Number(item.line_total),
-        gst_rate: Number(item.gst_rate),
+        quantity: item.quantity,
+        unit_price: item.unit_price,
+        line_total: item.line_total,
+        gst_rate: item.gst_rate,
         serial_numbers: item.serial_numbers && item.serial_numbers.length > 0 ? item.serial_numbers : null
       }, { transaction });
       createdSaleItems.push(createdItem);
+    }
+
+    let adminInventoryOwnerId: string | null = null;
+    if (req.user.role === 'agent') {
+      const agentRecord = await User.findByPk(req.user.id, {
+        attributes: ['id', 'created_by_id']
+      });
+      adminInventoryOwnerId = agentRecord?.created_by_id || null;
+      if (!adminInventoryOwnerId) {
+        await transaction.rollback();
+        res.status(400).json({ error: 'Admin mapping not found for agent' });
+        return;
+      }
+    } else if (req.user.role === 'admin') {
+      adminInventoryOwnerId = req.user.id;
+    } else if (req.user.role === 'super-admin' || req.user.role === 'super-admin-manager') {
+      const bodyAdminId = String((req.body as any).admin_id || '').trim();
+      if (bodyAdminId) {
+        const adminUser = await User.findByPk(bodyAdminId, { attributes: ['id', 'role'] });
+        if (!adminUser || adminUser.role !== 'admin') {
+          await transaction.rollback();
+          res.status(400).json({ error: 'admin_id must be a valid admin user' });
+          return;
+        }
+        adminInventoryOwnerId = adminUser.id;
+      }
     }
 
     const serialNumbersRaw = (req.body as any).serial_numbers;
@@ -943,26 +738,9 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
       }
 
       if (adminInventoryOwnerId) {
-        // Never touch products.quantity / central_stock on admin-stock sales.
-        const reduced = await tryReduceAdminInventory(
-          adminInventoryOwnerId,
-          item.product_id,
-          item.quantity,
-          transaction
-        );
+        const reduced = await tryReduceAdminInventory(adminInventoryOwnerId, item.product_id, item.quantity, transaction);
         if (!reduced) {
-          throw new InsufficientAdminStockError(
-            `Insufficient admin inventory for ${item.product_name}`,
-            [
-              {
-                product_id: item.product_id,
-                product_name: item.product_name,
-                admin_id: adminInventoryOwnerId,
-                requested: item.quantity,
-                message: `Insufficient admin inventory for ${item.product_name}`
-              }
-            ]
-          );
+          throw new Error(`Insufficient admin inventory for product ${item.product_id}`);
         }
       } else if (
         req.user.role === 'super-admin' ||
@@ -979,7 +757,7 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
         saleId: saleRecord.id,
         quantity: item.quantity,
         customerName: customer_name,
-        createdBy: createdByUserId,
+        createdBy: req.user.id,
         transaction
       });
     }
@@ -990,13 +768,7 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
       include: buildSaleIncludes()
     });
 
-    logInfo('Sale created', {
-      saleId: saleRecord.id,
-      type,
-      customerName: customer_name,
-      totalAmount: totalAmountValue,
-      createdBy: createdByUserId
-    });
+    logInfo('Sale created', { saleId: saleRecord.id, type, customerName: customer_name, totalAmount: totalAmountValue, createdBy: req.user.id });
     res.status(201).json(serializeSale(created));
   } catch (error: any) {
     await transaction.rollback();
@@ -1008,56 +780,10 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
       itemsType: typeof req.body.items,
       itemsLength: Array.isArray(req.body.items) ? req.body.items.length : 'N/A'
     });
-
-    if (
-      error instanceof InventoryUserMissingError ||
-      error instanceof InventoryCreatedByError ||
-      error?.code === 'INV_USER_MISSING'
-    ) {
-      res.status(400).json({
-        success: false,
-        error:
-          error.message ||
-          'Cannot create sale: no inventory user for created_by. Upsert JWT user into inventory users or send a valid created_by.',
-        code: 'INV_USER_MISSING'
-      });
-      return;
-    }
-
-    if (
-      error instanceof InsufficientAdminStockError ||
-      error?.code === 'INSUFFICIENT_ADMIN_STOCK'
-    ) {
-      res.status(400).json({
-        success: false,
-        error: error.message || 'Insufficient admin inventory for sale',
-        code: 'INSUFFICIENT_ADMIN_STOCK',
-        details: error.details || []
-      });
-      return;
-    }
-
-    const errorMessage = extractDbErrorMessage(error);
-    const isCreatedByFk =
-      error?.name === 'SequelizeForeignKeyConstraintError' ||
-      /sales_created_by_fkey/i.test(errorMessage);
-    if (isCreatedByFk) {
-      res.status(400).json({
-        success: false,
-        error:
-          'sales.created_by is not a valid inventory users.id. Upsert JWT into users or honor body created_by.',
-        code: 'INV_USER_MISSING'
-      });
-      return;
-    }
-
+    
+    // Provide detailed error message
+    const errorMessage = error.message || 'Unable to create sale';
     const errorResponse: any = { error: errorMessage };
-
-    if (/character varying\(\d+\)|value too long/i.test(errorMessage)) {
-      errorResponse.error =
-        'One of the sale fields is too long (product summary or image). Try fewer products or re-upload the image.';
-      errorResponse.details = errorMessage;
-    }
     
     // Add helpful details for common errors
     if (errorMessage.includes('item') || errorMessage.includes('product')) {
@@ -1219,10 +945,10 @@ export const updateSale = async (req: Request, res: Response): Promise<void> => 
     }
 
     if (product_summary) {
-      updates.product_summary = truncateVarchar(product_summary, SALE_PRODUCT_SUMMARY_MAX);
+      updates.product_summary = product_summary;
     }
     if (updatedItems) {
-      updates.product_summary = resolveProductSummaryForSale(product_summary, updatedItems);
+      updates.product_summary = product_summary || buildProductSummary(updatedItems);
     }
 
     if (company_name !== undefined) {
@@ -1277,7 +1003,7 @@ export const updateSale = async (req: Request, res: Response): Promise<void> => 
       if (!uploadedS3Image) {
         throw new Error('Image upload failed. Could not store file in S3.');
       }
-      updates.image = normalizeSaleImageForStorage(uploadedS3Image);
+      updates.image = uploadedS3Image;
       
       // Delete old image from S3 if it exists
       if (sale.image) {
@@ -1353,7 +1079,7 @@ export const confirmB2BBill = async (req: Request, res: Response): Promise<void>
       res.status(500).json({ error: 'Bill upload failed. Could not store file in S3.' });
       return;
     }
-    const billImage = normalizeSaleImageForStorage(uploadedS3BillImage) || sale.bill_image;
+    const billImage = uploadedS3BillImage || sale.bill_image;
     
     // Delete old bill image from S3 if it exists
     if (sale.bill_image && req.file) {
@@ -1489,4 +1215,4 @@ export const getSalesSummary = async (req: Request, res: Response): Promise<void
     res.status(500).json({ error: 'Server error' });
   }
 };
-
+//live

@@ -65,6 +65,14 @@
 | 53 | High | Non-DCR Waaree 125kW @ ₹35,62,500 + catalog 125kW / 705W | **Done** | `BACKEND_NON_DCR_125KW_WAAREE.md` |
 | 54 | High | Customer Journey — calling history + `callingLeadId` | **Done** | §33 / `BACKEND_CUSTOMER_JOURNEY.ts` / §AE |
 | 55 | High | Meter document public view link (Metering Details) | **Done** | §34 / `BACKEND_METER_DOCUMENT_PUBLIC_URL.ts` / §AF |
+| 56 | High | Customer Journey bulk calling-actions ISO `actionAt` + mobile join | **Done** | §35 / `BACKEND_CUSTOMER_JOURNEY.ts` / §AG |
+| 57 | High | Admin Installation Revert (approved → pending_installer) | **Done** | §36 / `BACKEND_INSTALLATION_REVERT.ts` / §AH |
+| 58 | High | Calling Reports exact Total Calls by `action_at` date | **Done** | §37 / `BACKEND_CALLING_REPORTS_COUNTS.ts` / §AI |
+| 59 | High | Google Maps proxy (reverse-geocode + static map) | **Done** | §38 / `BACKEND_GOOGLE_MAPS_PROXY.ts` / maps proxy |
+| 60 | High | User office location + workflow field permissions | **Done** | §39 / `BACKEND_USER_FIELD_PERMISSIONS.ts` / §AL |
+| 61 | High | Retrieve from Metering (Meter Pending → installer_approved) | **Done** | §40 / `BACKEND_RETRIEVE_FROM_METERING.ts` / §AN |
+| 62 | High | Retrieve from Installation (undo Send to Installer) | **Done** | §41 / `BACKEND_RETRIEVE_FROM_INSTALLATION.ts` / §AM |
+| 63 | High | Google Sheets → HR Social Media leads | **Done** | §42 / `BACKEND_GOOGLE_SHEETS_SOCIAL_LEADS.ts` / §AO |
 
 **Deploy before QA:**
 
@@ -87,6 +95,7 @@ yarn migrate
 | `20260808120000-seed-pricing-tables-aug-2026.js` | Seed Aug 2026 FE pricing catalog into `system_config.pricing_tables` (§2.6.4) |
 | `20260817160000-add-non-dcr-waaree-125kw-pricing.js` | Merge Non-DCR Waaree 125kW @ ₹35,62,500 + catalog `125kW` / `705W` |
 | `20260821160000-add-calling-lead-id-to-quotations.js` | `quotations.calling_lead_id` for Customer Journey (§33 / §AE) |
+| `20260831160000-add-office-location-and-module-field-permissions.js` | `officeLocation` + `moduleFieldPermissions` on users; quotation office scope (§39 / §AL) |
 
 After migrate, optional backfill: `npx ts-node scripts/backfill-system-kw.ts`
 
@@ -2648,6 +2657,16 @@ Example: `{ "role": "hr", "access": ["hr","quotation","visitor"] }` must open de
 | **`BACKEND_CUSTOMER_JOURNEY.ts`** | **§33 / §AE** full Customer Journey backend spec |
 | **§34** (this file) | Meter document public view link |
 | **`BACKEND_METER_DOCUMENT_PUBLIC_URL.ts`** | **§34 / §AF** meter document public view link |
+| **§35** (this file) | Customer Journey bulk timestamps + mobile join |
+| **`BACKEND_CUSTOMER_JOURNEY.ts`** | **§35 / §AG** timestamps + speed (also §33 / §AE) |
+| **§36** (this file) | Admin Installation Revert |
+| **`BACKEND_INSTALLATION_REVERT.ts`** | **§36 / §AH** approved → pending_installer |
+| **§37** (this file) | Calling Reports exact counts by date |
+| **`BACKEND_CALLING_REPORTS_COUNTS.ts`** | **§37 / §AI** action_at filter + summary cards |
+| **§38** (this file) | Google Maps geotag proxy |
+| **`BACKEND_GOOGLE_MAPS_PROXY.ts`** | **§38** reverse-geocode + static map |
+| **§39** (this file) | User office location + field permissions |
+| **`BACKEND_USER_FIELD_PERMISSIONS.ts`** | **§39 / §AL** office + moduleFieldPermissions |
 
 ---
 
@@ -2703,4 +2722,228 @@ Upload + Save still showed **“No meter document on file yet.”** — multer r
 
 1. Upload PDF in Metering Details → Save → **Open public link** visible.
 2. Hard refresh → link still works.
+
+---
+
+## 35. Customer Journey — Calling Data / Calling Action date+time on bulk GET (Aug 2026)
+
+**Status: implemented** — FE HANDOFF §34 / `BACKEND_CHANGES_REQUIRED.md` §AG, `BACKEND_CUSTOMER_JOURNEY.ts`
+
+### Problem
+
+Green Calling Data / Calling Action chips showed **"—"** until a mobile search. SPA then fired many `GET .../calling-actions?search=<mobile>` calls.
+
+Cause: bulk `GET ?range=all&limit=2000` omitted ISO `actionAt` and/or `mobile` (no lead join).
+
+### Shipped
+
+| Item | Detail |
+|------|--------|
+| `actionAt` | ISO-8601 on every row (`COALESCE(actionAt, createdAt)`); also `action_at` / `calledAt` |
+| Join | `CallingLead` included — `mobile` + `name` even when history denormalized fields are empty |
+| Pagination | `limit` ≤ 2000; `range=all` defaults to 2000; `pagination.total` always returned |
+| Search | Last-10 digits on history + `lead.mobileNormalized` — not required for default journey list |
+
+### Optional (not shipped)
+
+`GET /api/admin/customer-journey` / `GET /api/dealers/me/customer-journey` with pre-merged `stageDates`.
+
+### QA
+
+1. Open Customer Journey **without** searching a number.
+2. Converted leads show Calling Data + Calling Action **Completed** with times.
+3. Network: one (or paginated) list call, not dozens of `?search=` calls.
+
+---
+
+## 36. Admin Installation **Revert** (Approved → Pending) — Aug 2026
+
+**Status: implemented** — FE HANDOFF §35 / `BACKEND_CHANGES_REQUIRED.md` §AH, `BACKEND_INSTALLATION_REVERT.ts`
+
+### Shipped
+
+| Item | Detail |
+|------|--------|
+| PATCH | `PATCH /api/admin/quotations/:id/installation-status` accepts `pending_installer` from admin |
+| Dedicated | `POST /api/admin/quotations/:id/revert-installation` |
+| Column | `installation_status` only — quotation `status` unchanged |
+| Clear | `installerApprovedAt=null`, `installationPartialApproved=false` |
+| Photos | Kept |
+| Queues | Approved installer GET excludes; pending includes |
+
+### QA
+
+1. Approved Installation → Revert → Yes.
+2. Row leaves Approved; appears under Pending Installation.
+3. GET-by-id still has photos; quotation `status` is still `approved`.
+
+---
+
+## 37. Admin Calling Reports — exact Total Calls by date (§AI) — Aug 2026
+
+**Status: implemented** — FE HANDOFF §36 / `BACKEND_CHANGES_REQUIRED.md` §AI, `BACKEND_CALLING_REPORTS_COUNTS.ts`
+
+### Problem
+
+Monthly/Weekly Total Calls stuck at a page cap or ignored the selected date window (all-time dump / wrong field).
+
+### Shipped
+
+| Item | Detail |
+|------|--------|
+| Date filter | `COALESCE(actionAt, createdAt)` on **history** only — never lead `created_at` |
+| Aliases | `startDate`/`endDate` (ISO) + `fromDate`/`toDate` (`YYYY-MM-DD` Asia/Kolkata) |
+| Presets | Weekly Mon–Sun Asia/Kolkata; monthly 1st–last day; daily IST day bounds |
+| Exclude | `action=start` (`REPORT_ACTIONS` only) |
+| Pagination | Honour `page` + `limit` (max 2000); `pagination.total` = filtered count |
+| `actionAt` | ISO-8601 on every row |
+| Summary | `GET /api/admin/calling-actions/summary` (+ HR) → `totalCalls`, `connected`, `notConnected`, connected* buckets; `totalCalls === connected + notConnected` |
+
+### QA
+
+1. Monthly vs Weekly vs Daily Total Calls differ and match SQL `COUNT(*)` on effective `action_at` in that window (exclude `start`).
+2. `?page=2&limit=250` returns different rows than page 1.
+3. Summary: `totalCalls === connected + notConnected`.
+
+---
+
+## 38. Google Maps proxy (geotag Live photo) — Aug 2026
+
+**Status: implemented** — `BACKEND_CHANGES_REQUIRED.md` §AK, `BACKEND_GOOGLE_MAPS_PROXY.ts`
+
+### Shipped
+
+| Item | Detail |
+|------|--------|
+| Env | `GOOGLE_MAPS_API_KEY` (server-only) |
+| Reverse geocode | `GET /api/maps/reverse-geocode?lat=&lng=` → `{ title, address, countryCode }` |
+| Static map | `GET /api/maps/static?lat=&lng=&zoom=18` → image stream |
+| Auth | Bearer via `authenticateInventoryOrQuotation` |
+| Rate limit | In-memory per user/IP (`MAPS_RATE_LIMIT_*`) |
+
+### Not in this change
+
+Structured `installationImageCaptureMetaJson` persist (§AJ) — optional follow-up.
+
+### QA
+
+1. Set `GOOGLE_MAPS_API_KEY` and restart.
+2. Authenticated `GET /api/maps/reverse-geocode?lat=26.9124&lng=75.7873` → `success` + title/address.
+3. Authenticated `GET /api/maps/static?lat=26.9124&lng=75.7873` → `image/*` bytes.
+4. Without Bearer → 401; without key → 503.
+
+---
+
+## 39. User office location + workflow field permissions (§AL) — Aug 2026
+
+**Status: implemented** — FE REQUIRED §AK / `BACKEND_USER_FIELD_PERMISSIONS.ts` (inventory handoff **§39**; FE HANDOFF §38)
+
+### Shipped (P0)
+
+| Item | Detail |
+|------|--------|
+| DB | `officeLocation`, `moduleFieldPermissions` on `account_managers`, `dealers`, `visitors`; `officeLocation` on `quotations` |
+| User CRUD | Accept + echo on admin account-managers / dealers / visitors POST/PUT/GET |
+| Login | `POST /auth/login` echoes `officeLocation`, `moduleFieldPermissions` on `user` |
+| Quotations | GET list/detail echo `officeLocation` / `office_location`; set from dealer on create |
+| Enforcement (P1) | 403 `FIELD_PERMISSION_DENIED` on install upload, metering status PATCH, final-confirmation docs |
+| Scope | `everyone` \| `selected_users` \| `office_only`; legacy `everyone_except_dealer` → `everyone` on save/GET (dealers allowed) |
+
+### Migration
+
+`20260831160000-add-office-location-and-module-field-permissions.js`
+
+### QA
+
+1. **Everyone** + installation **write** → dealer with installation access can upload (no dealer block).
+2. Legacy JSON with `everyone_except_dealer` → GET normalizes to `everyone`.
+3. Save user in Admin → GET returns same `moduleFieldPermissions` + `officeLocation`.
+4. Login echoes permissions (no localStorage override needed).
+
+---
+
+## 40. Admin **Retrieve from Metering** (Meter Pending → Installation approved) — Sep 2026
+
+**Status: implemented** — FE REQUIRED §AN / `BACKEND_RETRIEVE_FROM_METERING.ts` (FE HANDOFF §39)
+
+| Item | Detail |
+|------|--------|
+| Route | `PATCH\|POST /api/admin/quotations/:id/retrieve-from-metering` |
+| From | `pending_metering`, `metering_in_progress` |
+| To | `installation_status = installer_approved`; clear metering timestamps |
+| Keep | `installation_ready_for_installer`, `installation_released_at`, `quotations.status` |
+| Block | `metering_approved`, `meter_installation_pending`, `mco`, etc. → **409** |
+| Auth | Admin (quotation admin or inventory admin) |
+
+**Code:** `utils/retrieveFromMetering.ts`, `controllers/adminController.ts` → `retrieveQuotationFromMetering`
+
+### QA
+
+1. Send to Metering → GET echoes `pending_metering`.
+2. Retrieve → **200**; GET echoes `installer_approved`, metering fields cleared.
+3. Meter Pending queue excludes row; Send to Metering available again.
+4. Retrieve when `metering_approved` → **409**.
+
+---
+
+## 41. **Retrieve from Installation** (undo Send to Installer) — Sep 2026
+
+**Status: implemented** — FE REQUIRED §AM / `BACKEND_RETRIEVE_FROM_INSTALLATION.ts` (FE HANDOFF §40)
+
+| Item | Detail |
+|------|--------|
+| Route | `PATCH\|POST /api/admin/quotations/:id/retrieve-from-installation` |
+| Fallback | `PATCH /api/quotations/:id/installation-release` with `false` + `retrieveFromInstallation` |
+| Clear | `installation_ready_for_installer = false`, `installation_released_at = null` |
+| Keep | `quotations.status`, installments, photo URLs |
+| Block | Late metering (`metering_approved`+) → **409** |
+| Auth | `admin`, `account-management` |
+
+**Not the same as:** Approved-tab **Revert** (`installer_approved` → `pending_installer`) — `BACKEND_INSTALLATION_REVERT.ts` / §AH.
+
+**Code:** `utils/retrieveFromInstallation.ts`, `controllers/adminController.ts` → `retrieveQuotationFromInstallation`; `quotationController.ts` → `updateQuotationInstallationRelease` merge path.
+
+### QA
+
+1. Send to Installer → row in Admin Installation.
+2. Revert (↺) → **200**; GET `installationReadyForInstaller: false`.
+3. Installer queue excludes row until re-released.
+4. Late metering → **409**.
+
+---
+
+## 42. Google Sheets → HR Social Media Leads — Sep 2026
+
+**Status: implemented** — FE REQUIRED §AO / `BACKEND_GOOGLE_SHEETS_SOCIAL_LEADS.ts` (FE HANDOFF §41 / §44)
+
+| Item | Detail |
+|------|--------|
+| Spreadsheet | `18zqPIpa3fcjRvfNqdm3FPC10bszPIPHbv5F3-TMk0A0` |
+| Env | `GOOGLE_SHEETS_SPREADSHEET_ID`, `GOOGLE_SERVICE_ACCOUNT_JSON` or `GOOGLE_APPLICATION_CREDENTIALS`, `CRON_SECRET` |
+| DB | `calling_lead_sheet_sources`; extend `calling_lead_upload_batches`, `calling_leads` |
+| Routes | `GET /hr/sheet-sources`, `POST discover`, `PATCH :id`, `POST :id/sync`, `POST sync-all`, `GET :id/leads` |
+| Discover prune (P0) | After reading Google tab titles, upsert those rows, then **DELETE** sources for that `spreadsheet_id` whose `sheet_tab_name` is **not** in the live list |
+| Sync mapper (P0) | Meta: `phone_number`→`mobile` (last 10), `id`→`external_id`, `full_name`→`name`, `lead_status`→`lead_status`; optional `platform`/`campaign_name`/`ad_name`/`created_time`; ignore `ad_id`/`adset_*`/`campaign_id`/`form_id`/`is_organic` (raw OK) |
+| Assign | `dealer_ids` + `active_cap` on source — **not** sheet columns |
+| Lead API echo | `mobile`, `name`, `leadStatus`, `finalDecision`, `remarks`, `platform`, `campaignName`, `adName`, `assignedDealerId`, `assignedDealerName`, `externalId` |
+| Auto-sync | Cron 15 min → `POST /hr/sheet-sources/sync-all` + `calling:uploads-updated` |
+| Socket | `calling:uploads-updated` after sync / sync-all (`reason: sheet_auto_sync`) |
+
+**Live tabs (current sheet):** `Jaipur Leads`, `Ajmer Leads`, `Crompton Leads` (+ `Ajmer Solar Lead Form New` when present)
+
+**Code:** `controllers/hrSheetSourceController.ts`, `utils/hrSheetSourceSync.ts` (`rowToLeadObject`), `utils/hrSheetSourceApi.ts`, `routes/hrLeadRoutes.ts`
+
+### Migration
+
+`20260902120000-add-google-sheets-social-leads.js`
+
+### QA
+
+1. `POST /hr/sheet-sources/discover` → exactly the live Google tab titles (no stale hiring/302012 rows).
+2. `GET /hr/sheet-sources` → same set as Discover for the configured spreadsheet.
+3. Rename/delete a Google tab → Discover again → old name gone from GET.
+4. `PATCH` enabled + dealer pool → saved.
+5. `POST …/sync` imports valid mobiles; re-sync skips duplicates.
+6. `POST /hr/sheet-sources/sync-all` with `x-cron-secret` syncs all enabled tabs + emits socket.
+7. Dealer Calling Data shows assigned leads.
 

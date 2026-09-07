@@ -24,6 +24,8 @@ interface DealerAttributes {
   role: 'dealer' | 'admin';
   /** Dashboard section keys (BACKEND_USER_ACCESS.md) */
   access?: string[] | null;
+  officeLocation?: string | null;
+  moduleFieldPermissions?: Record<string, unknown> | null;
   isActive: boolean;
   emailVerified: boolean;
   createdAt?: Date;
@@ -57,6 +59,8 @@ class Dealer extends Model<DealerAttributes, DealerCreationAttributes> implement
   public addressPincode!: string;
   public role!: 'dealer' | 'admin';
   public access!: string[] | null;
+  public officeLocation!: string | null;
+  public moduleFieldPermissions!: Record<string, unknown> | null;
   public isActive!: boolean;
   public emailVerified!: boolean;
   public readonly createdAt!: Date;
@@ -152,6 +156,15 @@ Dealer.init(
       type: DataTypes.JSONB,
       allowNull: false,
       defaultValue: []
+    },
+    officeLocation: {
+      type: DataTypes.STRING(32),
+      allowNull: true
+    },
+    moduleFieldPermissions: {
+      type: DataTypes.JSONB,
+      allowNull: false,
+      defaultValue: {}
     },
     isActive: {
       type: DataTypes.BOOLEAN,

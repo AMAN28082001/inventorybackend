@@ -19,6 +19,7 @@ import DealerLeadAssignment from './DealerLeadAssignment';
 import CallingActionHistory from './CallingActionHistory';
 import CallingLeadUploadBatch from './CallingLeadUploadBatch';
 import CallingLeadUploadRow from './CallingLeadUploadRow';
+import CallingLeadSheetSource from './CallingLeadSheetSource';
 import QuotationPaymentPhase from './QuotationPaymentPhase';
 import Review from './Review';
 
@@ -97,6 +98,9 @@ CallingLeadUploadBatch.hasMany(CallingLeadUploadRow, { foreignKey: 'batchId', as
 CallingLeadUploadRow.belongsTo(CallingLeadUploadBatch, { foreignKey: 'batchId', as: 'batch' });
 CallingLeadUploadBatch.hasMany(CallingLead, { foreignKey: 'batchId', as: 'leads', onDelete: 'SET NULL' });
 CallingLead.belongsTo(CallingLeadUploadBatch, { foreignKey: 'batchId', as: 'batch' });
+CallingLeadSheetSource.belongsTo(CallingLeadUploadBatch, { foreignKey: 'uploadId', as: 'upload' });
+CallingLeadSheetSource.hasMany(CallingLead, { foreignKey: 'sheetSourceId', as: 'leads', onDelete: 'SET NULL' });
+CallingLead.belongsTo(CallingLeadSheetSource, { foreignKey: 'sheetSourceId', as: 'sheetSource' });
 
 // Sync database (use with caution in production)
 export const syncDatabase = async (force: boolean = false): Promise<void> => {
@@ -128,6 +132,7 @@ export {
   CallingActionHistory,
   CallingLeadUploadBatch,
   CallingLeadUploadRow,
+  CallingLeadSheetSource,
   QuotationPaymentPhase,
   Review
 };

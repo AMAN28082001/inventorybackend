@@ -69,7 +69,7 @@
  * | `dealerId`       | yes      | Assigned dealer |
  * | `dealerName`     | yes      | Display name |
  * | `action`         | yes      | `called` \| `follow_up` \| `not_interested` \| `rescheduled` \| `start` |
- * | `actionAt`       | yes      | ISO-8601 when action was submitted |
+ * | `actionAt`       | yes      | **ISO-8601** (`2026-05-18T10:15:00.000Z`). Required so green Calling Data / Calling Action chips show date+time. Do not omit, send null, or send display-only strings (`18/05/2026`). Also echo `action_at` / `calledAt` / `createdAt` as fallbacks. |
  * | `statusText`     | yes*     | e.g. "Call Unanswered", "Interested" |
  * | `statusCategory` | yes*     | e.g. `call_connectivity`, `customer_intent` |
  * | `callRemark`     | yes      | Tagged remark preferred |
@@ -96,6 +96,37 @@
  *
  * Queue current/next MUST also include the same action bucket arrays so Customer
  * Journey can merge without a second round-trip when history endpoint is thin.
+ *
+ * -----------------------------------------------------------------------------
+ * Timestamps + speed (Aug 2026 — green stages must show time, no slow search)
+ * -----------------------------------------------------------------------------
+ *
+ * Symptom: Calling Data / Calling Action turn **Completed** (green) but date stays
+ * "—" until the user searches a mobile. The SPA then fires many
+ * `GET .../calling-actions?search=<mobile>` calls (slow).
+ *
+ * Cause: bulk `GET .../calling-actions?range=all&limit=2000` omits `actionAt`
+ * and/or `mobile` / older rows.
+ *
+ * Backend contract:
+ * 1. Every history row in the bulk list includes parseable ISO-8601 `actionAt`.
+ *    Calling Data date = earliest `actionAt` for that mobile/lead.
+ *    Calling Action date = latest `actionAt` for that mobile/lead.
+ * 2. One bulk GET is enough. Honour `range=all` and `limit` ≥ 2000 (paginate;
+ *    return `pagination.total`). Do not require per-quotation `?search=`.
+ * 3. Join lead `mobile` on the actions query so rows never lack a phone number.
+ * 4. Optional/fastest: dedicated journey GET includes
+ *    `stageDates.callingData` and `stageDates.callingAction` as ISO-8601.
+ *
+ * SQL sketch:
+ *
+ *   SELECT a.id, a.lead_id AS "leadId", l.mobile, l.name,
+ *          a.action, a.action_at AS "actionAt", a.call_remark AS "callRemark"
+ *   FROM calling_actions a
+ *   JOIN calling_leads l ON l.id = a.lead_id
+ *   WHERE a.assigned_dealer_id = :dealerId  -- omit dealer filter for admin
+ *   ORDER BY a.action_at DESC
+ *   LIMIT :limit OFFSET :offset;
  *
  * -----------------------------------------------------------------------------
  * Quotation ↔ Calling lead link (required for reliable Complete status)

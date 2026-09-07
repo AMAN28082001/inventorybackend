@@ -3,9 +3,9 @@ import multer, { MulterError } from 'multer';
 import { authenticate, authorizeInstaller, authorizeInstallerOrAdmin } from '../middleware/authQuotation';
 import { validate } from '../middleware/validate';
 import { installerStatusSchema, installerUploadMetaSchema } from '../validations/workflowValidations';
-import { sendToMeteringSchema } from '../validations/adminValidations';
+import { sendToMeteringSchema, updateInstallationStatusSchema } from '../validations/adminValidations';
 import { getInstallerQueue, installerDecision, installerUploadDocuments, uploadInstallerDocument } from '../controllers/workflowController';
-import { sendQuotationToMetering } from '../controllers/adminController';
+import { sendQuotationToMetering, updateQuotationInstallationStatus } from '../controllers/adminController';
 
 const router: Router = express.Router();
 
@@ -102,6 +102,19 @@ router.use(authenticate);
 
 router.get('/quotations', authorizeInstallerOrAdmin, getInstallerQueue);
 router.get('/queue', authorizeInstallerOrAdmin, getInstallerQueue);
+
+router.patch(
+  '/quotations/:quotationId/installation-status',
+  authorizeInstallerOrAdmin,
+  validate(updateInstallationStatusSchema),
+  updateQuotationInstallationStatus
+);
+router.patch(
+  '/quotations/:quotationId/workflow-status',
+  authorizeInstallerOrAdmin,
+  validate(updateInstallationStatusSchema),
+  updateQuotationInstallationStatus
+);
 
 /** §17 Optional aliases — SPA fallthrough for Installer → Metering handoff */
 router.patch(

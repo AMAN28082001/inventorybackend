@@ -5,6 +5,9 @@ import {
   updateQuotationStatus,
   updateQuotationInstallationStatus,
   sendQuotationToMetering,
+  revertQuotationInstallationToPending,
+  retrieveQuotationFromMetering,
+  retrieveQuotationFromInstallation,
   updateMeteringWccAfterDiscom,
   updateQuotationBankProcess,
   updateQuotationFileLogin,
@@ -59,6 +62,8 @@ import {
   updateStatusSchema,
   updateInstallationStatusSchema,
   sendToMeteringSchema,
+  retrieveFromMeteringSchema,
+  retrieveFromInstallationSchema,
   meteringWccAfterDiscomSchema,
   bankProcessSchema,
   fileLoginSchema,
@@ -242,6 +247,14 @@ router.post(
 );
 
 router.patch('/quotations/:quotationId/installation-status', validate(updateInstallationStatusSchema), updateQuotationInstallationStatus);
+router.post(
+  '/quotations/:quotationId/revert-installation',
+  revertQuotationInstallationToPending
+);
+router.post(
+  '/quotations/:quotationId/installation-revert',
+  revertQuotationInstallationToPending
+);
 router.patch(
   '/quotations/:quotationId/send-to-metering',
   validate(sendToMeteringSchema),
@@ -251,6 +264,26 @@ router.post(
   '/quotations/:quotationId/send-to-metering',
   validate(sendToMeteringSchema),
   sendQuotationToMetering
+);
+router.patch(
+  '/quotations/:quotationId/retrieve-from-metering',
+  validate(retrieveFromMeteringSchema),
+  retrieveQuotationFromMetering
+);
+router.post(
+  '/quotations/:quotationId/retrieve-from-metering',
+  validate(retrieveFromMeteringSchema),
+  retrieveQuotationFromMetering
+);
+router.patch(
+  '/quotations/:quotationId/retrieve-from-installation',
+  validate(retrieveFromInstallationSchema),
+  retrieveQuotationFromInstallation
+);
+router.post(
+  '/quotations/:quotationId/retrieve-from-installation',
+  validate(retrieveFromInstallationSchema),
+  retrieveQuotationFromInstallation
 );
 router.patch(
   '/quotations/:quotationId/installation-release',

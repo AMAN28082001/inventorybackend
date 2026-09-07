@@ -34,7 +34,18 @@ const INTERESTED_STATUS_TEXTS = new Set([
   'payment pending',
   'documentation pending',
   'loan approved',
-  'loan in process'
+  'loan in process',
+  'need more information',
+  'own house',
+  'suitable roof available',
+  'high electricity bill (>₹2000)',
+  '3 phase connection available',
+  'site visit done',
+  'negotiation ongoing',
+  'converted (deal closed)',
+  'payment received',
+  'installation pending',
+  'installation completed'
 ]);
 
 const FOLLOW_UP_STATUS_TEXTS = new Set([
@@ -43,25 +54,57 @@ const FOLLOW_UP_STATUS_TEXTS = new Set([
   'rescheduled',
   'follow-up pending',
   'follow up pending',
+  'follow-up required',
+  'follow up required',
+  'callback scheduled',
   'decision pending',
   'thinking',
   'will call back',
   'busy — call later',
-  'busy - call later'
+  'busy - call later',
+  'not picking on follow-up'
 ]);
 
 const NOT_INTERESTED_STATUS_TEXTS = new Set([
   'not interested',
+  'not interested currently',
   'already installed solar',
   'chose competitor',
   'invalid lead',
   'wrong lead',
   'duplicate lead',
   'out of coverage area',
+  'out of service area',
   'budget issue',
   'not feasible',
   'roof not suitable',
-  'call unanswered'
+  'price too high',
+  'trust issue',
+  'location not serviceable',
+  'no requirement',
+  'low electricity bill',
+  'tenant (no ownership)',
+  'commercial / residential mismatch',
+  'no roof / space issue',
+  'single phase only',
+  'lost lead',
+  'not eligible for solar'
+]);
+
+/** Mirror FE NOT_CONNECTED_STATUSES_LIST (Calling Reports cards). */
+const NOT_CONNECTED_STATUS_TEXTS = new Set([
+  'call unanswered',
+  'switched off',
+  'not reachable',
+  'busy / line busy',
+  'call disconnected',
+  'wrong number',
+  'invalid number',
+  'number does not exist',
+  'duplicate lead',
+  'invalid lead',
+  'out of service area',
+  'incoming not available'
 ]);
 
 const parseTaggedCallRemarkForStatus = (
@@ -109,6 +152,100 @@ export const classifyCallingActionSummaryBucket = (
   }
 
   return 'others';
+};
+
+export type CallingConnectionKind = 'connected' | 'not_connected';
+
+/** Connected vs not connected — matches FE `classifyCallingConnection`. */
+export const classifyCallingConnection = (
+  row: CallingActionSummaryInput
+): CallingConnectionKind => {
+  const status = resolveCallingActionStatusText(row);
+  const statusKey = normalizeStatusKey(status);
+  const categoryKey = String(row.statusCategory ?? row.status_category ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+  const action = String(row.action || '')
+    .toLowerCase()
+    .trim();
+
+  if (statusKey && NOT_CONNECTED_STATUS_TEXTS.has(statusKey)) return 'not_connected';
+  if (categoryKey === 'call_connectivity' && statusKey) return 'not_connected';
+  if (action === 'start') return 'not_connected';
+  if (statusKey) return 'connected';
+  if (['called', 'follow_up', 'not_interested', 'rescheduled'].includes(action)) return 'connected';
+  return 'not_connected';
+};
+
+/** §AI Calling Reports six-card payload. Invariant: totalCalls === connected + notConnected. */
+export type CallingReportsCountSummary = {
+  totalCalls: number;
+  connected: number;
+  notConnected: number;
+  connectedInterested: number;
+  connectedNotInterested: number;
+  connectedFollowUp: number;
+  interested: number;
+  followUp: number;
+  notInterested: number;
+  others: number;
+  total: number;
+};
+
+export const buildCallingReportsCountSummary = (
+  rows: CallingActionSummaryInput[]
+): CallingReportsCountSummary => {
+  const summary: CallingReportsCountSummary = {
+    totalCalls: 0,
+    connected: 0,
+    notConnected: 0,
+    connectedInterested: 0,
+    connectedNotInterested: 0,
+    connectedFollowUp: 0,
+    interested: 0,
+    followUp: 0,
+    notInterested: 0,
+    others: 0,
+    total: 0
+  };
+
+  for (const row of rows) {
+    const action = String(row.action || '')
+      .toLowerCase()
+      .trim();
+    // Start Call is not a completed call (§AI).
+    if (action === 'start') continue;
+
+    summary.total += 1;
+    const connection = classifyCallingConnection(row);
+    if (connection === 'connected') {
+      summary.connected += 1;
+      const bucket = classifyCallingActionSummaryBucket(row);
+      if (bucket === 'interested') {
+        summary.connectedInterested += 1;
+        summary.interested += 1;
+      } else if (bucket === 'notInterested') {
+        summary.connectedNotInterested += 1;
+        summary.notInterested += 1;
+      } else if (bucket === 'followUp') {
+        summary.connectedFollowUp += 1;
+        summary.followUp += 1;
+      } else {
+        summary.others += 1;
+      }
+    } else {
+      summary.notConnected += 1;
+      const bucket = classifyCallingActionSummaryBucket(row);
+      if (bucket === 'notInterested') summary.notInterested += 1;
+      else if (bucket === 'followUp') summary.followUp += 1;
+      else if (bucket === 'interested') summary.interested += 1;
+      else summary.others += 1;
+    }
+  }
+
+  summary.totalCalls = summary.connected + summary.notConnected;
+  return summary;
 };
 
 export type ReasonCategory = 'interested' | 'follow_up' | 'not_interested' | 'others';

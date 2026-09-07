@@ -1,4 +1,5 @@
 import { resolveAccess, type AccessKey } from './userAccess';
+import { workflowPermissionFieldsForApi } from './moduleFieldPermissions';
 
 const trimOrNull = (value: unknown): string | null | undefined => {
   if (value === undefined) return undefined;
@@ -78,7 +79,8 @@ export const publicStaffProfileFields = (row: Record<string, unknown>) => {
     employeeId: row.employeeId ?? null,
     address: nestedAddressFromRow(row),
     access,
-    permissions: access
+    permissions: access,
+    ...workflowPermissionFieldsForApi(row)
   };
 };
 
