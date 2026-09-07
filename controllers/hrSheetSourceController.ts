@@ -90,6 +90,8 @@ export const discoverHrSheetTabs = async (req: Request, res: Response): Promise<
         where: { spreadsheetId, sheetTabName: tab },
         defaults: {
           id: uuidv4(),
+          spreadsheetId,
+          sheetTabName: tab,
           displayName: tab.replace(/_/g, ' '),
           enabled: false,
           dealerIds: [],

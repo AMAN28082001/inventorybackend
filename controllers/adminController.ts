@@ -2,7 +2,6 @@ import { Request, Response } from 'express';
 import { Quotation, QuotationPaymentPhase, QuotationInstallationDoc, QuotationProduct, CustomPanel, Dealer, Customer, Visitor, Visit, QuotationDocument } from '../models/index-quotation';
 import { Op, fn, col, literal, Sequelize } from 'sequelize';
 import {
-  canAccessSection,
   hasAdminPanelAccess,
   parseAccessFromBody,
   parseWorkflowPermissionPatchFromBody,

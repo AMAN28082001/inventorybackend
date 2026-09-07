@@ -1,7 +1,4 @@
-import fs from 'fs';
-import path from 'path';
 import { google, sheets_v4 } from 'googleapis';
-import { Op } from 'sequelize';
 import { v4 as uuidv4 } from 'uuid';
 import CallingLeadSheetSource from '../models/CallingLeadSheetSource';
 import CallingLeadUploadBatch from '../models/CallingLeadUploadBatch';
@@ -9,6 +6,8 @@ import CallingLead from '../models/CallingLead';
 import { assignUploadBatchWithActiveCap } from '../controllers/callingLeadController';
 import { emitRealtime, realtimeEvents } from './realtime';
 import { logError } from './loggerHelper';
+import fs from 'fs';
+import path from 'path';
 
 export const DEFAULT_SPREADSHEET_ID = '18zqPIpa3fcjRvfNqdm3FPC10bszPIPHbv5F3-TMk0A0';
 

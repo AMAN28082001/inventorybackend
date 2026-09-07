@@ -16,6 +16,12 @@ import sequelize from '../config/database';
 import { Transaction } from 'sequelize';
 import { logError, logInfo } from '../utils/loggerHelper';
 import { lookupQuotationCustomerByPhone } from '../utils/customerPhoneLookup';
+import { roundProductPrice } from '../utils/productUnit';
+import {
+  hasSufficientStock,
+  isWholeSaleQuantity,
+  normalizeSaleQuantity
+} from '../utils/saleQuantity';
 
 const buildSaleIncludes = () => ([
   {
